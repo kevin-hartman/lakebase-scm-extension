@@ -49,6 +49,8 @@ For example, set `spring.jpa.hibernate.ddl-auto=validate` (or `none`) so the ORM
 2. In VS Code: **Extensions** → `...` → **Install from VSIX** → select the file
 3. Reload the window
 
+![Lakebase Synced SCM installed](docs/images/extension-installed.png)
+
 ### First-Time Setup
 
 1. Open your project folder in VS Code
