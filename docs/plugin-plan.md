@@ -88,34 +88,42 @@ A VS Code / Cursor extension that provides unified visibility into both code cha
 
 ---
 
-## Phase 3: Workflow Automation 🔧 IN PROGRESS
+## Phase 3: Workflow Automation ✅ COMPLETE
 
 ### Goals
 - Auto-branch creation hooking into VS Code git branch creation
 - Background credential refresh
+- Full Git SCM parity with Lakebase sync on every operation
 - PR integration showing GitHub PR status with schema diff from CI
-- Merge awareness detecting merge to main
+- Merge awareness detecting merge to main, showing production status
 
 ### Deliverables
 14. ✅ **Auto-branch creation** — On `git checkout -b`, auto-creates Lakebase branch, gets endpoint + credentials, updates `.env`; respects `autoCreateBranch` config; always syncs `.env` connection on branch change even when auto-create is off
 15. ✅ **Unified branch creation** — "Create Branch (Code + Database)" command: prompts for name, runs `git checkout -b`, creates Lakebase branch, connects, updates config — one click for both
-16. ✅ **Live code change tracking** — Watches `.git/index` and file saves; debounced 1-second refresh; includes untracked files via `git ls-files`; code diff view on click
+16. ✅ **Live code change tracking** — Watches `.git/index` and file saves; debounced 1-second refresh; includes untracked files via `git ls-files`; code diff view on click; Git SCM parity (Code group shows working tree, not branch scope)
 17. ✅ **Schema cache invalidation** — Cache cleared on migration file changes, Flyway migrate, and branch switch; migration watcher only refreshes code (not schema) to avoid re-caching stale data before Flyway runs
-18. **Credential refresh** — Background task keeping database credentials alive
-19. **PR integration** — GitHub PR status + schema diff from CI
-20. **Merge awareness** — Production migration status on merge
-21. **Full SCM integration** — Wrap standard git SCM capabilities into the Unified Repo view:
-    - **Staged + Changes groups** — Split Code into "Staged" (git index) and "Changes" (unstaged + untracked); `git diff --cached --name-status` for staged, `git diff --name-status` + `git ls-files --others` for changes
-    - **Stage file** — Inline `$(add)` action per file → `git add <file>`; moves file from Changes to Staged
-    - **Unstage file** — Inline `$(remove)` action per staged file → `git reset <file>`; moves file back to Changes
-    - **Discard changes** — Inline `$(discard)` action per file → `git checkout -- <file>` (tracked) or delete (untracked)
-    - **Stage all / unstage all** — Group-level actions in `scm/resourceGroup/context`
-    - **Commit** — Enable `scm.inputBox`; wire ✓ button and Ctrl+Enter via `acceptInputCommand` → `git commit -m <message>`; clear input box on success
-    - **Push** — `$(cloud-upload)` in `scm/title` → `git push`
-    - **Pull** — `$(cloud-download)` in `scm/title` → `git pull`
-    - **Refresh** — After every git operation, refresh Staged + Changes groups
-    - **GitService additions** — `stageFile`, `unstageFile`, `discardFile`, `commit`, `push`, `pull`, `getStagedChanges`
-    - **Tests** — Stage/unstage/commit/discard/push/pull commands
+18. ✅ **Background credential refresh** — 20-minute interval; gets fresh credentials for current branch; updates `.env` and `application-local.properties`; respects `autoRefreshCredentials` setting; restarts on setting change
+19. ✅ **Full SCM integration** — Complete Git parity with Lakebase sync:
+    - **Staged + Code groups** — Staged shows git index; Code shows unstaged working tree changes (matches Git SCM CHANGES behavior)
+    - **Stage/unstage/discard** — Inline actions per file; stage all / unstage all on group headers
+    - **Commit** — Auto-stages all if nothing staged; Commit Staged, Commit All, Undo Last Commit, Abort Rebase, Amend variants, Signed Off variants
+    - **Push/Pull/Sync/Fetch** — Pull, Pull (Rebase), Pull from..., Push, Push to..., Sync, Fetch, Fetch (Prune), Fetch From All Remotes
+    - **Branch** — Merge..., Rebase Branch..., Create Branch..., Create Branch From..., Rename Branch..., Delete Branch..., Delete Remote Branch..., Publish Branch...
+    - **Stash** — Stash, Stash (Include Untracked), Stash Staged, Apply/Pop (Latest and picker), Drop/Drop All, View Stash...
+    - **Tags** — Create Tag, Delete Tag, Delete Remote Tag
+    - **Worktrees** — Create Worktree, List Worktrees, Delete Worktree
+    - **Remote** — Add Remote..., Remove Remote...
+    - **Clone** — Clone repository to local directory
+    - **Lakebase sync on all operations** — branch delete/rename/merge sync Lakebase branches; pull/stash/undo/discard clear schema cache; publish shows Lakebase branch name
+    - **Submenus with separators** — Full More Actions menu matching Git SCM structure
+20. ✅ **PR integration** — Create PR with auto-secret sync (generates fresh Databricks token); PR group in SCM view with CI status polling (30s); View PR Schema Diff (live pg_dump fallback when no CI comment); Merge Pull Request (merge/squash/rebase with auto-checkout main); pre-flight secret check before PR creation
+21. ✅ **Merge awareness** — On main: Lakebase group shows production branch status; Schema Migrations group lists all V*.sql files; Recent Merges group shows last 5 merge commits with PR titles linking to GitHub
+22. ✅ **Branch picker** — Status bar shows `⑂ branch*` with Lakebase pairing; click opens QuickPick with local + remote branches, each showing Lakebase branch; actions: Create, Create From, Checkout Detached; remote branches checkout with tracking
+23. ✅ **Sync indicator** — Status bar shows `⟳ N↓ M↑` with ahead/behind counts; Sync Changes group appears when behind/ahead; click syncs with Lakebase credential refresh
+24. ✅ **Review Branch** — Multi-diff editor via `vscode.changes` API showing all code + schema DDL diffs; Unified Branch Diff Summary webview with two-column layout
+25. ✅ **Health check** — Validates workflows, secrets, CLI auth, gh CLI, migration directory, post-checkout hook; webview panel with ✅/❌ per item
+26. ✅ **Open in Databricks Console** — Per-branch console URL using branch UID; CI branch resolves to correct `ci-pr-<N>` UID
+27. ✅ **Test suite** — 277 tests across 15 suites covering all services, providers, git operations, Lakebase sync, branch picker, merge awareness, and PR integration
 
 ---
 
