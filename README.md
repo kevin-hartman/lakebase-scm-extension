@@ -30,6 +30,19 @@ Lakebase Synced SCM is a VS Code / Cursor extension that replaces the built-in G
 | Databricks workspace | With Lakebase enabled |
 | Lakebase project | With a default (production) branch |
 
+### Database Migration Dependency
+
+This extension relies on **Flyway** for database schema management. Flyway migration files (`V*.sql`) are the source of truth for schema changes — the extension detects new migrations, tracks them in the SCM view, and CI applies them to Lakebase branches via `flyway:migrate`.
+
+**The extension does not use an ORM's auto-DDL to create or modify tables.** While an ORM (e.g. Hibernate/JPA, Prisma, TypeORM) may be used in the application for data access, schema creation must be handled through explicit Flyway migration scripts. This ensures:
+
+- Schema changes are versioned, reviewable, and auditable in source control
+- The extension can detect and display pending schema changes before they're applied
+- CI can apply migrations to the `ci-pr-<N>` branch and diff against production
+- Production migrations are applied deterministically on merge (no runtime DDL surprises)
+
+Set `spring.jpa.hibernate.ddl-auto=validate` (or `none`) so the ORM validates against the schema but does not create or alter tables at runtime.
+
 ### Install the Extension
 
 1. Download `lakebase-synced-scm-0.3.0.vsix` from the [latest release](https://github.com/kevin-hartman_data/lakebase-synced-scm/releases/latest)
