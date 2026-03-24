@@ -1,0 +1,178 @@
+# On merge to main: run Flyway on production, delete ci-pr-* and merged feature branch.
+# Branch cleanup runs in a separate job so it always runs on merge even if Flyway fails.
+name: Merge
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [closed]
+
+jobs:
+  merge-to-main:
+    runs-on: self-hosted
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main')
+    env:
+      MAVEN_OPTS: --enable-native-access=ALL-UNNAMED
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          # Use 21 for reliability on self-hosted runners; Temurin 25 can have cache issues. Override to '25' if your runner has it.
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Install Databricks CLI
+        run: |
+          if command -v databricks >/dev/null 2>&1; then
+            echo "Databricks CLI already on PATH"
+            databricks -v
+          else
+            curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sudo sh
+            databricks -v
+          fi
+
+      # Resolve production (default) Lakebase branch URL and credentials so Flyway can run without separate production DB secrets.
+      - name: Resolve production DB credentials (Lakebase)
+        id: prod-db
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST || '' }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN || '' }}
+          LAKEBASE_PROJECT_ID: ${{ secrets.LAKEBASE_PROJECT_ID || '' }}
+        run: |
+          if [ -z "$LAKEBASE_PROJECT_ID" ] || [ -z "$DATABRICKS_HOST" ] || [ -z "$DATABRICKS_TOKEN" ]; then
+            echo "Lakebase secrets not set; production credentials not resolved. Set DATABRICKS_HOST, DATABRICKS_TOKEN, LAKEBASE_PROJECT_ID for automatic production Flyway."
+            exit 0
+          fi
+          if ! command -v databricks >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+            echo "databricks or jq not found; skipping resolve."
+            exit 0
+          fi
+          export DATABRICKS_HOST DATABRICKS_TOKEN
+          PROJ_PATH="projects/${LAKEBASE_PROJECT_ID}"
+          DB_NAME="databricks_postgres"
+          DEFAULT_UID="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null | jq -r '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[] | select((.status.default == true) or (.is_default == true)) | (.uid // .id // (if .name then (.name | split("/") | last) else empty end))' | head -1)"
+          if [ -z "$DEFAULT_UID" ]; then
+            DEFAULT_UID="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null | jq -r '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[0] | (.uid // .id // (if .name then (.name | split("/") | last) else empty end))')"
+          fi
+          if [ -z "$DEFAULT_UID" ]; then
+            echo "Could not find default Lakebase branch."
+            exit 0
+          fi
+          BRANCH_PATH="${PROJ_PATH}/branches/${DEFAULT_UID}"
+          HOST="$(databricks postgres list-endpoints "$BRANCH_PATH" -o json 2>/dev/null | jq -r '.[0].status.hosts.host // empty')"
+          if [ -z "$HOST" ]; then
+            databricks postgres create-endpoint "$BRANCH_PATH" "primary" --json '{"spec": {"endpoint_type": "ENDPOINT_TYPE_READ_WRITE", "autoscaling_limit_min_cu": 2, "autoscaling_limit_max_cu": 4}}' 2>/dev/null || true
+            for _ in $(seq 1 24); do
+              state="$(databricks postgres list-endpoints "$BRANCH_PATH" -o json 2>/dev/null | jq -r '.[0].status.current_state // empty')"
+              [ "$state" = "ACTIVE" ] && break
+              sleep 5
+            done
+            HOST="$(databricks postgres list-endpoints "$BRANCH_PATH" -o json 2>/dev/null | jq -r '.[0].status.hosts.host // empty')"
+          fi
+          if [ -z "$HOST" ]; then
+            echo "Could not get production endpoint host."
+            exit 0
+          fi
+          TOKEN="$(databricks postgres generate-database-credential "${BRANCH_PATH}/endpoints/primary" -o json 2>/dev/null | jq -r '.token // empty')"
+          EMAIL="$(databricks current-user me -o json 2>/dev/null | jq -r '.userName // .emails[0].value // empty')"
+          if [ -z "$TOKEN" ] || [ -z "$EMAIL" ]; then
+            echo "Could not generate production credential."
+            exit 0
+          fi
+          echo "SPRING_DATASOURCE_URL=jdbc:postgresql://${HOST}:5432/${DB_NAME}?sslmode=require" >> $GITHUB_ENV
+          echo "SPRING_DATASOURCE_USERNAME=${EMAIL}" >> $GITHUB_ENV
+          echo "SPRING_DATASOURCE_PASSWORD<<PROD_PW_EOF" >> $GITHUB_ENV
+          printf '%s' "$TOKEN" >> $GITHUB_ENV
+          echo "" >> $GITHUB_ENV
+          echo "PROD_PW_EOF" >> $GITHUB_ENV
+          echo "Production credentials resolved (default branch: $DEFAULT_UID)."
+
+      - name: Flyway migrate (production)
+        env:
+          # Use credentials from "Resolve production DB credentials" step (GITHUB_ENV); fallback to repo secrets if set
+          SPRING_DATASOURCE_URL: ${{ env.SPRING_DATASOURCE_URL || secrets.SPRING_DATASOURCE_URL || '' }}
+          SPRING_DATASOURCE_USERNAME: ${{ env.SPRING_DATASOURCE_USERNAME || secrets.SPRING_DATASOURCE_USERNAME || '' }}
+          SPRING_DATASOURCE_PASSWORD: ${{ env.SPRING_DATASOURCE_PASSWORD || secrets.SPRING_DATASOURCE_PASSWORD || '' }}
+        run: |
+          if [ -z "$SPRING_DATASOURCE_URL" ]; then
+            echo "SPRING_DATASOURCE_URL not set; skip production migrate. Ensure DATABRICKS_HOST, DATABRICKS_TOKEN, LAKEBASE_PROJECT_ID are set so the workflow can resolve production credentials automatically (or set SPRING_DATASOURCE_* secrets as fallback)."
+            exit 0
+          fi
+          echo "Running Flyway migrate on production..."
+          if ! ./mvnw -q flyway:migrate -Dflyway.url="$SPRING_DATASOURCE_URL" -Dflyway.user="${SPRING_DATASOURCE_USERNAME:-}" -Dflyway.password="${SPRING_DATASOURCE_PASSWORD:-}"; then
+            echo "::error::Flyway migrate failed. Check: (1) Production DB reachable and credentials valid, (2) No migration version conflict, (3) Migration SQL is valid."
+            exit 1
+          fi
+
+  # Separate job so branch cleanup always runs on merge, even when merge-to-main (e.g. Flyway) fails.
+  cleanup-lakebase-branches:
+    runs-on: self-hosted
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install Databricks CLI (cleanup job)
+        run: |
+          if command -v databricks >/dev/null 2>&1; then
+            echo "Databricks CLI already on PATH"; databricks -v
+          else
+            curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sudo sh || true
+            export PATH="/usr/local/bin:$PATH"
+            if ! command -v databricks >/dev/null 2>&1; then
+              echo "::warning::Databricks CLI not available; branch cleanup will skip delete. Install databricks CLI on the runner or ensure it is on PATH."
+            else
+              databricks -v
+            fi
+          fi
+
+      - name: Delete CI and feature DB branches (Lakebase)
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST || '' }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN || '' }}
+          LAKEBASE_PROJECT_ID: ${{ secrets.LAKEBASE_PROJECT_ID || '' }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          PR_NUM_EVENT: ${{ github.event.pull_request.number }}
+          HEAD_REF_EVENT: ${{ github.event.pull_request.head.ref }}
+        run: |
+          if [ -z "$LAKEBASE_PROJECT_ID" ] || [ -z "$DATABRICKS_HOST" ] || [ -z "$DATABRICKS_TOKEN" ]; then
+            echo "Lakebase: secrets not set; skipping branch deletion."
+            exit 0
+          fi
+          if ! command -v databricks >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+            echo "Lakebase: databricks or jq not found; skipping branch deletion."
+            exit 0
+          fi
+          # (1) Formulaic: ci-pr-<PR_NUM>. (2) Merged branch name from event.
+          PR_NUM="${PR_NUM_EVENT:-}"
+          HEAD_REF="${HEAD_REF_EVENT:-}"
+          if [ -z "$PR_NUM" ] && [ "${{ github.event_name }}" = "push" ] && [ -n "${COMMIT_MSG:-}" ]; then
+            FIRST_LINE="$(echo "$COMMIT_MSG" | head -1)"
+            PR_NUM="$(echo "$FIRST_LINE" | sed -n 's/.*[Mm]erge pull request #\([0-9]*\).*/\1/p')"
+            [ -z "$PR_NUM" ] && PR_NUM="$(echo "$FIRST_LINE" | sed -n 's/.*(#\([0-9]*\)).*/\1/p')"
+            HEAD_REF="$(echo "$FIRST_LINE" | sed -n 's/.*[Ff]rom [^/]*\/\([^ \t)*]*\).*/\1/p')"
+            [ -z "$HEAD_REF" ] && HEAD_REF="$(echo "$FIRST_LINE" | sed -n 's/.*from [^/]*\/\([^ \t]*\).*/\1/p')"
+          fi
+          FEATURE_BRANCH=""
+          [ -n "$HEAD_REF" ] && FEATURE_BRANCH="$(echo "$HEAD_REF" | sed 's/\//-/g' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-63)"
+          echo "event=${{ github.event_name }} PR_NUM=${PR_NUM:-none} HEAD_REF=${HEAD_REF:-none} FEATURE_BRANCH=${FEATURE_BRANCH:-none}"
+          ARGS=""
+          [ -n "$PR_NUM" ] && ARGS="ci-pr-${PR_NUM}"
+          if [ -n "$FEATURE_BRANCH" ] && [ "$FEATURE_BRANCH" != "main" ] && [ "$FEATURE_BRANCH" != "master" ]; then
+            ARGS="${ARGS:+$ARGS }${FEATURE_BRANCH}"
+          fi
+          if [ -z "$ARGS" ]; then
+            echo "No branch names to delete (PR_NUM or merged branch not resolved)."
+            exit 0
+          fi
+          ./scripts/delete-lakebase-branches.sh $ARGS || true
+          echo "Lakebase branch cleanup step finished."
+          exit 0

@@ -1,0 +1,132 @@
+import { strict as assert } from 'assert';
+import * as sinon from 'sinon';
+import { BranchTreeProvider, BranchItem } from '../../src/providers/branchTreeProvider';
+import { GitService } from '../../src/services/gitService';
+import { LakebaseService, LakebaseBranch } from '../../src/services/lakebaseService';
+import { FlywayService } from '../../src/services/flywayService';
+import * as vscode from 'vscode';
+
+describe('BranchTreeProvider', () => {
+  let provider: BranchTreeProvider;
+  let gitStub: sinon.SinonStubbedInstance<GitService>;
+  let lakebaseStub: sinon.SinonStubbedInstance<LakebaseService>;
+  let flywayStub: sinon.SinonStubbedInstance<FlywayService>;
+
+  beforeEach(() => {
+    gitStub = sinon.createStubInstance(GitService);
+    (gitStub as any).onBranchChanged = new (vscode as any).EventEmitter().event;
+
+    lakebaseStub = sinon.createStubInstance(LakebaseService);
+    lakebaseStub.sanitizeBranchName.callsFake((name: string) =>
+      name.replace(/\//g, '-').toLowerCase().replace(/[^a-z0-9-]/g, '-').substring(0, 63)
+    );
+
+    flywayStub = sinon.createStubInstance(FlywayService);
+    provider = new BranchTreeProvider(gitStub as any, lakebaseStub as any, flywayStub as any);
+  });
+
+  afterEach(() => sinon.restore());
+
+  function makeBranch(id: string, isDefault: boolean = false): LakebaseBranch {
+    return {
+      uid: `br-${id}`,
+      name: `projects/p1/branches/${id}`,
+      branchId: id,
+      state: 'READY',
+      isDefault,
+    };
+  }
+
+  describe('getChildren (root)', () => {
+    it('lists git branches with Lakebase pairing', async () => {
+      gitStub.listLocalBranches.resolves([
+        { name: 'main', isCurrent: true, isRemote: false },
+        { name: 'feature-x', isCurrent: false, isRemote: false },
+      ]);
+      gitStub.getCurrentBranch.resolves('main');
+      lakebaseStub.listBranches.resolves([
+        makeBranch('main', true),
+        makeBranch('feature-x'),
+      ]);
+      gitStub.listMigrationsOnBranch.resolves([]);
+
+      const items = await provider.getChildren();
+      assert.strictEqual(items.length, 2);
+
+      const mainItem = items.find(i => i.label?.toString().includes('main'));
+      assert.ok(mainItem);
+      assert.strictEqual(mainItem!.itemType, 'currentBranch');
+
+      const featureItem = items.find(i => i.label?.toString().includes('feature-x'));
+      assert.ok(featureItem);
+      assert.strictEqual(featureItem!.itemType, 'branch');
+      assert.ok(featureItem!.lakebaseBranch);
+    });
+
+    it('shows db-only branches not matched to git', async () => {
+      gitStub.listLocalBranches.resolves([{ name: 'main', isCurrent: true, isRemote: false }]);
+      gitStub.getCurrentBranch.resolves('main');
+      lakebaseStub.listBranches.resolves([
+        makeBranch('main', true),
+        makeBranch('ci-pr-42'),
+      ]);
+      gitStub.listMigrationsOnBranch.resolves([]);
+
+      const items = await provider.getChildren();
+      const ciItem = items.find(i => i.label?.toString().includes('ci-pr-42'));
+      assert.ok(ciItem, 'db-only branch should appear');
+      assert.ok(ciItem!.label?.toString().includes('db only'));
+    });
+
+    it('handles Lakebase API failure gracefully', async () => {
+      gitStub.listLocalBranches.resolves([{ name: 'main', isCurrent: true, isRemote: false }]);
+      gitStub.getCurrentBranch.resolves('main');
+      lakebaseStub.listBranches.rejects(new Error('CLI error'));
+      gitStub.listMigrationsOnBranch.resolves([]);
+
+      const items = await provider.getChildren();
+      // Should still show git branches, just without Lakebase pairing
+      assert.ok(items.length >= 1);
+    });
+  });
+
+  describe('getChildren (branch details)', () => {
+    it('shows git tracking and db status for a branch', async () => {
+      gitStub.listMigrationsOnBranch.resolves(['V1__init.sql', 'V2__table.sql']);
+
+      const parent = new BranchItem(
+        { name: 'feature-x', isCurrent: false, isRemote: false, tracking: 'origin/feature-x', ahead: 2, behind: 0 },
+        makeBranch('feature-x'),
+        'branch',
+        'feature-x',
+        1 // collapsed
+      );
+
+      const details = await provider.getChildren(parent);
+      assert.ok(details.length >= 2); // At least git info + db info
+    });
+  });
+
+  describe('refresh', () => {
+    it('fires tree change event', () => {
+      let fired = false;
+      provider.onDidChangeTreeData(() => { fired = true; });
+      provider.refresh();
+      assert.ok(fired);
+    });
+
+    it('suppresses refresh when flag is set', () => {
+      let fired = false;
+      provider.onDidChangeTreeData(() => { fired = true; });
+      provider.suppressRefresh = true;
+      provider.refresh();
+      assert.strictEqual(fired, false);
+    });
+  });
+
+  describe('dispose', () => {
+    it('disposes without error', () => {
+      assert.doesNotThrow(() => provider.dispose());
+    });
+  });
+});

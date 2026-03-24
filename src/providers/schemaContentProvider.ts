@@ -1,0 +1,66 @@
+import * as vscode from 'vscode';
+import { LakebaseService } from '../services/lakebaseService';
+import { SchemaDiffService } from '../services/schemaDiffService';
+
+/**
+ * Content provider that returns CREATE TABLE DDL for a table on a specific branch.
+ * URI format: lakebase-schema-content://production/<tableName>
+ *         or: lakebase-schema-content://branch/<tableName>
+ *
+ * Used by the multi-diff editor to show schema diffs as DDL text.
+ */
+export class SchemaContentProvider implements vscode.TextDocumentContentProvider {
+  constructor(
+    private schemaDiffService: SchemaDiffService,
+  ) {}
+
+  async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
+    const side = uri.authority; // 'production' or 'branch'
+    const tableName = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
+
+    // Get the cached diff — it has branchTables and production info
+    const diff = this.schemaDiffService.getCachedDiff();
+    if (!diff) { return `-- No schema data available for ${tableName}\n`; }
+
+    if (side === 'branch') {
+      // Look in branchTables for the full column list
+      const table = diff.branchTables.find(t => t.name === tableName);
+      if (!table) {
+        // Check if it's a created table (in diff.created)
+        const created = diff.created.find(t => t.name === tableName);
+        if (created) { return this.renderCreateTable(created.name, created.columns || []); }
+        return `-- Table "${tableName}" not found on branch\n`;
+      }
+      return this.renderCreateTable(table.name, table.columns || []);
+    }
+
+    if (side === 'production') {
+      // For production, check if the table is in modified (has prodColumns) or is unchanged (same as branch)
+      const modified = diff.modified.find(t => t.name === tableName);
+      if (modified && modified.prodColumns) {
+        return this.renderCreateTable(modified.name, modified.prodColumns);
+      }
+
+      // If the table is "created" on the branch, it doesn't exist on production
+      const created = diff.created.find(t => t.name === tableName);
+      if (created) { return ''; } // empty — new table
+
+      // If the table is "removed", it exists only on production — use branchTables won't have it
+      // For unchanged tables, production has the same columns as branch
+      const branchTable = diff.branchTables.find(t => t.name === tableName);
+      if (branchTable) { return this.renderCreateTable(branchTable.name, branchTable.columns || []); }
+
+      return `-- Table "${tableName}" not found on production\n`;
+    }
+
+    return '';
+  }
+
+  private renderCreateTable(name: string, columns: Array<{ name: string; dataType: string }>): string {
+    if (columns.length === 0) {
+      return `CREATE TABLE ${name} (\n  -- no column data available\n);\n`;
+    }
+    const colDefs = columns.map(c => `  ${c.name} ${c.dataType}`).join(',\n');
+    return `CREATE TABLE ${name} (\n${colDefs}\n);\n`;
+  }
+}

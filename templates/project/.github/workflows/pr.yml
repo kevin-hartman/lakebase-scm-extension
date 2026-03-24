@@ -1,0 +1,576 @@
+# CI/CD on PR: create Lakebase branch ci-pr-<N> (N = PR number), build, run Flyway, run tests.
+# - Branch names stay in sync: one Lakebase branch per PR, named ci-pr-<PR_number>.
+# - On failure: post comment on PR to notify the committer (and GitHub shows failed check).
+# - On success: post comment on PR and optionally notify tester queue via webhook (set TESTER_QUEUE_WEBHOOK_URL).
+name: PR
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+env:
+  JAVA_VERSION: '25'
+
+jobs:
+  build-and-test:
+    runs-on: self-hosted
+    outputs:
+      ci_branch_used: ${{ steps.datasource.outputs.ci_branch_used }}
+      schema_diff_b64: ${{ steps.schema-diff-export.outputs.content }}
+    env:
+      # Reduce JVM warning: allow Jansi native load (Java 21+)
+      MAVEN_OPTS: --enable-native-access=ALL-UNNAMED
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Install Databricks CLI
+        run: |
+          if command -v databricks >/dev/null 2>&1; then
+            echo "Databricks CLI already on PATH"
+            databricks -v
+          else
+            curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sudo sh
+            databricks -v
+          fi
+
+      # Creates Lakebase branch ci-pr-<N> (same steps as post-checkout hook). See docs/lakebase-branch-creation.md.
+      - name: Create CI database branch (Lakebase)
+        id: lakebase-db
+        # Custom repo secrets; linter may warn "Context access might be invalid" (false positive).
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST || '' }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN || '' }}
+          LAKEBASE_PROJECT_ID: ${{ secrets.LAKEBASE_PROJECT_ID || '' }}
+        run: |
+          # CLI auth: Databricks CLI uses these when set (same as post-checkout hook)
+          export DATABRICKS_HOST DATABRICKS_TOKEN
+          PR="${{ github.event.pull_request.number }}"
+          BRANCH_NAME="ci-pr-${PR}"
+          # Branch ID must be 1-63 chars (CLI spec); ci-pr-<N> is always within range
+          BRANCH_NAME="$(echo "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-63)"
+          echo "branch=${BRANCH_NAME}" >> $GITHUB_OUTPUT
+          write_skip() {
+            echo "## Lakebase CI branch: not created" >> $GITHUB_STEP_SUMMARY
+            echo "$1" >> $GITHUB_STEP_SUMMARY
+            echo "url=" >> $GITHUB_OUTPUT
+            echo "username=" >> $GITHUB_OUTPUT
+            echo "password=" >> $GITHUB_OUTPUT
+          }
+
+          # Diagnose why CI branch might not be created (do not log secret values)
+          echo "Lakebase CI branch setup:"
+          echo "  PR from fork: ${{ github.event.pull_request.head.repo.fork }}"
+          echo "  DATABRICKS_HOST: $([ -n "$DATABRICKS_HOST" ] && echo 'set' || echo 'NOT SET')"
+          echo "  DATABRICKS_TOKEN: $([ -n "$DATABRICKS_TOKEN" ] && echo 'set' || echo 'NOT SET')"
+          echo "  LAKEBASE_PROJECT_ID: $([ -n "$LAKEBASE_PROJECT_ID" ] && echo 'set' || echo 'NOT SET')"
+          echo "  databricks: $(command -v databricks || echo 'not found')"
+          echo "  jq: $(command -v jq || echo 'not found')"
+
+          if [ "${{ github.event.pull_request.head.repo.fork }}" = "true" ]; then
+            echo "Lakebase: PR is from a fork. GitHub does not pass repository secrets to fork PRs. Push your branch to this repository and open a PR from it (same repo) to create a Lakebase CI branch."
+            write_skip "**Reason:** PR is from a fork — GitHub does not pass repository secrets to fork PRs. **Fix:** Push your branch to this repo and open the PR from that branch (not from a fork)."
+            exit 0
+          fi
+          if ! command -v databricks >/dev/null 2>&1; then
+            echo "Lakebase: databricks CLI not found. Install it on the runner or fix the Install Databricks CLI step."
+            write_skip "**Reason:** \`databricks\` CLI not found on runner. **Fix:** Install Databricks CLI on the self-hosted runner or ensure the Install step runs (e.g. allow sudo)."
+            exit 0
+          fi
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "Lakebase: jq not found. Install jq on the runner."
+            write_skip "**Reason:** \`jq\` not found on runner. **Fix:** Install jq on the self-hosted runner (e.g. \`brew install jq\` or \`apt-get install jq\`)."
+            exit 0
+          fi
+          if [ -z "$LAKEBASE_PROJECT_ID" ] || [ -z "$DATABRICKS_HOST" ] || [ -z "$DATABRICKS_TOKEN" ]; then
+            echo "Lakebase: secrets not set; skipping CI branch creation. Add DATABRICKS_HOST, DATABRICKS_TOKEN, LAKEBASE_PROJECT_ID in repo Settings → Secrets and variables → Actions."
+            write_skip "**Reason:** One or more secrets are NOT SET (DATABRICKS_HOST, DATABRICKS_TOKEN, LAKEBASE_PROJECT_ID). **Fix:** In this repo go to Settings → Secrets and variables → Actions, add the three secrets, then re-run or push a new commit."
+            exit 0
+          fi
+
+          PROJ_PATH="projects/${LAKEBASE_PROJECT_ID}"
+          DB_NAME="databricks_postgres"
+
+          # Debug: capture raw list-branches output to see actual CLI response shape
+          LIST_BRANCHES_RAW="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>&1)" || true
+          echo "Lakebase: list-branches response type: $(echo "$LIST_BRANCHES_RAW" | jq -r 'if type == "array" then "array(length=" + (length | tostring) + ")" elif type == "object" then "object(keys=" + (keys | join(",")) + ")" else "unknown" end' 2>/dev/null || echo "jq parse failed")"
+          # Normalize: root array -> use as-is; else .branches or .items (CLI may return either shape)
+          BRANCHES_JSON="$(echo "$LIST_BRANCHES_RAW" | jq -c 'if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end' 2>/dev/null)" || BRANCHES_JSON="[]"
+          echo "Lakebase: branch names from list: $(echo "$BRANCHES_JSON" | jq -r '.[] | (.name // .uid // .id // .metadata.name // "?")' 2>/dev/null | head -5 | tr '\n' ' ')"
+
+          # Find default (main) Lakebase branch: .status.default or .is_default; uid from .uid, .id, or last segment of .name
+          DEFAULT_UID="$(echo "$BRANCHES_JSON" | jq -r '.[] | select((.status.default == true) or (.is_default == true)) | (.uid // .id // (if .name then (.name | split("/") | last) else empty end))' 2>/dev/null | head -1)"
+          if [ -z "$DEFAULT_UID" ] && [ "$(echo "$BRANCHES_JSON" | jq -r 'length' 2>/dev/null)" = "1" ]; then
+            DEFAULT_UID="$(echo "$BRANCHES_JSON" | jq -r '.[0] | (.uid // .id // (if .name then (.name | split("/") | last) else empty end))' 2>/dev/null)"
+          fi
+          if [ -z "$DEFAULT_UID" ]; then
+            echo "Lakebase: could not find default branch. Outputting empty URL." >&2
+            echo "Lakebase: DEBUG first branch keys: $(echo "$BRANCHES_JSON" | jq -r '.[0] | keys | join(",")' 2>/dev/null || echo "none")"
+            echo "Lakebase: DEBUG branches json (first 500 chars): $(echo "$BRANCHES_JSON" | head -c 500)"
+            write_skip "**Reason:** Could not find default Lakebase branch. **Fix:** Check LAKEBASE_PROJECT_ID and that the token can list branches (\`databricks postgres list-branches projects/<id>\`). Check workflow log for 'list-branches response type', 'branch names from list', and 'DEBUG first branch keys'."
+            exit 0
+          fi
+          echo "Lakebase: default branch uid=$DEFAULT_UID"
+
+          # Create CI branch from default (idempotent: create-branch may succeed or branch may already exist)
+          CREATE_OUT="$(databricks postgres create-branch "$PROJ_PATH" "$BRANCH_NAME" \
+            --json "{\"spec\": {\"source_branch\": \"${PROJ_PATH}/branches/${DEFAULT_UID}\", \"no_expiry\": true}}" 2>&1)" || true
+          echo "Lakebase: create-branch output: $CREATE_OUT"
+          sleep 5
+
+          # Re-fetch list after create (CLI may return fresh data)
+          LIST_AFTER="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>&1)" || true
+          BRANCHES_AFTER="$(echo "$LIST_AFTER" | jq -c 'if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end' 2>/dev/null)" || BRANCHES_AFTER="[]"
+          echo "Lakebase: branch names after create: $(echo "$BRANCHES_AFTER" | jq -r '.[] | (.name // .uid // .id // "?")' 2>/dev/null | tr '\n' ' ')"
+
+          # Wait for branch READY (up to 2 min); match by .name containing ci-pr-N or .uid/.id == ci-pr-N
+          STATE=""
+          for i in $(seq 1 24); do
+            LIST_NOW="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null)" || true
+            STATE="$(echo "$LIST_NOW" | jq -r --arg uid "$BRANCH_NAME" '
+              (if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[]?
+              | select((.name | type == "string" and (endswith("/branches/" + $uid) or (split("/") | last == $uid))) or (.uid == $uid) or (.id == $uid))
+              | .status.current_state // empty
+            ' 2>/dev/null | head -1)"
+            [ "$STATE" = "READY" ] && break
+            sleep 5
+          done
+          if [ "$STATE" != "READY" ]; then
+            echo "Lakebase: branch $BRANCH_NAME not READY (state: ${STATE:-unknown}). Outputting empty URL." >&2
+            LIST_DEBUG="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null)" || true
+            echo "Lakebase: DEBUG list after wait (branch names): $(echo "$LIST_DEBUG" | jq -r '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[]? | "\(.name // .uid // .id): \(.status.current_state // "?")"' 2>/dev/null | tr '\n' ' ')"
+            write_skip "**Reason:** Branch \`$BRANCH_NAME\` did not become READY in time (state: ${STATE:-unknown}). **Fix:** Check workflow log for 'create-branch output' and 'branch names after create'. Retry or check Lakebase project."
+            exit 0
+          fi
+
+          BRANCH_PATH="${PROJ_PATH}/branches/${BRANCH_NAME}"
+
+          # Get or create primary endpoint (wait for ACTIVE like post-checkout.sh)
+          HOST="$(databricks postgres list-endpoints "$BRANCH_PATH" -o json 2>/dev/null | jq -r '.[0].status.hosts.host // empty')"
+          if [ -z "$HOST" ]; then
+            databricks postgres create-endpoint "$BRANCH_PATH" "primary" \
+              --json '{"spec": {"endpoint_type": "ENDPOINT_TYPE_READ_WRITE", "autoscaling_limit_min_cu": 2, "autoscaling_limit_max_cu": 4}}' 2>/dev/null || true
+            for _ in $(seq 1 24); do
+              STATE="$(databricks postgres list-endpoints "$BRANCH_PATH" -o json 2>/dev/null | jq -r '.[0].status.current_state // empty')"
+              [ "$STATE" = "ACTIVE" ] && break
+              sleep 5
+            done
+            HOST="$(databricks postgres list-endpoints "$BRANCH_PATH" -o json 2>/dev/null | jq -r '.[0].status.hosts.host // empty')"
+          fi
+          if [ -z "$HOST" ]; then
+            echo "Lakebase: could not get endpoint host for $BRANCH_NAME. Outputting empty URL." >&2
+            write_skip "**Reason:** Could not get endpoint host for \`$BRANCH_NAME\`. **Fix:** Retry the workflow or check the Lakebase project/endpoint in Databricks."
+            exit 0
+          fi
+
+          # Generate credential and get email for username
+          TOKEN="$(databricks postgres generate-database-credential "${BRANCH_PATH}/endpoints/primary" -o json 2>/dev/null | jq -r '.token // empty')"
+          EMAIL="$(databricks current-user me -o json 2>/dev/null | jq -r '.userName // .emails[0].value // empty')"
+          if [ -z "$TOKEN" ] || [ -z "$EMAIL" ]; then
+            echo "Lakebase: could not get credential or email. Outputting empty URL." >&2
+            write_skip "**Reason:** Could not get database credential or user email. **Fix:** Check token has Lakebase permissions; retry the workflow."
+            exit 0
+          fi
+
+          JDBC_URL="jdbc:postgresql://${HOST}:5432/${DB_NAME}?sslmode=require"
+          echo "url=${JDBC_URL}" >> $GITHUB_OUTPUT
+          echo "username=${EMAIL}" >> $GITHUB_OUTPUT
+          # Use delimiter so password with special characters is safe
+          echo "password<<PASS_EOF" >> $GITHUB_OUTPUT
+          echo "$TOKEN" >> $GITHUB_OUTPUT
+          echo "PASS_EOF" >> $GITHUB_OUTPUT
+          echo "Lakebase: CI branch $BRANCH_NAME ready; URL and credentials set."
+          echo "## Lakebase CI branch: created" >> $GITHUB_STEP_SUMMARY
+          echo "Branch \`$BRANCH_NAME\` is ready; CI will run against it." >> $GITHUB_STEP_SUMMARY
+
+      - name: Configure datasource for CI
+        id: datasource
+        run: |
+          URL="${{ steps.lakebase-db.outputs.url }}"
+          USER="${{ steps.lakebase-db.outputs.username }}"
+          PASS="${{ steps.lakebase-db.outputs.password }}"
+          if [ -n "$URL" ]; then
+            echo "SPRING_DATASOURCE_URL=$URL" >> $GITHUB_ENV
+            [ -n "$USER" ] && echo "SPRING_DATASOURCE_USERNAME=$USER" >> $GITHUB_ENV
+            [ -n "$PASS" ] && echo "SPRING_DATASOURCE_PASSWORD=$PASS" >> $GITHUB_ENV
+            echo "ci_branch_used=true" >> $GITHUB_OUTPUT
+            echo "Using CI branch URL"
+          else
+            echo "ci_branch_used=false" >> $GITHUB_OUTPUT
+            echo "No CI branch URL; tests may use default or fail. Set Lakebase secrets (DATABRICKS_*, LAKEBASE_PROJECT_ID) for this demo."
+          fi
+
+      - name: Comment on PR (no Lakebase branch)
+        if: steps.lakebase-db.outputs.url == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR="${{ github.event.pull_request.number }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BODY="⚠️ **No Lakebase CI branch** was created. This run is not using a dedicated database branch. Open the [workflow run](${RUN_URL}), expand **Create CI database branch (Lakebase)** and check the step **Summary** (or log) for the reason and how to fix it."
+          gh pr comment "$PR" --body "$BODY" 2>/dev/null || true
+
+      - name: Install PostgreSQL client (for Flyway repair)
+        if: steps.lakebase-db.outputs.url != ''
+        run: |
+          if command -v psql >/dev/null 2>&1; then
+            echo "psql already on PATH"; psql --version
+          elif command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y postgresql-client
+          elif command -v brew >/dev/null 2>&1; then
+            brew install libpq
+            echo "PATH=$(brew --prefix libpq)/bin:$PATH" >> $GITHUB_ENV
+          else
+            echo "Could not install psql; repair step may be skipped."
+          fi
+
+      - name: Repair flyway_schema_history (remove bogus entries when objects missing)
+        id: flyway-repair
+        if: steps.lakebase-db.outputs.url != ''
+        env:
+          FLYWAY_URL: ${{ steps.lakebase-db.outputs.url }}
+          FLYWAY_USER: ${{ steps.lakebase-db.outputs.username }}
+          FLYWAY_PASS: ${{ steps.lakebase-db.outputs.password }}
+        run: |
+          set +e
+          if ! command -v psql >/dev/null 2>&1; then
+            echo "psql not found; skipping flyway_schema_history repair."
+            exit 0
+          fi
+          FLYWAY_PASS_TRIMMED="$(printf '%s' "$FLYWAY_PASS" | tr -d '\n')"
+          HOST="$(echo "$FLYWAY_URL" | sed -n 's|.*://\([^:/]*\):.*|\1|p')"
+          DB="$(echo "$FLYWAY_URL" | sed -n 's|.*/\([^/?]*\).*|\1|p')"
+          if [ -z "$HOST" ] || [ -z "$DB" ]; then
+            echo "Could not parse JDBC URL; skipping repair."
+            exit 0
+          fi
+          export PGHOST="$HOST" PGPORT="5432" PGDATABASE="$DB" PGUSER="$FLYWAY_USER" PGPASSWORD="$FLYWAY_PASS_TRIMMED" PGSSLMODE=require
+          psql -c "SELECT 1 AS connected" 2>/dev/null || { echo "Connection failed; skipping repair."; unset PGPASSWORD PGHOST PGPORT PGDATABASE PGUSER PGSSLMODE; exit 0; }
+          FLYWAY_SCHEMA="$(psql -t -A -c "SELECT table_schema FROM information_schema.tables WHERE table_name = 'flyway_schema_history' LIMIT 1" 2>/dev/null | tr -d '\r\n')"
+          [ -z "$FLYWAY_SCHEMA" ] && FLYWAY_SCHEMA="public"
+          echo "flyway_schema_history schema: $FLYWAY_SCHEMA"
+          MIGRATION_DIR="src/main/resources/db/migration"
+          for f in "$MIGRATION_DIR"/V*.sql; do
+            [ -f "$f" ] || continue
+            version="$(basename "$f" | sed -n 's/^V\([0-9]*\)__.*/\1/p')"
+            [ -n "$version" ] || continue
+            tables="$(grep -oE 'CREATE TABLE (IF NOT EXISTS )?[a-zA-Z_][a-zA-Z0-9_]*' "$f" 2>/dev/null | awk '{print $NF}' | tr '[:upper:]' '[:lower:]' | sort -u)"
+            [ -n "$tables" ] || continue
+            missing=""
+            for t in $tables; do
+              [ -z "$t" ] && continue
+              exists="$(psql -t -A -c "SELECT 1 FROM information_schema.tables WHERE table_name = '$t'" 2>/dev/null | tr -d ' \r\n')"
+              [ -z "$exists" ] && missing="$missing $t"
+            done
+            if [ -n "$missing" ]; then
+              echo "Version $version: missing table(s):$missing; removing from flyway_schema_history."
+              psql -c "DELETE FROM \"$FLYWAY_SCHEMA\".flyway_schema_history WHERE version = '$version'" 2>/dev/null || true
+            fi
+          done
+          unset PGPASSWORD PGHOST PGPORT PGDATABASE PGUSER PGSSLMODE
+          exit 0
+
+      - name: Run Flyway migrate (CI branch)
+        id: flyway-ci
+        if: steps.lakebase-db.outputs.url != ''
+        env:
+          FLYWAY_URL: ${{ steps.lakebase-db.outputs.url }}
+          FLYWAY_USER: ${{ steps.lakebase-db.outputs.username }}
+          FLYWAY_PASS: ${{ steps.lakebase-db.outputs.password }}
+        run: |
+          echo "Migration files in repo:"
+          ls -la src/main/resources/db/migration/ || true
+          # Strip newlines from password (GitHub Actions multiline output can break -Dflyway.password)
+          FLYWAY_PASS_TRIMMED="$(printf '%s' "$FLYWAY_PASS" | tr -d '\n')"
+          echo "Flyway info (before migrate):"
+          ./mvnw -q flyway:info -Dflyway.url="$FLYWAY_URL" -Dflyway.user="${FLYWAY_USER:-}" -Dflyway.password="$FLYWAY_PASS_TRIMMED" -Dflyway.locations=filesystem:src/main/resources/db/migration 2>&1 || true
+          echo "Running Flyway migrate on CI branch..."
+          ./mvnw -q flyway:migrate -Dflyway.url="$FLYWAY_URL" -Dflyway.user="${FLYWAY_USER:-}" -Dflyway.password="$FLYWAY_PASS_TRIMMED" -Dflyway.locations=filesystem:src/main/resources/db/migration
+          echo "Flyway info (after migrate):"
+          ./mvnw -q flyway:info -Dflyway.url="$FLYWAY_URL" -Dflyway.user="${FLYWAY_USER:-}" -Dflyway.password="$FLYWAY_PASS_TRIMMED" -Dflyway.locations=filesystem:src/main/resources/db/migration
+          echo "Flyway migrate completed."
+
+      # Apply migrations to the Lakebase branch named after the PR head (e.g. cart) so it stays in sync with CI.
+      - name: Run Flyway migrate (feature-named Lakebase branch)
+        if: steps.lakebase-db.outputs.url != '' && github.head_ref != ''
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST || '' }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN || '' }}
+          LAKEBASE_PROJECT_ID: ${{ secrets.LAKEBASE_PROJECT_ID || '' }}
+        run: |
+          set +e
+          CI_BRANCH="${{ steps.lakebase-db.outputs.branch }}"
+          HEAD_REF="${{ github.head_ref }}"
+          FEATURE_BRANCH="$(echo "$HEAD_REF" | sed 's/\//-/g' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-63)"
+          if [ -z "$FEATURE_BRANCH" ] || [ "$FEATURE_BRANCH" = "main" ] || [ "$FEATURE_BRANCH" = "master" ] || [ "$FEATURE_BRANCH" = "$CI_BRANCH" ]; then
+            echo "Skipping feature-named branch (FEATURE_BRANCH=${FEATURE_BRANCH:-empty} same as CI or main)."
+            exit 0
+          fi
+          export DATABRICKS_HOST DATABRICKS_TOKEN
+          PROJ_PATH="projects/${LAKEBASE_PROJECT_ID}"
+          DB_NAME="databricks_postgres"
+          LIST_JSON="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null)" || true
+          BRANCHES="$(echo "$LIST_JSON" | jq -c 'if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end' 2>/dev/null)" || BRANCHES="[]"
+          EXISTS="$(echo "$BRANCHES" | jq -r --arg w "$FEATURE_BRANCH" '
+            (.[]? | select((.name | type == "string" and (endswith("/branches/" + $w) or (split("/") | last == $w))) or (.uid == $w) or (.id == $w))) | .name
+          ' 2>/dev/null | head -1)"
+          if [ -z "$EXISTS" ] || [ "$EXISTS" = "null" ]; then
+            echo "Creating Lakebase branch $FEATURE_BRANCH from $CI_BRANCH (so it gets the same schema including new migrations)..."
+            databricks postgres create-branch "$PROJ_PATH" "$FEATURE_BRANCH" \
+              --json "{\"spec\": {\"source_branch\": \"${PROJ_PATH}/branches/${CI_BRANCH}\", \"no_expiry\": true}}" 2>&1 || true
+            sleep 5
+            for _ in $(seq 1 24); do
+              STATE="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null | jq -r --arg w "$FEATURE_BRANCH" '
+                (if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[]?
+                | select((.name | type == "string" and (endswith("/branches/" + $w) or (split("/") | last == $w))) or (.uid == $w) or (.id == $w))
+                | .status.current_state // empty
+              ' 2>/dev/null | head -1)"
+              [ "$STATE" = "READY" ] && break
+              sleep 5
+            done
+          fi
+          FEAT_PATH="${PROJ_PATH}/branches/${FEATURE_BRANCH}"
+          HOST="$(databricks postgres list-endpoints "$FEAT_PATH" -o json 2>/dev/null | jq -r '.[0].status.hosts.host // empty')"
+          if [ -z "$HOST" ]; then
+            databricks postgres create-endpoint "$FEAT_PATH" "primary" \
+              --json '{"spec": {"endpoint_type": "ENDPOINT_TYPE_READ_WRITE", "autoscaling_limit_min_cu": 2, "autoscaling_limit_max_cu": 4}}' 2>/dev/null || true
+            for _ in $(seq 1 24); do
+              HOST="$(databricks postgres list-endpoints "$FEAT_PATH" -o json 2>/dev/null | jq -r '.[0].status.hosts.host // empty')"
+              [ -n "$HOST" ] && break
+              sleep 5
+            done
+          fi
+          if [ -z "$HOST" ]; then
+            echo "Could not get endpoint for $FEATURE_BRANCH; skipping Flyway on feature branch."
+            exit 0
+          fi
+          TOKEN="$(databricks postgres generate-database-credential "${FEAT_PATH}/endpoints/primary" -o json 2>/dev/null | jq -r '.token // empty')"
+          EMAIL="$(databricks current-user me -o json 2>/dev/null | jq -r '.userName // .emails[0].value // empty')"
+          if [ -z "$TOKEN" ] || [ -z "$EMAIL" ]; then
+            echo "Could not get credential for $FEATURE_BRANCH; skipping Flyway."
+            exit 0
+          fi
+          FEAT_URL="jdbc:postgresql://${HOST}:5432/${DB_NAME}?sslmode=require"
+          echo "Running Flyway migrate on Lakebase branch $FEATURE_BRANCH..."
+          ./mvnw -q flyway:migrate -Dflyway.url="$FEAT_URL" -Dflyway.user="$EMAIL" -Dflyway.password="$TOKEN" 2>&1 || true
+          echo "Flyway on $FEATURE_BRANCH done."
+          exit 0
+
+      - name: Run tests
+        env:
+          SPRING_DATASOURCE_URL: ${{ steps.lakebase-db.outputs.url }}
+          SPRING_DATASOURCE_USERNAME: ${{ steps.lakebase-db.outputs.username }}
+          SPRING_DATASOURCE_PASSWORD: ${{ steps.lakebase-db.outputs.password }}
+        run: |
+          if [ -n "$SPRING_DATASOURCE_URL" ]; then
+            echo "Running tests against CI branch (Flyway was run in previous step)."
+            ./mvnw -q test -Dspring.datasource.url="$SPRING_DATASOURCE_URL" -Dspring.datasource.username="${SPRING_DATASOURCE_USERNAME:-}" -Dspring.datasource.password="${SPRING_DATASOURCE_PASSWORD:-}"
+          else
+            echo "No CI branch URL; skipping DB tests. Set Lakebase secrets (DATABRICKS_*, LAKEBASE_PROJECT_ID) for full CI."
+            ./mvnw -q test -DskipTests=true
+          fi
+
+      - name: Install PostgreSQL client (for schema dump)
+        if: success() && steps.datasource.outputs.ci_branch_used == 'true'
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y postgresql-client
+          elif command -v brew >/dev/null 2>&1; then
+            brew install libpq
+            echo "PATH=$(brew --prefix libpq)/bin:$PATH" >> $GITHUB_ENV
+          else
+            echo "Neither apt-get nor brew found; pg_dump may be missing for schema diff."
+          fi
+
+      - name: Schema diff (CI branch vs production)
+        if: success() && steps.datasource.outputs.ci_branch_used == 'true'
+        id: schema-diff
+        env:
+          SPRING_DATASOURCE_URL: ${{ env.SPRING_DATASOURCE_URL }}
+          SPRING_DATASOURCE_USERNAME: ${{ env.SPRING_DATASOURCE_USERNAME }}
+          SPRING_DATASOURCE_PASSWORD: ${{ env.SPRING_DATASOURCE_PASSWORD }}
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST || '' }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN || '' }}
+          LAKEBASE_PROJECT_ID: ${{ secrets.LAKEBASE_PROJECT_ID || '' }}
+        run: |
+          set -e
+          PR="${{ github.event.pull_request.number }}"
+          BRANCH="ci-pr-${PR}"
+          MD="schema-diff.md"
+          echo "## Schema (Lakebase branch \`${BRANCH}\`)" > "$MD"
+          echo "" >> "$MD"
+          # Migrations applied on CI branch (from repo)
+          echo "### Migrations applied on this branch (CI)" >> "$MD"
+          echo "| Version | Migration |" >> "$MD"
+          echo "|---------|-----------|" >> "$MD"
+          for f in src/main/resources/db/migration/*.sql; do
+            [ -f "$f" ] || continue
+            base=$(basename "$f")
+            ver=$(echo "$base" | sed -n 's/^V\([0-9]*\)__.*/\1/p')
+            desc=$(echo "$base" | sed -n 's/^V[0-9]*__\(.*\)\.sql$/\1/p' | tr '_' ' ')
+            [ -n "$ver" ] && echo "| V$ver | $desc |" >> "$MD"
+          done
+          echo "" >> "$MD"
+          # Obtain production (default branch) URL via Lakebase CLI (same approach as scripts/connect-main-branch.sh)
+          PRODUCTION_DATASOURCE_URL=""
+          PRODUCTION_DATASOURCE_USERNAME=""
+          PRODUCTION_DATASOURCE_PASSWORD=""
+          if [ -n "$LAKEBASE_PROJECT_ID" ] && [ -n "$DATABRICKS_HOST" ] && [ -n "$DATABRICKS_TOKEN" ]; then
+            PROJ_PATH="projects/${LAKEBASE_PROJECT_ID}"
+            DB_NAME="databricks_postgres"
+            DEFAULT_UID="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null | jq -r '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[] | select((.status.default == true) or (.is_default == true)) | (.uid // .id // (if .name then (.name | split("/") | last) else empty end))' | head -1)"
+            if [ -n "$DEFAULT_UID" ]; then
+              BRANCH_PATH="${PROJ_PATH}/branches/${DEFAULT_UID}"
+              PROD_HOST="$(databricks postgres list-endpoints "$BRANCH_PATH" -o json 2>/dev/null | jq -r '.[0].status.hosts.host // empty')"
+              if [ -z "$PROD_HOST" ]; then
+                databricks postgres create-endpoint "$BRANCH_PATH" "primary" \
+                  --json '{"spec": {"endpoint_type": "ENDPOINT_TYPE_READ_WRITE", "autoscaling_limit_min_cu": 2, "autoscaling_limit_max_cu": 4}}' 2>/dev/null || true
+                for _ in $(seq 1 24); do
+                  state="$(databricks postgres list-endpoints "$BRANCH_PATH" -o json 2>/dev/null | jq -r '.[0].status.current_state // empty')"
+                  [ "$state" = "ACTIVE" ] && break
+                  sleep 5
+                done
+                PROD_HOST="$(databricks postgres list-endpoints "$BRANCH_PATH" -o json 2>/dev/null | jq -r '.[0].status.hosts.host // empty')"
+              fi
+              if [ -n "$PROD_HOST" ]; then
+                PROD_TOKEN="$(databricks postgres generate-database-credential "${BRANCH_PATH}/endpoints/primary" -o json 2>/dev/null | jq -r '.token // empty')"
+                PROD_EMAIL="$(databricks current-user me -o json 2>/dev/null | jq -r '.userName // .emails[0].value // empty')"
+                if [ -n "$PROD_TOKEN" ] && [ -n "$PROD_EMAIL" ]; then
+                  PRODUCTION_DATASOURCE_URL="jdbc:postgresql://${PROD_HOST}:5432/${DB_NAME}?sslmode=require"
+                  PRODUCTION_DATASOURCE_USERNAME="$PROD_EMAIL"
+                  PRODUCTION_DATASOURCE_PASSWORD="$PROD_TOKEN"
+                fi
+              fi
+            fi
+          fi
+          # Parse JDBC URL to host, port, db (for pg_dump)
+          parse_jdbc() {
+            local url="$1"
+            local rest="${url#jdbc:postgresql://}"
+            local hostport="${rest%%/*}"
+            local path="${rest#*/}"
+            local db="${path%%\?*}"
+            local host="${hostport%:*}"
+            local port="${hostport##*:}"
+            [ "$port" = "$host" ] && port=5432
+            echo "$host|$port|$db"
+          }
+          # Schema diff from prod + CI schema SQL (format-schema-diff.sh), or fallback to migration version comparison
+          if [ -n "$PRODUCTION_DATASOURCE_URL" ] && command -v pg_dump >/dev/null 2>&1; then
+            PROD_HP=$(parse_jdbc "$PRODUCTION_DATASOURCE_URL")
+            CI_HP=$(parse_jdbc "$SPRING_DATASOURCE_URL")
+            PROD_HOST=$(echo "$PROD_HP" | cut -d'|' -f1); PROD_PORT=$(echo "$PROD_HP" | cut -d'|' -f2); PROD_DB=$(echo "$PROD_HP" | cut -d'|' -f3)
+            CI_HOST=$(echo "$CI_HP" | cut -d'|' -f1); CI_PORT=$(echo "$CI_HP" | cut -d'|' -f2); CI_DB=$(echo "$CI_HP" | cut -d'|' -f3)
+            export PGSSLMODE=require
+            mkdir -p .tmp
+            # Unsorted schema so formatter can parse CREATE TABLE ... ( columns ); blocks (same as scripts/prepare-schema-diff.sh)
+            PROD_ERR=$(mktemp); CI_ERR=$(mktemp); trap "rm -f '$PROD_ERR' '$CI_ERR'" EXIT
+            PGPASSWORD="${PRODUCTION_DATASOURCE_PASSWORD:-}" pg_dump -h "$PROD_HOST" -p "$PROD_PORT" -U "${PRODUCTION_DATASOURCE_USERNAME:-}" -d "$PROD_DB" --schema-only --no-owner --no-privileges 2>"$PROD_ERR" | grep -v '^--' | grep -v '^$' > .tmp/prod-schema.sql || true
+            PGPASSWORD="${SPRING_DATASOURCE_PASSWORD:-}" pg_dump -h "$CI_HOST" -p "$CI_PORT" -U "${SPRING_DATASOURCE_USERNAME:-}" -d "$CI_DB" --schema-only --no-owner --no-privileges 2>"$CI_ERR" | grep -v '^--' | grep -v '^$' > .tmp/ci-schema.sql || true
+            if [ -s .tmp/prod-schema.sql ] && [ -s .tmp/ci-schema.sql ]; then
+              trap - EXIT; rm -f "$PROD_ERR" "$CI_ERR"
+              echo "### Schema diff: \`${BRANCH}\` vs production" >> "$MD"
+              echo "" >> "$MD"
+              bash scripts/format-schema-diff.sh .tmp/prod-schema.sql .tmp/ci-schema.sql >> "$MD" 2>/dev/null || true
+            else
+              echo "# pg_dump failed or empty; falling back to migration version comparison." >> "$MD"
+              if [ ! -s .tmp/prod-schema.sql ] && [ -s "$PROD_ERR" ]; then echo "# Production: $(head -1 "$PROD_ERR" 2>/dev/null)" >> "$MD"; fi
+              if [ ! -s .tmp/ci-schema.sql ] && [ -s "$CI_ERR" ]; then echo "# CI branch: $(head -1 "$CI_ERR" 2>/dev/null)" >> "$MD"; fi
+              [ ! -s .tmp/prod-schema.sql ] && echo "# Tip: ensure production (default branch) credentials are valid in workflow secrets." >> "$MD"
+              [ ! -s .tmp/ci-schema.sql ] && echo "# Tip: CI branch credentials are generated in this run; transient failures can be retried." >> "$MD"
+              trap - EXIT; rm -f "$PROD_ERR" "$CI_ERR"
+              CI_INFO=$(./mvnw -q flyway:info -Dflyway.url="$SPRING_DATASOURCE_URL" -Dflyway.user="${SPRING_DATASOURCE_USERNAME:-}" -Dflyway.password="${SPRING_DATASOURCE_PASSWORD:-}" 2>/dev/null | grep "Success" | awk -F'|' '{gsub(/^ +| +$/,"",$2); print $2}' || true)
+              PROD_INFO=$(./mvnw -q flyway:info -Dflyway.url="$PRODUCTION_DATASOURCE_URL" -Dflyway.user="${PRODUCTION_DATASOURCE_USERNAME:-}" -Dflyway.password="${PRODUCTION_DATASOURCE_PASSWORD:-}" 2>/dev/null | grep "Success" | awk -F'|' '{gsub(/^ +| +$/,"",$2); print $2}' || true)
+              CI_VERS=$(echo "$CI_INFO" | tr '\n' ' '); PROD_VERS=$(echo "$PROD_INFO" | tr '\n' ' ')
+              for v in $CI_VERS; do echo " $PROD_VERS " | grep -q " $v " || echo "**New on this PR:** V$v" >> "$MD"; done
+              for v in $PROD_VERS; do echo " $CI_VERS " | grep -q " $v " || echo "**Only on production:** V$v" >> "$MD"; done
+            fi
+          elif [ -n "$PRODUCTION_DATASOURCE_URL" ]; then
+            echo "### Schema diff vs production (migration versions)" >> "$MD"
+            CI_INFO=$(./mvnw -q flyway:info -Dflyway.url="$SPRING_DATASOURCE_URL" -Dflyway.user="${SPRING_DATASOURCE_USERNAME:-}" -Dflyway.password="${SPRING_DATASOURCE_PASSWORD:-}" 2>/dev/null | grep "Success" | awk -F'|' '{gsub(/^ +| +$/,"",$2); print $2}' || true)
+            PROD_INFO=$(./mvnw -q flyway:info -Dflyway.url="$PRODUCTION_DATASOURCE_URL" -Dflyway.user="${PRODUCTION_DATASOURCE_USERNAME:-}" -Dflyway.password="${PRODUCTION_DATASOURCE_PASSWORD:-}" 2>/dev/null | grep "Success" | awk -F'|' '{gsub(/^ +| +$/,"",$2); print $2}' || true)
+            CI_VERS=$(echo "$CI_INFO" | tr '\n' ' '); PROD_VERS=$(echo "$PROD_INFO" | tr '\n' ' ')
+            NEW_ON_CI=""; ON_BOTH=""; ONLY_PROD=""
+            for v in $CI_VERS; do if echo " $PROD_VERS " | grep -q " $v "; then ON_BOTH="$ON_BOTH V$v"; else NEW_ON_CI="$NEW_ON_CI V$v"; fi; done
+            for v in $PROD_VERS; do echo " $CI_VERS " | grep -q " $v " || ONLY_PROD="$ONLY_PROD V$v"; done
+            [ -n "$NEW_ON_CI" ] && echo "**New on this PR (not on production):**$NEW_ON_CI" >> "$MD"
+            [ -n "$ON_BOTH" ] && echo "**On both:**$ON_BOTH" >> "$MD"
+            [ -n "$ONLY_PROD" ] && echo "**Only on production:**$ONLY_PROD" >> "$MD"
+            [ -z "$NEW_ON_CI" ] && [ -z "$ONLY_PROD" ] && echo "**In sync:** CI and production have the same migrations." >> "$MD"
+          else
+            echo "### Schema diff vs production" >> "$MD"
+            echo "Production URL could not be resolved from Lakebase (default branch). Check \`LAKEBASE_PROJECT_ID\`, \`DATABRICKS_HOST\`, and \`DATABRICKS_TOKEN\`." >> "$MD"
+          fi
+          cat "$MD" >> $GITHUB_STEP_SUMMARY
+          echo "path=$MD" >> $GITHUB_OUTPUT
+
+      # Pass schema diff via job output (no artifact upload — avoids storage quota)
+      - name: Export schema diff to output
+        id: schema-diff-export
+        if: success() && steps.datasource.outputs.ci_branch_used == 'true' && steps.schema-diff.outcome == 'success'
+        run: |
+          echo "content<<SCHEMA_DIFF_EOF" >> $GITHUB_OUTPUT
+          base64 < schema-diff.md >> $GITHUB_OUTPUT
+          echo "SCHEMA_DIFF_EOF" >> $GITHUB_OUTPUT
+
+  pr-comment:
+    runs-on: self-hosted
+    needs: build-and-test
+    if: success() && needs.build-and-test.result == 'success' && needs.build-and-test.outputs.ci_branch_used == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore schema diff
+        if: needs.build-and-test.outputs.schema_diff_b64 != ''
+        env:
+          SCHEMA_DIFF_B64: ${{ needs.build-and-test.outputs.schema_diff_b64 }}
+        run: echo "$SCHEMA_DIFF_B64" | (base64 -d 2>/dev/null || base64 -D) > schema-diff.md
+      - name: Comment on PR (success — ready for test)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR="${{ github.event.pull_request.number }}"
+          SCHEMA_FILE="schema-diff.md"
+          [ -f "schema-diff/schema-diff.md" ] && SCHEMA_FILE="schema-diff/schema-diff.md"
+          {
+            echo '✅ **CI passed.** Build and tests succeeded on Lakebase branch `ci-pr-'"$PR"'`. Ready for QA.'
+            if [ -f "$SCHEMA_FILE" ]; then
+              echo ''
+              echo '---'
+              cat "$SCHEMA_FILE"
+            fi
+          } > comment-body.md
+          gh pr comment "$PR" --body-file comment-body.md 2>/dev/null || true
+      - name: Notify tester queue (webhook)
+        env:
+          # Repository secret; linter may warn "Context access might be invalid" (false positive)
+          TESTER_QUEUE_WEBHOOK_URL: ${{ secrets.TESTER_QUEUE_WEBHOOK_URL || '' }}
+        run: |
+          if [ -z "$TESTER_QUEUE_WEBHOOK_URL" ]; then exit 0; fi
+          PR="${{ github.event.pull_request.number }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -sS -X POST -H "Content-Type: application/json" \
+            -d "{\"pr\":$PR,\"status\":\"success\",\"lakebase_branch\":\"ci-pr-$PR\",\"message\":\"Build and tests passed. Ready for QA.\",\"run_url\":\"$RUN_URL\",\"head_ref\":\"${{ github.head_ref }}\"}" \
+            "$TESTER_QUEUE_WEBHOOK_URL" || true
+
+  notify-committer-on-failure:
+    runs-on: self-hosted
+    needs: build-and-test
+    if: failure() && needs.build-and-test.result == 'failure'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Comment on PR (notify committer — build or tests failed)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR="${{ github.event.pull_request.number }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BODY="❌ **CI failed.** Build or tests failed on this PR. Please check the [workflow run](${RUN_URL}) and fix the failures."
+          gh pr comment "$PR" --body "$BODY" 2>/dev/null || true
