@@ -41,7 +41,7 @@ This extension relies on **Flyway** for database schema management. Flyway migra
 - CI can apply migrations to the `ci-pr-<N>` branch and diff against production
 - Production migrations are applied deterministically on merge (no runtime DDL surprises)
 
-Set `spring.jpa.hibernate.ddl-auto=validate` (or `none`) so the ORM validates against the schema but does not create or alter tables at runtime.
+For example, set `spring.jpa.hibernate.ddl-auto=validate` (or `none`) so the ORM validates against the schema but does not create or alter tables at runtime.
 
 ### Install the Extension
 
