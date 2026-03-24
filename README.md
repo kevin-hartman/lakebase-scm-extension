@@ -32,7 +32,7 @@ Lakebase Synced SCM is a VS Code / Cursor extension that replaces the built-in G
 
 ### Install the Extension
 
-1. Download `lakebase-synced-scm-0.3.0.vsix`
+1. Download `lakebase-synced-scm-0.3.0.vsix` from the [latest release](https://github.com/kevin-hartman_data/lakebase-synced-scm/releases/latest)
 2. In VS Code: **Extensions** → `...` → **Install from VSIX** → select the file
 3. Reload the window
 
