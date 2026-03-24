@@ -1415,6 +1415,37 @@ export async function activate(context: vscode.ExtensionContext) {
         await vscode.window.withProgress(
           { location: vscode.ProgressLocation.Notification, title: `Merging PR #${pr.number}...` },
           async (progress) => {
+            // Refresh CI secrets before merge so the merge workflow has a fresh token
+            progress.report({ message: 'Syncing CI secrets...' });
+            const root = getWorkspaceRoot();
+            if (root) {
+              try {
+                const cp = require('child_process');
+                const fs = require('fs');
+                const path = require('path');
+                const envContent = fs.readFileSync(path.join(root, '.env'), 'utf-8');
+                const getEnvVal = (key: string) => {
+                  const match = envContent.match(new RegExp(`^${key}=(.+)$`, 'm'));
+                  return match ? match[1].trim() : '';
+                };
+                const host = getEnvVal('DATABRICKS_HOST');
+                const projectId = getEnvVal('LAKEBASE_PROJECT_ID');
+                if (host) { cp.execSync(`gh secret set DATABRICKS_HOST --body "${host}"`, { cwd: root, timeout: 10000 }); }
+                if (projectId) { cp.execSync(`gh secret set LAKEBASE_PROJECT_ID --body "${projectId}"`, { cwd: root, timeout: 10000 }); }
+                try {
+                  const tokenRaw = cp.execSync(
+                    `databricks tokens create --comment "CI merge" --lifetime-seconds 3600 -o json`,
+                    { cwd: root, timeout: 15000, env: { ...process.env, DATABRICKS_HOST: host } }
+                  ).toString();
+                  const token = JSON.parse(tokenRaw).token_value || JSON.parse(tokenRaw).token || '';
+                  if (token) { cp.execSync(`gh secret set DATABRICKS_TOKEN --body "${token}"`, { cwd: root, timeout: 10000 }); }
+                } catch {
+                  const existingToken = getEnvVal('DATABRICKS_TOKEN');
+                  if (existingToken) { cp.execSync(`gh secret set DATABRICKS_TOKEN --body "${existingToken}"`, { cwd: root, timeout: 10000 }); }
+                }
+              } catch { /* non-fatal */ }
+            }
+
             progress.report({ message: 'Merging...' });
             await gitService.mergePullRequest(method.value, true);
 

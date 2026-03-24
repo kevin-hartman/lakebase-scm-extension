@@ -5,6 +5,10 @@
   "version": "0.3.0",
   "publisher": "databricks-field-eng",
   "icon": "resources/icons/extension-icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kevin-hartman_data/lakebase-synced-scm"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
