@@ -28,7 +28,7 @@
         {
           "id": "lakebase-synced-scm",
           "title": "Lakebase SCM Extension",
-          "icon": "resources/icons/lakebase.svg"
+          "icon": "resources/icons/lakebase-sidebar.svg"
         }
       ]
     },

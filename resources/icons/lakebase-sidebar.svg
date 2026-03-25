@@ -1,0 +1,22 @@
+<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
+  <!-- Grey Lakebase icon (background, full size) -->
+  <!-- Top bar -->
+  <rect x="2" y="2" width="20" height="5" rx="0.5" opacity="0.5"/>
+  <!-- Middle bar with wavy bottom -->
+  <rect x="2" y="9" width="20" height="3.5" rx="0.5" opacity="0.5"/>
+  <path d="M2 12.5 C5 12.5 6 14 9 14 C12 14 13 12.5 16 12.5 C19 12.5 20 13.5 22 13.5 L22 14 C22 14 20.5 14 18 14 C15 14 13 15.5 9.5 15.5 C6 15.5 5 14 2 14 Z" opacity="0.5"/>
+  <!-- Bottom bar with wavy top edge -->
+  <path d="M2 16 C5 16 6 14.5 9.5 14.5 C13 14.5 14 16 17 16 C19.5 16 21 15.3 22 15 L22 20.5 C22 20.78 21.78 21 21.5 21 L2.5 21 C2.22 21 2 20.78 2 20.5 Z" opacity="0.45"/>
+
+  <!-- SCM branch icon (foreground, bottom-right, ~1/3 size with buffer) -->
+  <!-- Dark buffer circle -->
+  <circle cx="19" cy="19" r="5.5" fill="black" fill-opacity="0.4"/>
+  <circle cx="19" cy="19" r="4.8" fill="var(--vscode-sideBar-background, #252526)"/>
+
+  <!-- Git branch symbol -->
+  <line x1="19" y1="15.5" x2="19" y2="22" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+  <line x1="16" y1="16" x2="19" y2="18.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+  <circle cx="19" cy="15.5" r="1.2"/>
+  <circle cx="19" cy="22" r="1.2"/>
+  <circle cx="16" cy="16" r="1.2"/>
+</svg>
