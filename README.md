@@ -1,8 +1,8 @@
-# Lakebase Synced SCM
+# Lakebase SCM Extension
 
 ## What This Is For
 
-Lakebase Synced SCM is a VS Code / Cursor extension that replaces the built-in Git source control with a unified **Git + Lakebase** SCM provider. Every code branch gets a paired Databricks Lakebase database branch — code and schema travel together through development, review, CI/CD, and merge.
+Lakebase SCM Extension is a VS Code / Cursor extension that replaces the built-in Git source control with a unified **Git + Lakebase** SCM provider. Every code branch gets a paired Databricks Lakebase database branch — code and schema travel together through development, review, CI/CD, and merge.
 
 **The problem it solves:** When applications use Lakebase (Databricks' Postgres-compatible database with copy-on-write branching), developers need to keep code branches and database branches in sync. Without this extension, you manually create database branches, refresh credentials, track schema diffs, and clean up branches — across the CLI, the Databricks console, and GitHub.
 
@@ -45,11 +45,11 @@ For example, set `spring.jpa.hibernate.ddl-auto=validate` (or `none`) so the ORM
 
 ### Install the Extension
 
-1. Download `lakebase-synced-scm-0.3.0.vsix` from the [latest release](https://github.com/kevin-hartman_data/lakebase-synced-scm/releases/latest)
+1. Download `lakebase-scm-extension-0.3.0.vsix` from the [latest release](https://github.com/kevin-hartman_data/lakebase-scm-extension/releases/latest)
 2. In VS Code: **Extensions** → `...` → **Install from VSIX** → select the file
 3. Reload the window
 
-![Lakebase Synced SCM installed](docs/images/extension-installed.png)
+![Lakebase SCM Extension installed](docs/images/extension-installed.png)
 
 ### First-Time Setup
 

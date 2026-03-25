@@ -1,13 +1,13 @@
 {
-  "name": "lakebase-synced-scm",
-  "displayName": "Lakebase Synced SCM",
+  "name": "lakebase-scm-extension",
+  "displayName": "Lakebase SCM Extension",
   "description": "Unified visibility into code and database branch changes for Databricks Lakebase",
   "version": "0.3.0",
   "publisher": "databricks-field-eng",
   "icon": "resources/icons/extension-icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/kevin-hartman_data/lakebase-synced-scm"
+    "url": "https://github.com/kevin-hartman_data/lakebase-scm-extension"
   },
   "engines": {
     "vscode": "^1.85.0"
@@ -27,7 +27,7 @@
       "activitybar": [
         {
           "id": "lakebase-synced-scm",
-          "title": "Lakebase",
+          "title": "Lakebase SCM Extension",
           "icon": "resources/icons/lakebase.svg"
         }
       ]
@@ -643,7 +643,7 @@
       ]
     },
     "configuration": {
-      "title": "Lakebase Sync",
+      "title": "Lakebase SCM Extension",
       "properties": {
         "lakebaseSync.databricksHost": {
           "type": "string",
