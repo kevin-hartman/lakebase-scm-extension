@@ -35,6 +35,9 @@ export class SchemaScmProvider {
   private prPollTimer: NodeJS.Timeout | undefined;
   private lastPrInfo: PullRequestInfo | undefined;
 
+  private _onDidRefresh = new vscode.EventEmitter<void>();
+  readonly onDidRefresh: vscode.Event<void> = this._onDidRefresh.event;
+
   private gitService: GitService;
   private flywayService: FlywayService;
   private schemaDiffService: SchemaDiffService;
@@ -236,6 +239,8 @@ export class SchemaScmProvider {
 
     // --- PR status ---
     this.refreshPrStatus();
+
+    this._onDidRefresh.fire();
   }
 
   /** Update the SCM status bar with the current branch name and dirty indicator */
@@ -365,6 +370,7 @@ export class SchemaScmProvider {
 
     this.scm.count = lakebaseItems.length + migrationItems.length + mergeItems.length;
     this.updateBranchStatusBar(currentBranch);
+    this._onDidRefresh.fire();
   }
 
   private async updateBranchStatusBar(branch?: string): Promise<void> {
@@ -605,6 +611,7 @@ export class SchemaScmProvider {
         this.lakebaseGroup!.resourceStates.length;
 
       this.updateBranchStatusBar();
+      this._onDidRefresh.fire();
     } catch { /* ignore */ }
   }
 
@@ -691,6 +698,36 @@ export class SchemaScmProvider {
     return this.scm;
   }
 
+  // --- Public accessors for sidebar tree providers ---
+
+  getStaged(): vscode.SourceControlResourceState[] {
+    return this.stagedGroup?.resourceStates ?? [];
+  }
+
+  getCode(): vscode.SourceControlResourceState[] {
+    return this.codeGroup?.resourceStates ?? [];
+  }
+
+  getLakebase(): vscode.SourceControlResourceState[] {
+    return this.lakebaseGroup?.resourceStates ?? [];
+  }
+
+  getMigrations(): vscode.SourceControlResourceState[] {
+    return this.migrationsGroup?.resourceStates ?? [];
+  }
+
+  getMerges(): vscode.SourceControlResourceState[] {
+    return this.mergesGroup?.resourceStates ?? [];
+  }
+
+  getPr(): vscode.SourceControlResourceState[] {
+    return this.prGroup?.resourceStates ?? [];
+  }
+
+  getSync(): vscode.SourceControlResourceState[] {
+    return this.syncGroup?.resourceStates ?? [];
+  }
+
   private async onMigrationChange(): Promise<void> {
     const currentFiles = this.flywayService.listMigrations().map(m => m.filename);
     const previousSet = new Set(this.lastMigrationFiles);
@@ -748,6 +785,7 @@ export class SchemaScmProvider {
 
   dispose(): void {
     if (this.codeRefreshTimer) { clearTimeout(this.codeRefreshTimer); }
+    this._onDidRefresh.dispose();
     this.baseContentProvider.dispose();
     this.migrationWatcher?.dispose();
     this.commitWatcher?.dispose();

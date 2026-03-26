@@ -38,7 +38,7 @@ export class SchemaDiffProvider {
     }
 
     if (!diff) {
-      vscode.window.showWarningMessage('No diff available. Run "Lakebase: Unified Branch Diff Summary" to generate one.');
+      vscode.window.showWarningMessage('No diff available. Run "Lakebase: Branch Diff Summary" to generate one.');
       return;
     }
 
@@ -81,14 +81,14 @@ export class SchemaDiffProvider {
     } else {
       this.panel = vscode.window.createWebviewPanel(
         'lakebaseBranchDiff',
-        `Unified Branch Diff Summary: ${branchName}`,
+        `Branch Diff Summary: ${branchName}`,
         vscode.ViewColumn.Active,
         { enableScripts: false }
       );
       this.panel.onDidDispose(() => { this.panel = undefined; });
     }
 
-    this.panel.title = `Unified Branch Diff Summary: ${branchName}`;
+    this.panel.title = `Branch Diff Summary: ${branchName}`;
     this.panel.webview.html = this.renderHtml(diff, fileChanges);
   }
 
@@ -288,7 +288,7 @@ export class SchemaDiffProvider {
 </head>
 <body>
   <div class="header">
-    <h1>Unified Branch Diff Summary</h1>
+    <h1>Branch Diff Summary</h1>
     <div class="subtitle">${esc(branchName)} vs production &mdash; ${timestamp}</div>
   </div>
 
@@ -594,7 +594,7 @@ export class SchemaDiffProvider {
 </html>`;
   }
 
-  /** Re-render the Unified Branch Diff Summary panel if it is currently open.
+  /** Re-render the Branch Diff Summary panel if it is currently open.
    *  Always fetches fresh code changes; uses cached schema if available. */
   async refresh(): Promise<void> {
     if (!this.panel) { return; }

@@ -38,7 +38,29 @@ describe('BranchTreeProvider', () => {
   }
 
   describe('getChildren (root)', () => {
-    it('lists git branches with Lakebase pairing', async () => {
+    it('returns a Project root item', async () => {
+      const items = await provider.getChildren();
+      assert.strictEqual(items.length, 1);
+      assert.strictEqual(items[0].itemType, 'project');
+    });
+
+    it('project item expands to connection + section headers', async () => {
+      lakebaseStub.checkAuth.resolves({ authenticated: true, currentHost: 'ws.databricks.com', expectedHost: 'ws.databricks.com', mismatch: false });
+
+      const root = await provider.getChildren();
+      const projectItem = root[0];
+      const children = await provider.getChildren(projectItem);
+
+      // Should have: connection status + Current Branch header + Other Branches header
+      assert.strictEqual(children.length, 3);
+      const currentHeader = children.find(c => c.label === 'Current Branch');
+      assert.ok(currentHeader, 'should have Current Branch section');
+      const otherHeader = children.find(c => c.label === 'Other Branches');
+      assert.ok(otherHeader, 'should have Other Branches section');
+    });
+
+    it('lists current branch under Current Branch section', async () => {
+      lakebaseStub.checkAuth.resolves({ authenticated: true, currentHost: 'ws.databricks.com', expectedHost: 'ws.databricks.com', mismatch: false });
       gitStub.listLocalBranches.resolves([
         { name: 'main', isCurrent: true, isRemote: false },
         { name: 'feature-x', isCurrent: false, isRemote: false },
@@ -50,21 +72,21 @@ describe('BranchTreeProvider', () => {
       ]);
       gitStub.listMigrationsOnBranch.resolves([]);
 
-      const items = await provider.getChildren();
-      assert.strictEqual(items.length, 2);
+      const root = await provider.getChildren();
+      const projectChildren = await provider.getChildren(root[0]);
+      const currentHeader = projectChildren.find(c => c.label === 'Current Branch')!;
+      const currentBranches = await provider.getChildren(currentHeader);
 
-      const mainItem = items.find(i => i.label?.toString().includes('main'));
-      assert.ok(mainItem);
-      assert.strictEqual(mainItem!.itemType, 'currentBranch');
-
-      const featureItem = items.find(i => i.label?.toString().includes('feature-x'));
-      assert.ok(featureItem);
-      assert.strictEqual(featureItem!.itemType, 'branch');
-      assert.ok(featureItem!.lakebaseBranch);
+      assert.strictEqual(currentBranches.length, 1);
+      assert.strictEqual(currentBranches[0].itemType, 'currentBranch');
+      assert.strictEqual(currentBranches[0].label, 'main');
     });
 
-    it('shows db-only branches not matched to git', async () => {
-      gitStub.listLocalBranches.resolves([{ name: 'main', isCurrent: true, isRemote: false }]);
+    it('lists other branches and db-only under Other Branches section', async () => {
+      lakebaseStub.checkAuth.resolves({ authenticated: true, currentHost: 'ws.databricks.com', expectedHost: 'ws.databricks.com', mismatch: false });
+      gitStub.listLocalBranches.resolves([
+        { name: 'main', isCurrent: true, isRemote: false },
+      ]);
       gitStub.getCurrentBranch.resolves('main');
       lakebaseStub.listBranches.resolves([
         makeBranch('main', true),
@@ -72,21 +94,30 @@ describe('BranchTreeProvider', () => {
       ]);
       gitStub.listMigrationsOnBranch.resolves([]);
 
-      const items = await provider.getChildren();
-      const ciItem = items.find(i => i.label?.toString().includes('ci-pr-42'));
+      const root = await provider.getChildren();
+      const projectChildren = await provider.getChildren(root[0]);
+      const otherHeader = projectChildren.find(c => c.label === 'Other Branches')!;
+      const otherBranches = await provider.getChildren(otherHeader);
+
+      const ciItem = otherBranches.find(i => i.label?.toString().includes('ci-pr-42'));
       assert.ok(ciItem, 'db-only branch should appear');
       assert.ok(ciItem!.label?.toString().includes('db only'));
     });
 
     it('handles Lakebase API failure gracefully', async () => {
+      lakebaseStub.checkAuth.resolves({ authenticated: true, currentHost: 'ws.databricks.com', expectedHost: 'ws.databricks.com', mismatch: false });
       gitStub.listLocalBranches.resolves([{ name: 'main', isCurrent: true, isRemote: false }]);
       gitStub.getCurrentBranch.resolves('main');
       lakebaseStub.listBranches.rejects(new Error('CLI error'));
       gitStub.listMigrationsOnBranch.resolves([]);
 
-      const items = await provider.getChildren();
-      // Should still show git branches, just without Lakebase pairing
-      assert.ok(items.length >= 1);
+      const root = await provider.getChildren();
+      const projectChildren = await provider.getChildren(root[0]);
+      const currentHeader = projectChildren.find(c => c.label === 'Current Branch')!;
+      const currentBranches = await provider.getChildren(currentHeader);
+
+      // Should still show git branch, just without Lakebase pairing
+      assert.ok(currentBranches.length >= 1);
     });
   });
 

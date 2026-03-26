@@ -2,13 +2,20 @@ import * as vscode from 'vscode';
 import { GitService, GitBranchInfo } from '../services/gitService';
 import { LakebaseService, LakebaseBranch } from '../services/lakebaseService';
 import { FlywayService } from '../services/flywayService';
+import { SchemaDiffService } from '../services/schemaDiffService';
 import { getConfig } from '../utils/config';
 
+type ItemType = 'project' | 'branch' | 'currentBranch' | 'detail' | 'sectionHeader'
+  | 'migrationList' | 'tableList' | 'fileList';
+
 export class BranchItem extends vscode.TreeItem {
+  /** Branch name carried from parent so children can look up data */
+  public branchName?: string;
+
   constructor(
     public readonly gitBranch: GitBranchInfo | undefined,
     public readonly lakebaseBranch: LakebaseBranch | undefined,
-    public readonly itemType: 'branch' | 'currentBranch' | 'detail' | 'migration',
+    public readonly itemType: ItemType,
     label: string,
     collapsibleState: vscode.TreeItemCollapsibleState = vscode.TreeItemCollapsibleState.None
   ) {
@@ -24,17 +31,20 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
   private gitService: GitService;
   private lakebaseService: LakebaseService;
   private flywayService: FlywayService;
+  private schemaDiffService: SchemaDiffService;
   private cachedData: BranchItem[] = [];
   private _suppressRefresh = false;
 
   constructor(
     gitService: GitService,
     lakebaseService: LakebaseService,
-    flywayService: FlywayService
+    flywayService: FlywayService,
+    schemaDiffService?: SchemaDiffService
   ) {
     this.gitService = gitService;
     this.lakebaseService = lakebaseService;
     this.flywayService = flywayService;
+    this.schemaDiffService = schemaDiffService!;
 
     this.gitService.onBranchChanged(() => this.refresh());
   }
@@ -59,10 +69,130 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
     if (!element) {
       return this.getRootItems();
     }
-    return await this.getBranchDetails(element);
+    if (element.itemType === 'project') {
+      return this.getProjectDetails();
+    }
+    if (element.itemType === 'sectionHeader') {
+      return this.getSectionChildren(element.label as string);
+    }
+    if (element.itemType === 'branch' || element.itemType === 'currentBranch') {
+      return await this.getBranchDetails(element);
+    }
+    if (element.itemType === 'migrationList') {
+      return this.getMigrationFiles(element.branchName!);
+    }
+    if (element.itemType === 'tableList') {
+      return this.getTableList();
+    }
+    if (element.itemType === 'fileList') {
+      return this.getBranchFiles(element.branchName!);
+    }
+    return [];
   }
 
   private async getRootItems(): Promise<BranchItem[]> {
+    const items: BranchItem[] = [];
+
+    // Derive repo name from git remote for the root label
+    let repoName = 'my-project';
+    let repoUrl = '';
+    try {
+      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (root) {
+        const cp = require('child_process');
+        const remoteRaw = cp.execSync('git remote get-url origin', { cwd: root, timeout: 5000 }).toString().trim();
+        repoUrl = remoteRaw
+          .replace(/\.git$/, '')
+          .replace(/^git@github\.com:/, 'https://github.com/')
+          .replace(/^ssh:\/\/git@github\.com\//, 'https://github.com/');
+        const match = repoUrl.match(/\/([^/]+)$/);
+        repoName = match ? match[1] : repoName;
+      }
+    } catch { /* no remote */ }
+
+    const projectItem = new BranchItem(
+      undefined, undefined, 'project',
+      repoName,
+      vscode.TreeItemCollapsibleState.Expanded
+    );
+    projectItem.iconPath = new vscode.ThemeIcon('repo', new vscode.ThemeColor('charts.blue'));
+    projectItem.description = 'Git + Lakebase';
+    items.push(projectItem);
+
+    return items;
+  }
+
+  private async getProjectDetails(): Promise<BranchItem[]> {
+    const items: BranchItem[] = [];
+
+    // Check Lakebase auth status (used to color the database icon)
+    let isConnected = false;
+    try {
+      const authStatus = await this.lakebaseService.checkAuth();
+      isConnected = authStatus.authenticated;
+    } catch { /* ignore */ }
+
+    // GitHub repo — green icon if remote is available, clickable to open
+    try {
+      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (root) {
+        const cp = require('child_process');
+        const remoteRaw = cp.execSync('git remote get-url origin', { cwd: root, timeout: 5000 }).toString().trim();
+        const repoUrl = remoteRaw
+          .replace(/\.git$/, '')
+          .replace(/^git@github\.com:/, 'https://github.com/')
+          .replace(/^ssh:\/\/git@github\.com\//, 'https://github.com/');
+        const match = repoUrl.match(/github\.com\/(.+)/);
+        const fullRepoName = match ? match[1] : repoUrl;
+        const ghItem = new BranchItem(undefined, undefined, 'detail', fullRepoName);
+        ghItem.iconPath = new vscode.ThemeIcon('github');
+        ghItem.tooltip = `${repoUrl}\nClick to open on GitHub`;
+        ghItem.command = { command: 'vscode.open', title: 'Open on GitHub', arguments: [vscode.Uri.parse(repoUrl)] };
+        items.push(ghItem);
+      }
+    } catch { /* no remote */ }
+
+    // Lakebase project + workspace — green if connected, red if not
+    const config = getConfig();
+    if (config.lakebaseProjectId) {
+      let displayName: string | undefined;
+      if (isConnected) {
+        try { displayName = await this.lakebaseService.getProjectDisplayName(); } catch { /* ignore */ }
+      }
+      const label = displayName || config.lakebaseProjectId;
+      const lbItem = new BranchItem(undefined, undefined, 'detail', label);
+      lbItem.iconPath = new vscode.ThemeIcon('database');
+      const host = config.databricksHost ? config.databricksHost.replace(/^https?:\/\//, '') : '';
+      lbItem.description = host;
+      lbItem.tooltip = isConnected
+        ? `Lakebase Project: ${label}${displayName ? `\nID: ${config.lakebaseProjectId}` : ''}${host ? `\nWorkspace: ${host}` : ''}\nConnected`
+        : `Lakebase Project: ${config.lakebaseProjectId}${host ? `\nWorkspace: ${host}` : ''}\nNot connected — click to login`;
+      lbItem.command = isConnected && config.databricksHost
+        ? { command: 'vscode.open', title: 'Open Workspace', arguments: [vscode.Uri.parse(config.databricksHost)] }
+        : { command: 'lakebaseSync.connectWorkspace', title: 'Connect' };
+      items.push(lbItem);
+    }
+
+    // Current Branch section
+    const currentHeader = new BranchItem(undefined, undefined, 'sectionHeader',
+      'Current Branch',
+      vscode.TreeItemCollapsibleState.Expanded
+    );
+    currentHeader.iconPath = new vscode.ThemeIcon('git-branch');
+    items.push(currentHeader);
+
+    // Other Branches section
+    const otherHeader = new BranchItem(undefined, undefined, 'sectionHeader',
+      'Other Branches',
+      vscode.TreeItemCollapsibleState.Collapsed
+    );
+    otherHeader.iconPath = new vscode.ThemeIcon('git-branch');
+    items.push(otherHeader);
+
+    return items;
+  }
+
+  private async getSectionChildren(sectionLabel: string): Promise<BranchItem[]> {
     const items: BranchItem[] = [];
 
     try {
@@ -77,74 +207,88 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
 
       const currentGitBranch = await this.gitService.getCurrentBranch();
 
-      for (const gb of gitBranches) {
-        const isMain = gb.name === 'main' || gb.name === 'master';
-        const sanitized = this.lakebaseService.sanitizeBranchName(gb.name);
-
-        const lb = isMain
-          ? lakebaseBranches.find(b => b.isDefault)
-          : lakebaseBranches.find(b =>
-              b.branchId === sanitized ||
-              b.uid === sanitized ||
-              b.name.endsWith(`/branches/${sanitized}`)
-            );
-
-        const currentMarker = gb.name === currentGitBranch ? ' (current)' : '';
-        const label = `${gb.name}${currentMarker}`;
-
-        const isCurrent = gb.name === currentGitBranch;
-        const item = new BranchItem(
-          gb,
-          lb,
-          isCurrent ? 'currentBranch' : 'branch',
-          label,
-          vscode.TreeItemCollapsibleState.Collapsed
-        );
-
-        // Use ThemeIcon for proper icon rendering
-        item.iconPath = this.getStateThemeIcon(lb);
-
-        if (isCurrent) {
-          item.description = lb?.state || 'no db branch';
+      if (sectionLabel === 'Current Branch') {
+        const gb = gitBranches.find(b => b.name === currentGitBranch);
+        if (gb) {
+          const item = this.makeBranchItem(gb, lakebaseBranches, currentGitBranch, true);
+          items.push(item);
+        }
+      } else {
+        for (const gb of gitBranches) {
+          if (gb.name === currentGitBranch) { continue; }
+          const item = this.makeBranchItem(gb, lakebaseBranches, currentGitBranch, false);
+          items.push(item);
         }
 
-        items.push(item);
-      }
+        // Lakebase-only branches (ci-pr-*, orphaned)
+        const matchedNames = new Set(
+          gitBranches.map(gb => {
+            const isMain = gb.name === 'main' || gb.name === 'master';
+            return isMain
+              ? lakebaseBranches.find(b => b.isDefault)?.name
+              : lakebaseBranches.find(b =>
+                  b.branchId === this.lakebaseService.sanitizeBranchName(gb.name)
+                )?.name;
+          }).filter(Boolean)
+        );
 
-      // Show Lakebase-only branches (ci-pr-*, orphaned branches)
-      const matchedNames = new Set(
-        items
-          .filter(i => i.lakebaseBranch)
-          .map(i => i.lakebaseBranch!.name)
-      );
-
-      for (const lb of lakebaseBranches) {
-        if (!matchedNames.has(lb.name) && !lb.isDefault) {
-          const item = new BranchItem(
-            undefined,
-            lb,
-            'branch',
-            `${lb.branchId} (db only)`,
-            vscode.TreeItemCollapsibleState.Collapsed
-          );
-          item.iconPath = new vscode.ThemeIcon('cloud', new vscode.ThemeColor('charts.blue'));
-          item.description = lb.state;
-          items.push(item);
+        for (const lb of lakebaseBranches) {
+          if (!matchedNames.has(lb.name) && !lb.isDefault) {
+            const item = new BranchItem(
+              undefined, lb, 'branch',
+              `${lb.branchId} (db only)`,
+              vscode.TreeItemCollapsibleState.Collapsed
+            );
+            item.iconPath = new vscode.ThemeIcon('cloud', new vscode.ThemeColor('charts.blue'));
+            item.description = lb.state;
+            items.push(item);
+          }
         }
       }
     } catch (err: any) {
-      const errorItem = new BranchItem(
-        undefined,
-        undefined,
-        'detail',
-        err.message
-      );
+      const errorItem = new BranchItem(undefined, undefined, 'detail', err.message);
       errorItem.iconPath = new vscode.ThemeIcon('error', new vscode.ThemeColor('errorForeground'));
       items.push(errorItem);
     }
 
-    this.cachedData = items;
     return items;
+  }
+
+  private makeBranchItem(
+    gb: GitBranchInfo,
+    lakebaseBranches: LakebaseBranch[],
+    currentGitBranch: string | undefined,
+    isCurrent: boolean
+  ): BranchItem {
+    const isMain = gb.name === 'main' || gb.name === 'master';
+    const sanitized = this.lakebaseService.sanitizeBranchName(gb.name);
+
+    const lb = isMain
+      ? lakebaseBranches.find(b => b.isDefault)
+      : lakebaseBranches.find(b =>
+          b.branchId === sanitized ||
+          b.uid === sanitized ||
+          b.name.endsWith(`/branches/${sanitized}`)
+        );
+
+    const item = new BranchItem(
+      gb, lb,
+      isCurrent ? 'currentBranch' : 'branch',
+      gb.name,
+      vscode.TreeItemCollapsibleState.Collapsed
+    );
+
+    item.iconPath = this.getStateThemeIcon(lb);
+
+    if (isCurrent) {
+      const lbState = lb?.state || 'no db branch';
+      const lbName = lb ? (lb.isDefault ? 'default' : lb.branchId) : '';
+      item.description = lbName ? `→ ${lbName} (${lbState})` : lbState;
+    } else {
+      item.description = lb?.state || '';
+    }
+
+    return item;
   }
 
   private async getBranchDetails(parent: BranchItem): Promise<BranchItem[]> {
@@ -152,26 +296,37 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
     const gb = parent.gitBranch;
     const lb = parent.lakebaseBranch;
 
+    // Git tracking — collapsible to show branch files
     if (gb) {
-      const tracking = gb.tracking ? `-> ${gb.tracking}` : '(no remote)';
-      const gitItem = new BranchItem(undefined, undefined, 'detail', `${gb.name} ${tracking}`);
+      const tracking = gb.tracking ? `→ ${gb.tracking}` : '(no remote)';
+      const gitItem = new BranchItem(undefined, undefined, 'fileList',
+        `${gb.name} ${tracking}`,
+        vscode.TreeItemCollapsibleState.Collapsed
+      );
       gitItem.iconPath = new vscode.ThemeIcon('git-branch');
+      gitItem.branchName = gb.name;
+      gitItem.tooltip = 'Click to expand and see changed files on this branch';
       details.push(gitItem);
 
       if (gb.ahead || gb.behind) {
         const parts = [];
-        if (gb.ahead) {parts.push(`${gb.ahead} ahead`);}
-        if (gb.behind) {parts.push(`${gb.behind} behind`);}
+        if (gb.ahead) { parts.push(`${gb.ahead} ahead`); }
+        if (gb.behind) { parts.push(`${gb.behind} behind`); }
         const syncItem = new BranchItem(undefined, undefined, 'detail', parts.join(', '));
         syncItem.iconPath = new vscode.ThemeIcon('git-compare');
         details.push(syncItem);
       }
     }
 
+    // Database — collapsible to show tables
     if (lb) {
       const dbLabel = lb.isDefault ? `default (${lb.state})` : `${lb.branchId} (${lb.state})`;
-      const dbItem = new BranchItem(undefined, undefined, 'detail', dbLabel);
+      const dbItem = new BranchItem(undefined, undefined, 'tableList',
+        dbLabel,
+        vscode.TreeItemCollapsibleState.Collapsed
+      );
       dbItem.iconPath = new vscode.ThemeIcon('database');
+      dbItem.tooltip = 'Click to expand and see tables in this Lakebase branch';
       details.push(dbItem);
 
       if (lb.endpointHost) {
@@ -185,7 +340,7 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
       details.push(noDbItem);
     }
 
-    // Show migration info for this specific branch (not the current working tree)
+    // Migrations — collapsible to show individual files
     if (gb) {
       const config = getConfig();
       const migFiles = await this.gitService.listMigrationsOnBranch(gb.name, config.migrationPath);
@@ -194,15 +349,235 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
         const versionMatch = lastFile.match(/^V(\d+(?:\.\d+)*)/i);
         const version = versionMatch ? versionMatch[1] : '?';
         const migItem = new BranchItem(
-          undefined, undefined, 'migration',
-          `V${version} (${migFiles.length} file${migFiles.length !== 1 ? 's' : ''})`
+          undefined, undefined, 'migrationList',
+          `schema-migration (${migFiles.length} file${migFiles.length !== 1 ? 's' : ''}, V${version})`,
+          vscode.TreeItemCollapsibleState.Collapsed
         );
         migItem.iconPath = new vscode.ThemeIcon('versions');
+        migItem.branchName = gb.name;
+        migItem.tooltip = 'Click to expand and see migration files';
         details.push(migItem);
       }
     }
 
     return details;
+  }
+
+  // --- Expandable detail children ---
+
+  private async getMigrationFiles(branchName: string): Promise<BranchItem[]> {
+    const config = getConfig();
+    const migFiles = await this.gitService.listMigrationsOnBranch(branchName, config.migrationPath);
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+    return migFiles.map(filename => {
+      const match = filename.match(/^V(\d+(?:\.\d+)*)__(.+)\.sql$/i);
+      const label = match ? `V${match[1]}: ${match[2].replace(/_/g, ' ')}` : filename;
+      const item = new BranchItem(undefined, undefined, 'detail', label);
+      item.iconPath = new vscode.ThemeIcon('file-code');
+      item.tooltip = filename;
+      if (root) {
+        const fileUri = vscode.Uri.file(`${root}/${config.migrationPath}/${filename}`);
+        item.command = { command: 'vscode.open', title: 'Open Migration', arguments: [fileUri] };
+      }
+      return item;
+    });
+  }
+
+  private makeTableCommand(tableName: string, changeType: 'new' | 'modified' | 'removed' | 'unchanged'): vscode.Command {
+    const branchUri = vscode.Uri.parse(`lakebase-schema-content://branch/${tableName}`);
+    const prodUri = vscode.Uri.parse(`lakebase-schema-content://production/${tableName}`);
+    if (changeType === 'modified') {
+      return { command: 'vscode.diff', title: 'Schema Diff', arguments: [prodUri, branchUri, `${tableName} (production ↔ branch)`] };
+    }
+    if (changeType === 'removed') {
+      return { command: 'vscode.open', title: 'View Removed Table', arguments: [prodUri] };
+    }
+    // new or unchanged — open branch DDL
+    return { command: 'vscode.open', title: 'View Table', arguments: [branchUri] };
+  }
+
+  private async getTableList(): Promise<BranchItem[]> {
+    // Try cached schema diff first (has branchTables + diff status)
+    if (this.schemaDiffService) {
+      const cached = this.schemaDiffService.getCachedDiff();
+      if (cached && cached.branchTables && cached.branchTables.length > 0) {
+        const createdSet = new Set(cached.created.map(t => t.name));
+        const modifiedSet = new Set(cached.modified.map(t => t.name));
+
+        // Branch tables (created + unchanged + modified)
+        const items: BranchItem[] = cached.branchTables.map(table => {
+          const colCount = table.columns?.length || 0;
+          const item = new BranchItem(undefined, undefined, 'detail', table.name);
+          const isNew = createdSet.has(table.name);
+          const isMod = modifiedSet.has(table.name);
+          const isChanged = isNew || isMod;
+
+          let status: string;
+          let icon: string;
+          let color: string;
+          if (isNew) {
+            status = 'new';
+            icon = 'diff-added';
+            color = 'charts.green';
+          } else if (isMod) {
+            status = 'modified';
+            icon = 'diff-modified';
+            color = 'charts.yellow';
+          } else {
+            status = '';
+            icon = 'symbol-class';
+            color = 'foreground';
+          }
+
+          item.iconPath = new vscode.ThemeIcon(icon, new vscode.ThemeColor(color));
+          item.description = [status, colCount > 0 ? `${colCount} columns` : ''].filter(Boolean).join(' · ');
+          const colList = table.columns?.map(c => `  ${c.name}: ${c.dataType}`).join('\n') || '';
+          item.tooltip = new vscode.MarkdownString(
+            `**${table.name}**${status ? ` (${status})` : ''}\n\n` +
+            (colList ? `\`\`\`\n${table.columns!.map(c => `${c.name}: ${c.dataType}`).join('\n')}\n\`\`\`` : 'No column data')
+          );
+          item.command = this.makeTableCommand(table.name, isNew ? 'new' : isMod ? 'modified' : 'unchanged');
+          return item;
+        });
+
+        // Removed tables (exist on production but not on branch)
+        for (const table of cached.removed) {
+          const item = new BranchItem(undefined, undefined, 'detail', table.name);
+          item.iconPath = new vscode.ThemeIcon('diff-removed', new vscode.ThemeColor('charts.red'));
+          item.description = 'removed';
+          const colList = table.columns?.map(c => `${c.name}: ${c.dataType}`).join('\n') || '';
+          item.tooltip = new vscode.MarkdownString(
+            `**${table.name}** (removed)\n\n` +
+            (colList ? `\`\`\`\n${colList}\n\`\`\`` : '')
+          );
+          item.command = this.makeTableCommand(table.name, 'removed');
+          items.push(item);
+        }
+
+        return items;
+      }
+    }
+
+    // Fallback: parse migration files, compare against main to determine diff status
+    const allMigrations = this.flywayService.listMigrations();
+    if (allMigrations.length > 0) {
+      // Find which migrations are new on this branch (not on main)
+      const config = getConfig();
+      let mainMigrationSet = new Set<string>();
+      try {
+        const mainFiles = await this.gitService.listMigrationsOnBranch('main', config.migrationPath);
+        mainMigrationSet = new Set(mainFiles);
+      } catch { /* main may not exist */ }
+
+      const newMigrations = allMigrations.filter(m => !mainMigrationSet.has(m.filename));
+
+      // Parse all migrations for the full table inventory with columns
+      const allChanges = this.flywayService.parseMigrationSchemaChanges(allMigrations);
+      const allTables = new Map<string, { type: string; columns: Array<{ name: string; dataType: string }> }>();
+      for (const c of allChanges) {
+        const existing = allTables.get(c.tableName);
+        const merged = existing ? [...existing.columns, ...c.columns] : [...c.columns];
+        allTables.set(c.tableName, { type: c.type, columns: merged });
+      }
+
+      // Parse only new migrations to identify what changed on this branch
+      const newChanges = this.flywayService.parseMigrationSchemaChanges(newMigrations);
+      const changedTables = new Map<string, string>();
+      for (const c of newChanges) { changedTables.set(c.tableName, c.type); }
+
+      if (allTables.size > 0) {
+        return Array.from(allTables.entries()).map(([name, info]) => {
+          const item = new BranchItem(undefined, undefined, 'detail', name);
+          const changeType = changedTables.get(name);
+          const isChanged = !!changeType;
+
+          if (changeType) {
+            const icons: Record<string, string> = { created: 'diff-added', modified: 'diff-modified', removed: 'diff-removed' };
+            const colors: Record<string, string> = { created: 'charts.green', modified: 'charts.yellow', removed: 'charts.red' };
+            item.iconPath = new vscode.ThemeIcon(
+              icons[changeType] || 'diff-modified',
+              new vscode.ThemeColor(colors[changeType] || 'charts.yellow')
+            );
+            item.description = [
+              changeType === 'created' ? 'new' : changeType,
+              info.columns.length > 0 ? `${info.columns.length} columns` : ''
+            ].filter(Boolean).join(' · ');
+          } else {
+            item.iconPath = new vscode.ThemeIcon('symbol-class', new vscode.ThemeColor('foreground'));
+            item.description = info.columns.length > 0 ? `${info.columns.length} columns` : '';
+          }
+
+          const colList = info.columns.map(c => `${c.name}: ${c.dataType}`).join('\n');
+          item.tooltip = new vscode.MarkdownString(
+            `**${name}**${changeType ? ` (${changeType === 'created' ? 'new' : changeType})` : ''}\n\n` +
+            (colList ? `\`\`\`\n${colList}\n\`\`\`` : 'No column data')
+          );
+          const cmdType = changeType === 'created' ? 'new' : changeType === 'modified' ? 'modified' : changeType === 'removed' ? 'removed' : 'unchanged';
+          item.command = this.makeTableCommand(name, cmdType as any);
+          return item;
+        });
+      }
+    }
+
+    const emptyItem = new BranchItem(undefined, undefined, 'detail', 'No table data available');
+    emptyItem.iconPath = new vscode.ThemeIcon('info');
+    emptyItem.tooltip = 'Run Review Branch or Branch Diff to populate table data';
+    return [emptyItem];
+  }
+
+  private async getBranchFiles(branchName: string): Promise<BranchItem[]> {
+    const isMain = branchName === 'main' || branchName === 'master';
+    if (isMain) {
+      const item = new BranchItem(undefined, undefined, 'detail', 'Default branch — no diff');
+      item.iconPath = new vscode.ThemeIcon('info');
+      return [item];
+    }
+
+    try {
+      const changes = await this.gitService.getChangedFiles();
+      if (changes.length === 0) {
+        const item = new BranchItem(undefined, undefined, 'detail', 'No changes vs main');
+        item.iconPath = new vscode.ThemeIcon('check');
+        return [item];
+      }
+
+      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const statusIcons: Record<string, string> = {
+        added: 'diff-added', modified: 'diff-modified', deleted: 'diff-removed', renamed: 'diff-renamed'
+      };
+      const statusColors: Record<string, string> = {
+        added: 'charts.green', modified: 'charts.yellow', deleted: 'charts.red', renamed: 'charts.blue'
+      };
+
+      return changes.map(file => {
+        const fileName = file.path.split('/').pop() || file.path;
+        const item = new BranchItem(undefined, undefined, 'detail', fileName);
+        item.iconPath = new vscode.ThemeIcon(
+          statusIcons[file.status] || 'file',
+          new vscode.ThemeColor(statusColors[file.status] || 'foreground')
+        );
+        item.description = file.path.includes('/') ? file.path.substring(0, file.path.lastIndexOf('/')) : '';
+        item.tooltip = `${file.status}: ${file.path}`;
+
+        if (root && file.status !== 'deleted') {
+          const fileUri = vscode.Uri.file(`${root}/${file.path}`);
+          if (file.status === 'added') {
+            item.command = { command: 'vscode.open', title: 'Open File', arguments: [fileUri] };
+          } else {
+            const diffPath = file.status === 'renamed' && file.oldPath ? file.oldPath : file.path;
+            const baseUri = vscode.Uri.parse(`lakebase-git-base://merge-base/${diffPath}`);
+            item.command = { command: 'vscode.diff', title: 'Show Diff', arguments: [baseUri, fileUri, `${file.path} (main ↔ branch)`] };
+          }
+        }
+
+        return item;
+      });
+    } catch {
+      const item = new BranchItem(undefined, undefined, 'detail', 'Unable to load files');
+      item.iconPath = new vscode.ThemeIcon('warning');
+      return [item];
+    }
   }
 
   private getStateThemeIcon(lb: LakebaseBranch | undefined): vscode.ThemeIcon {

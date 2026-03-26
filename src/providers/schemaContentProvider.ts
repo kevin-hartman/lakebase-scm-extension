@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { LakebaseService } from '../services/lakebaseService';
 import { SchemaDiffService } from '../services/schemaDiffService';
+import { FlywayService } from '../services/flywayService';
 
 /**
  * Content provider that returns CREATE TABLE DDL for a table on a specific branch.
@@ -12,6 +13,7 @@ import { SchemaDiffService } from '../services/schemaDiffService';
 export class SchemaContentProvider implements vscode.TextDocumentContentProvider {
   constructor(
     private schemaDiffService: SchemaDiffService,
+    private flywayService?: FlywayService,
   ) {}
 
   async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
@@ -20,40 +22,54 @@ export class SchemaContentProvider implements vscode.TextDocumentContentProvider
 
     // Get the cached diff — it has branchTables and production info
     const diff = this.schemaDiffService.getCachedDiff();
-    if (!diff) { return `-- No schema data available for ${tableName}\n`; }
 
-    if (side === 'branch') {
-      // Look in branchTables for the full column list
-      const table = diff.branchTables.find(t => t.name === tableName);
-      if (!table) {
+    if (diff) {
+      if (side === 'branch') {
+        // Look in branchTables for the full column list
+        const table = diff.branchTables.find(t => t.name === tableName);
+        if (table) { return this.renderCreateTable(table.name, table.columns || []); }
+
         // Check if it's a created table (in diff.created)
         const created = diff.created.find(t => t.name === tableName);
         if (created) { return this.renderCreateTable(created.name, created.columns || []); }
-        return `-- Table "${tableName}" not found on branch\n`;
-      }
-      return this.renderCreateTable(table.name, table.columns || []);
-    }
-
-    if (side === 'production') {
-      // For production, check if the table is in modified (has prodColumns) or is unchanged (same as branch)
-      const modified = diff.modified.find(t => t.name === tableName);
-      if (modified && modified.prodColumns) {
-        return this.renderCreateTable(modified.name, modified.prodColumns);
       }
 
-      // If the table is "created" on the branch, it doesn't exist on production
-      const created = diff.created.find(t => t.name === tableName);
-      if (created) { return ''; } // empty — new table
+      if (side === 'production') {
+        // For production, check if the table is in modified (has prodColumns)
+        const modified = diff.modified.find(t => t.name === tableName);
+        if (modified && modified.prodColumns) {
+          return this.renderCreateTable(modified.name, modified.prodColumns);
+        }
 
-      // If the table is "removed", it exists only on production — use branchTables won't have it
-      // For unchanged tables, production has the same columns as branch
-      const branchTable = diff.branchTables.find(t => t.name === tableName);
-      if (branchTable) { return this.renderCreateTable(branchTable.name, branchTable.columns || []); }
+        // If the table is "created" on the branch, it doesn't exist on production
+        const created = diff.created.find(t => t.name === tableName);
+        if (created) { return ''; } // empty — new table
 
-      return `-- Table "${tableName}" not found on production\n`;
+        // For unchanged or removed tables, production = branch
+        const branchTable = diff.branchTables.find(t => t.name === tableName);
+        if (branchTable) { return this.renderCreateTable(branchTable.name, branchTable.columns || []); }
+      }
     }
 
-    return '';
+    // Fallback: parse migration files for table DDL
+    if (this.flywayService) {
+      const migrations = this.flywayService.listMigrations();
+      if (migrations.length > 0) {
+        const changes = this.flywayService.parseMigrationSchemaChanges(migrations);
+        // Accumulate columns across all migrations for this table
+        const columns: Array<{ name: string; dataType: string }> = [];
+        for (const c of changes) {
+          if (c.tableName === tableName) {
+            columns.push(...c.columns);
+          }
+        }
+        if (columns.length > 0) {
+          return this.renderCreateTable(tableName, columns);
+        }
+      }
+    }
+
+    return `-- No schema data available for ${tableName}\n-- Run "Review Branch" or "Branch Diff" to populate via pg_dump\n`;
   }
 
   private renderCreateTable(name: string, columns: Array<{ name: string; dataType: string }>): string {

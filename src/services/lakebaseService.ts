@@ -225,6 +225,23 @@ export class LakebaseService {
     return 'databricks auth login';
   }
 
+  async getProjectDisplayName(): Promise<string | undefined> {
+    try {
+      const raw = await this.dbcli('postgres list-projects -o json');
+      const parsed = JSON.parse(raw);
+      const projects = Array.isArray(parsed) ? parsed : parsed.projects || [];
+      const config = getConfig();
+      const proj = projects.find((p: any) =>
+        p.uid === config.lakebaseProjectId ||
+        (p.name && p.name.endsWith(`/${config.lakebaseProjectId}`))
+      );
+      if (proj) {
+        return proj.status?.display_name || proj.display_name || undefined;
+      }
+    } catch { /* ignore */ }
+    return undefined;
+  }
+
   async listBranches(): Promise<LakebaseBranch[]> {
     const projPath = this.projectPath();
     const raw = await this.dbcli(`postgres list-branches "${projPath}" -o json`);

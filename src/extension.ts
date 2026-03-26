@@ -8,6 +8,10 @@ import { BranchTreeProvider, BranchItem } from './providers/branchTreeProvider';
 import { SchemaDiffProvider } from './providers/schemaDiffProvider';
 import { SchemaScmProvider } from './providers/schemaScmProvider';
 import { SchemaContentProvider } from './providers/schemaContentProvider';
+import { ChangesTreeProvider } from './providers/changesTreeProvider';
+import { MigrationsTreeProvider } from './providers/migrationsTree';
+import { PullRequestTreeProvider } from './providers/pullRequestTree';
+import { MergesTreeProvider } from './providers/mergesTree';
 import { getConfig, getWorkspaceRoot, updateEnvConnection } from './utils/config';
 
 let gitService: GitService;
@@ -91,7 +95,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Initialize providers
   statusBarProvider = new StatusBarProvider(gitService, lakebaseService, flywayService);
-  branchTreeProvider = new BranchTreeProvider(gitService, lakebaseService, flywayService);
+  branchTreeProvider = new BranchTreeProvider(gitService, lakebaseService, flywayService, schemaDiffService);
 
   // Initialize SCM provider — compares actual Lakebase branch schemas
   schemaScmProvider = new SchemaScmProvider(gitService, flywayService, schemaDiffService, lakebaseService);
@@ -99,7 +103,7 @@ export async function activate(context: vscode.ExtensionContext) {
   // Register schema DDL content provider for multi-diff editor
   const schemaContentProvider = vscode.workspace.registerTextDocumentContentProvider(
     'lakebase-schema-content',
-    new SchemaContentProvider(schemaDiffService)
+    new SchemaContentProvider(schemaDiffService, flywayService)
   );
 
   // Register tree view
@@ -107,6 +111,37 @@ export async function activate(context: vscode.ExtensionContext) {
     treeDataProvider: branchTreeProvider,
     showCollapseAll: true,
   });
+
+
+  // Register sidebar tree views (Phases A-G)
+  const changesTreeProvider = new ChangesTreeProvider(schemaScmProvider);
+  const migrationsTreeProvider = new MigrationsTreeProvider(schemaScmProvider);
+  const pullRequestTreeProvider = new PullRequestTreeProvider(schemaScmProvider);
+  const mergesTreeProvider = new MergesTreeProvider(schemaScmProvider);
+
+  const changesView = vscode.window.createTreeView('lakebaseChanges', {
+    treeDataProvider: changesTreeProvider,
+    showCollapseAll: true,
+  });
+  const migrationsView = vscode.window.createTreeView('lakebaseMigrations', {
+    treeDataProvider: migrationsTreeProvider,
+  });
+  const prView = vscode.window.createTreeView('lakebasePR', {
+    treeDataProvider: pullRequestTreeProvider,
+  });
+  const mergesView = vscode.window.createTreeView('lakebaseMerges', {
+    treeDataProvider: mergesTreeProvider,
+  });
+
+  // Badge count on the activity bar icon (uses the Changes view)
+  const updateBadge = () => {
+    const count = changesTreeProvider.getChangeCount();
+    changesView.badge = count > 0
+      ? { value: count, tooltip: `Lakebase SCM Extension — ${count} pending changes` }
+      : undefined;
+  };
+  schemaScmProvider.onDidRefresh(updateBadge);
+  updateBadge();
 
   // Watch migration files for status bar + tree updates
   // (SCM provider has its own migration watcher — don't duplicate)
@@ -203,8 +238,19 @@ export async function activate(context: vscode.ExtensionContext) {
   // Register commands
   context.subscriptions.push(
     treeView,
+    changesView,
+    migrationsView,
+    prView,
+    mergesView,
     migrationWatcher,
     autoBranchDisposable,
+
+    vscode.commands.registerCommand('lakebaseSync.toggleChangesTree', () => {
+      if (!changesTreeProvider.viewAsTree) { changesTreeProvider.toggleViewMode(); }
+    }),
+    vscode.commands.registerCommand('lakebaseSync.toggleChangesList', () => {
+      if (changesTreeProvider.viewAsTree) { changesTreeProvider.toggleViewMode(); }
+    }),
 
     vscode.commands.registerCommand('lakebaseSync.showBranchStatus', async () => {
       const gitBranch = await gitService.getCurrentBranch();
@@ -757,8 +803,25 @@ export async function activate(context: vscode.ExtensionContext) {
               (migrationCount > 0 ? ` | ${migrationCount} migration(s) applying...` : '')
             );
           } catch (err: any) {
-            if (!await handleAuthError(lakebaseService, err)) {
-              vscode.window.showErrorMessage(`Failed to switch branch: ${err.message}`);
+            const msg = err.message || '';
+            if (msg.includes('local changes') && msg.includes('overwritten by checkout')) {
+              const action = await vscode.window.showWarningMessage(
+                `Cannot switch to ${targetGitBranch} — you have uncommitted changes that would be overwritten.`,
+                'Stash & Switch', 'Commit First', 'Cancel'
+              );
+              if (action === 'Stash & Switch') {
+                try {
+                  await gitService.stash(`Auto-stash before switching to ${targetGitBranch}`);
+                  vscode.window.showInformationMessage('Changes stashed. Retrying checkout...');
+                  vscode.commands.executeCommand('lakebaseSync.switchBranch', item);
+                } catch (stashErr: any) {
+                  vscode.window.showErrorMessage(`Failed to stash: ${stashErr.message}`);
+                }
+              } else if (action === 'Commit First') {
+                vscode.commands.executeCommand('lakebaseSync.commit');
+              }
+            } else if (!await handleAuthError(lakebaseService, err)) {
+              vscode.window.showErrorMessage(`Failed to switch branch: ${msg}`);
             }
           } finally {
             // Re-enable and force a single refresh with final state
@@ -1295,7 +1358,25 @@ export async function activate(context: vscode.ExtensionContext) {
           );
         }
       } catch (err: any) {
-        vscode.window.showErrorMessage(`Branch switch failed: ${err.message}`);
+        const msg = err.message || '';
+        if (msg.includes('local changes') && msg.includes('overwritten by checkout')) {
+          const action = await vscode.window.showWarningMessage(
+            'Cannot switch branch — you have uncommitted changes that would be overwritten.',
+            'Stash & Switch', 'Commit First', 'Cancel'
+          );
+          if (action === 'Stash & Switch') {
+            try {
+              await gitService.stash('Auto-stash before branch switch');
+              vscode.window.showInformationMessage('Changes stashed. Please try switching again.');
+            } catch (stashErr: any) {
+              vscode.window.showErrorMessage(`Failed to stash: ${stashErr.message}`);
+            }
+          } else if (action === 'Commit First') {
+            vscode.commands.executeCommand('lakebaseSync.commit');
+          }
+        } else {
+          vscode.window.showErrorMessage(`Branch switch failed: ${msg}`);
+        }
       }
     }),
 
