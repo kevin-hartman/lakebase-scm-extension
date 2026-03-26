@@ -8,8 +8,8 @@ Lakebase SCM Extension is a VS Code / Cursor extension that replaces the built-i
 
 **What it does:**
 - **Automatic branch pairing** — `git checkout -b feature/x` automatically creates a Lakebase database branch
-- **Unified SCM view** — stage, commit, push, pull, sync, stash, tag, and merge with Lakebase awareness built in
-- **Schema visibility** — see database schema changes alongside code changes in the Source Control view
+- **Two parallel interfaces** — work from the **Lakebase sidebar** or the **SCM view**, both with full functionality
+- **Schema visibility** — see database schema changes alongside code changes, with color-coded table status
 - **PR integration** — create PRs that automatically trigger CI with a dedicated Lakebase branch for testing
 - **Merge awareness** — merge PRs from VS Code; CI applies migrations to production and cleans up branches
 - **Background credential refresh** — Lakebase tokens stay fresh automatically
@@ -32,7 +32,7 @@ Lakebase SCM Extension is a VS Code / Cursor extension that replaces the built-i
 
 ### Database Migration Dependency
 
-This extension relies on **Flyway** for database schema management. Flyway migration files (`V*.sql`) are the source of truth for schema changes — the extension detects new migrations, tracks them in the SCM view, and CI applies them to Lakebase branches via `flyway:migrate`.
+This extension relies on **Flyway** for database schema management. Flyway migration files (`V*.sql`) are the source of truth for schema changes — the extension detects new migrations, tracks them in views, and CI applies them to Lakebase branches via `flyway:migrate`.
 
 **The extension does not use an ORM's auto-DDL to create or modify tables.** While an ORM (e.g. Hibernate/JPA, Prisma, TypeORM) may be used in the application for data access, schema creation must be handled through explicit Flyway migration scripts. This ensures:
 
@@ -45,70 +45,190 @@ For example, set `spring.jpa.hibernate.ddl-auto=validate` (or `none`) so the ORM
 
 ### Install the Extension
 
-1. Download `lakebase-scm-extension-0.3.0.vsix` from the [latest release](https://github.com/kevin-hartman_data/lakebase-scm-extension/releases/latest)
+1. Download `lakebase-scm-extension-0.3.5.vsix` from the [latest release](https://github.com/kevin-hartman_data/lakebase-scm-extension/releases/latest)
 2. In VS Code: **Extensions** → `...` → **Install from VSIX** → select the file
 3. Reload the window
-
-![Lakebase SCM Extension installed](docs/images/extension-installed.png)
 
 ### First-Time Setup
 
 1. Open your project folder in VS Code
 2. The extension activates when it detects a `.env` or `.env.example` file
-3. Click **Connect to Workspace** when prompted (or from the Lakebase sidebar)
+3. Click **Connect to Workspace** in the Lakebase sidebar title bar (globe icon)
 4. Complete OAuth login in the terminal
 5. Run **Health Check** (`⋯` → Lakebase → Health Check) to verify everything is wired up
 
-## How to Use
+## Two Ways to Work
 
-### Create a Branch
+The extension provides two parallel interfaces. Both are fully functional — use whichever you prefer.
 
-Click `⑂ main` in the Git + Lakebase status bar → **Create New Branch...**
+### Lakebase Sidebar (Recommended)
+
+Click the Lakebase icon in the activity bar to open the sidebar. It contains five views:
+
+| View | Shows | When |
+|------|-------|------|
+| **Project** | Repo identity, GitHub link, Lakebase project, connection status, branches with expandable details | Always |
+| **Changes** | Staged files, Code (unstaged), Lakebase schema changes, Sync indicator | Always |
+| **Schema Migrations** | All V*.sql migration files | On main only |
+| **Pull Request** | PR status, CI branch status | When PR exists |
+| **Recent Merges** | Last 5 merge commits | On main only |
+
+### SCM View (Source Control)
+
+The traditional VS Code Source Control view shows a unified **Git + Lakebase** provider with resource groups: Sync Changes, Staged, Code, Lakebase, Schema Migrations, Pull Request, and Recent Merges. It includes a commit input box and all the same actions via title bar icons and the `⋯` overflow menu.
+
+## How to Use — Lakebase Sidebar
+
+### Project View
+
+The top-level item shows your repo name and "Git + Lakebase". On hover, inline action icons appear — these mirror the SCM title bar:
+
+| Icon | Action |
+|------|--------|
+| `$(git-branch)` | Create New Branch / Create Branch From / Switch Branch to... |
+| `$(cloud-upload)` | Publish Branch |
+| `$(check)` | Commit |
+| `$(git-pull-request-create)` | Create Pull Request |
+| `$(refresh)` | Refresh |
+| `$(compare-changes)` | Review Branch (multi-diff) |
+| `$(diff)` | Branch Diff Summary (webview) |
+
+The `⋯` overflow menu provides the full set: Pull, Push, Clone, Fetch, plus submenus for Commit, Changes, Pull/Push, Branch, Stash, Tags, Remote, Worktrees, and Lakebase.
+
+Expand the project to see:
+
+```
+📁 lakebase-scm-extension                Git + Lakebase
+   ├─ 🐙 kevin-hartman_data/lakebase-scm-extension    ← click opens GitHub
+   ├─ 🗄️ My Lakebase DB   workspace.cloud.databricks.com  ← click opens workspace
+   ├─ Current Branch
+   │  └─ ✅ checkout → checkout (READY)
+   │     ├─ checkout → origin/checkout               ← expand: changed files with diffs
+   │     │  ├─ CartController.java   src/main/...
+   │     │  └─ V7__create_wishlist.sql   src/main/...
+   │     ├─ checkout (READY)                          ← expand: color-coded tables
+   │     │  ├─ 🟢 wishlist (new · 3 columns)
+   │     │  ├─ 🟢 wishlist_item (new · 4 columns)
+   │     │  ├─ ⚪ orders (5 columns)
+   │     │  └─ ⚪ users (4 columns)
+   │     ├─ 🔌 ACTIVE
+   │     └─ schema-migration (7 files, V7)            ← expand: migration files
+   │        ├─ V1: init placeholder
+   │        ├─ V2: create book table
+   │        └─ V7: create wishlist
+   └─ Other Branches
+      ├─ main
+      └─ ci-pr-42 (db only)
+```
+
+**Table color coding:**
+- **Green** — new table created on this branch
+- **Amber** — table modified on this branch
+- **Red** — table removed on this branch
+- **White** — unchanged from production
+
+Click any table to view its `CREATE TABLE` DDL. Modified tables open a diff view (production vs branch).
+
+### Changes View
+
+Shows your working tree changes with the same layout as VS Code's built-in Git:
+
+```
+CHANGES
+├─ Sync Changes                    2 to push
+├─ Staged (3)                      [−] Unstage All
+│  ├─ CartController.java          [−]
+│  └─ OrderService.java            [−]
+├─ Code (2)                        [+] Stage All  [↩] Discard All
+│  ├─ V7__create_wishlist.sql      [+] [↩]
+│  └─ application.properties       [+] [↩]
+└─ Lakebase (2)
+   ├─ wishlist (created)
+   └─ wishlist_item (created)
+```
+
+**Title bar actions:** Commit, Publish, Create PR, Refresh, Review Branch — plus the full `⋯` overflow menu with all submenus.
+
+**List / Tree toggle:** Click the list/tree icon in the title bar to switch between flat file list (with directory path as description) and folder-grouped tree view.
+
+**File icons:** Files show the language-specific file icon (TypeScript, SQL, etc.) with status decorations (M, A, D) on the right — matching the SCM view exactly.
+
+**Inline actions on files:**
+- `+` Stage (on unstaged files)
+- `↩` Discard (on unstaged files)
+- `−` Unstage (on staged files)
+
+**Inline actions on group headers:**
+- `+` Stage All (on Code group)
+- `↩` Discard All Changes (on Code group)
+- `−` Unstage All (on Staged group)
+
+### Schema Migrations View (Main Branch Only)
+
+Shows all V*.sql migration files. Click any migration to open it in the editor.
+
+### Pull Request View (When PR Exists)
+
+Shows PR status and CI branch status. Title bar actions:
+
+| Icon | Action |
+|------|--------|
+| `$(git-merge)` | Merge Pull Request |
+| `$(git-pull-request)` | View PR Schema Diff |
+| `$(refresh)` | Refresh PR Status |
+
+```
+PULL REQUEST
+  ⟳ PR #42 - Add wishlist tables        ← click opens PR on GitHub
+  🗄️ Lakebase Branch for ci-pr-42        ← click opens Lakebase console
+```
+
+Auto-polls every 30 seconds while CI is pending. Shows a notification when CI completes.
+
+### Recent Merges View (Main Branch Only)
+
+Shows the last 5 merge commits with PR titles. Click to open the commit on GitHub.
+
+## Workflow Walkthrough
+
+### 1. Create a Branch
+
+Click `$(git-branch)` on the project item → **Create New Branch...** → type a name.
 
 A git branch and a Lakebase database branch are created together. The `.env` updates with the new database connection.
 
-```
-⑂ feature/orders
-```
+### 2. Write Code and Migrations
 
-### Write Code and Migrations
-
-As you work, the SCM view updates automatically:
+As you work, the Changes view updates automatically:
 
 - **Code** — unstaged file changes (modified, added, deleted)
 - **Lakebase** — schema changes from new V*.sql migration files
-- **Branch indicator** — shows `*` when there are uncommitted changes
 
 Click any file to see a side-by-side diff against main.
 
-### Stage and Commit
+### 3. Stage and Commit
 
 1. Click `+` on files to stage (or `+` on the Code header to stage all)
-2. Type a commit message in the input box
-3. Click **✓ Commit** (or Ctrl+Enter)
+2. Click **✓ Commit** in the project title bar (or use `⋯` → Commit for variants)
 
 If nothing is staged, all changes are staged automatically.
 
 **Commit variants** in `⋯` → Commit: Commit Staged, Commit All, Undo Last Commit, Abort Rebase, Amend, Signed Off.
 
-### Publish and Sync
+### 4. Publish and Sync
 
-- **Publish Branch** — click ☁↑ in the title bar to push to the remote for the first time
-- **Sync Changes** — after committing, the Sync Changes group shows commits to push/pull. Click the ⟳ sync icon in the status bar or the sync item in the group.
+- **Publish Branch** — click `$(cloud-upload)` on the project item to push to the remote for the first time
+- **Sync Changes** — after committing, the Sync Changes group appears in the Changes view with commits to push/pull
 
-```
-⑂ feature/orders    ⟳ 1↑
-```
+### 5. Review Your Branch
 
-### Review Your Branch
+Click **Review Branch** `$(compare-changes)` on the project item to open a multi-diff editor with ALL code and schema changes on the branch vs main.
 
-Click the **Review Branch** button (compare-changes icon) in the SCM title bar to open a multi-diff editor with ALL code and schema changes on the branch vs main.
+Or click **Branch Diff Summary** `$(diff)` for a two-column webview.
 
-Or click **Unified Branch Diff Summary** (diff icon) for a two-column webview.
+### 6. Create a Pull Request
 
-### Create a Pull Request
-
-Click 🔀 **Create Pull Request** in the SCM title bar.
+Click `$(git-pull-request-create)` on the project item.
 
 The extension:
 1. Checks and syncs GitHub secrets (DATABRICKS_HOST, DATABRICKS_TOKEN, LAKEBASE_PROJECT_ID)
@@ -117,49 +237,26 @@ The extension:
 
 CI automatically creates a `ci-pr-<N>` Lakebase branch, runs Flyway and tests.
 
-### Monitor CI
+### 7. Monitor CI
 
-The **Pull Request** group appears in the SCM view:
+The **Pull Request** view appears in the sidebar with PR status and CI branch status.
 
-```
-Pull Request                              ⑂  🔀  🔄
-  ⟳ PR #42 - Feature/orders              (click opens GitHub PR)
-  ⛁ Lakebase Branch for ci-pr-42         (click opens Lakebase console)
-```
+### 8. Merge
 
-- Auto-polls every 30 seconds while CI is pending
-- Notification when CI completes
-- Click 🔀 to **View PR Schema Diff** (live pg_dump if no CI comment)
-
-### Merge
-
-Click ⑂ (git-merge) on the Pull Request group header:
+Click `$(git-merge)` in the Pull Request view title bar:
 1. Choose merge method: Merge, Squash, or Rebase
 2. Confirm
 3. Extension merges, checks out main, pulls latest
 
 CI applies Flyway to production and deletes the CI + feature Lakebase branches.
 
-### Verify Production
+### 9. Verify Production
 
-On main, the SCM view shows:
+On main, the sidebar shows Schema Migrations (all V*.sql files) and Recent Merges. Expand the current branch in the Project view to see the production database tables.
 
-```
-Lakebase
-  ✅ production (READY)                    ← click opens console
+### 10. Switch Branches
 
-Schema Migrations
-  📄 V1__init_placeholder.sql              ← click opens file
-  📄 V2__create_book_table.sql
-  📄 V6__create_orders.sql
-
-Recent Merges
-  ⑂ Merge pull request #9 from...          ← click opens on GitHub
-```
-
-### Switch Branches
-
-Click the branch name in the status bar to open the branch picker:
+Click `$(git-branch)` on the project item:
 
 ```
 Select a branch or tag to checkout
@@ -176,23 +273,10 @@ Select a branch or tag to checkout
 
 Each branch shows its Lakebase pairing. Switching syncs the database connection automatically.
 
-### More Actions (`⋯`)
-
-```
-Pull / Push / Clone / Checkout to... / Fetch
-─────────────
-Commit ▸          Commit / Staged / All / Undo / Abort Rebase | Amend variants | Signed Off variants
-Changes ▸         Stage All / Unstage All / Discard All
-Pull, Push ▸      Sync | Pull / Rebase / From... | Push / To... | Fetch / Prune / All Remotes
-Branch ▸          Merge / Rebase | Create / From... | Rename / Delete / Delete Remote | Publish
-Remote ▸          Add / Remove
-Stash ▸           Stash / Untracked / Staged | Apply / Pop | Drop / Drop All | View
-Tags ▸            Create / Delete / Delete Remote
-Worktrees ▸       Create / List / Delete
-Lakebase ▸        Health Check / Console / Diff Summary / PR Schema Diff / Merge PR / Refresh PR
-─────────────
-Show Git Output
-```
+If you have uncommitted changes that would be overwritten, the extension offers:
+- **Stash & Switch** — auto-stashes changes and retries
+- **Commit First** — opens the commit flow
+- **Cancel**
 
 ### Lakebase Sync Across Git Operations
 
@@ -226,7 +310,7 @@ Search `lakebaseSync` in VS Code Settings:
 ### Testing
 
 ```bash
-npm test   # 277 tests across 15 suites
+npm test   # 299 tests across 16 suites
 ```
 
 ## Architecture
@@ -239,14 +323,19 @@ The extension is a standard VS Code extension written in TypeScript, bundled wit
 ┌──────────────────────────────────────────────────────────────┐
 │                    VS Code Extension Host                     │
 ├──────────────┬────────────────┬──────────────────────────────┤
-│  SCM Provider│  Webview Panels│  Status Bar                  │
-│  - Git+Lake  │  - Branch Diff │  - Branch picker             │
-│    Staged    │  - Table Diff  │  - Sync indicator            │
-│    Code      │  - Health Check│  - Lakebase status           │
-│    Lakebase  │  - PR Schema   │                              │
-│    PR Status │                │                              │
-│    Migrations│                │                              │
-│    Merges    │                │                              │
+│  Lakebase    │  SCM Provider  │  Webview Panels              │
+│  Sidebar     │  (Git+Lakebase)│                              │
+│  ┌─────────┐ │  ┌──────────┐  │  ┌─────────────────────────┐ │
+│  │ Project │ │  │ Staged   │  │  │ Branch Diff Summary     │ │
+│  │ Changes │ │  │ Code     │  │  │ Table Diff              │ │
+│  │ Schema  │ │  │ Lakebase │  │  │ Health Check            │ │
+│  │ Migr.   │ │  │ PR       │  │  │ PR Schema Diff          │ │
+│  │ PR      │ │  │ Migr.    │  │  └─────────────────────────┘ │
+│  │ Merges  │ │  │ Merges   │  │                              │
+│  └─────────┘ │  └──────────┘  │  Status Bar                  │
+│              │                │  - Branch picker             │
+│              │                │  - Sync indicator            │
+│              │                │  - Lakebase status           │
 ├──────────────┴────────────────┴──────────────────────────────┤
 │                      Service Layer                            │
 │  ┌─────────────┐  ┌──────────────┐  ┌──────────────────────┐ │
@@ -255,7 +344,7 @@ The extension is a standard VS Code extension written in TypeScript, bundled wit
 │  │ - staging    │  │ - endpoints  │  │ - per-branch cache   │ │
 │  │ - commit     │  │ - credentials│  │ - migration parsing  │ │
 │  │ - PR via gh  │  │ - console URL│  │                      │ │
-│  │ - ahead/behind│ │              │  │                      │ │
+│  │ - ahead/behind│ │ - display name│ │                      │ │
 │  └──────┬──────┘  └──────┬───────┘  └──────────┬───────────┘ │
 │         │                │                      │             │
 │  ┌──────────────┐  ┌──────────────┐  ┌─────────────────────┐ │
@@ -273,6 +362,7 @@ The extension is a standard VS Code extension written in TypeScript, bundled wit
 │  │          │  │   create-branch   │  │ - pr view          │ │
 │  │          │  │   list-endpoints  │  │                    │ │
 │  │          │  │   generate-cred   │  │                    │ │
+│  │          │  │   list-projects   │  │                    │ │
 │  └──────────┘  └───────────────────┘  └────────────────────┘ │
 │  ┌──────────────────────────────────────────────────────────┐ │
 │  │ pg_dump (PostgreSQL client)                              │ │
@@ -285,12 +375,13 @@ The extension is a standard VS Code extension written in TypeScript, bundled wit
 
 | Component | Purpose | How it's used |
 |-----------|---------|---------------|
+| **VS Code TreeView API** | Lakebase sidebar | 5 tree views (Project, Changes, Migrations, PR, Merges) with inline actions, list/tree toggle, badge count |
 | **VS Code SCM API** | Source control integration | Custom `SourceControl` provider with resource groups (Staged, Code, Lakebase, PR, Migrations, Merges) |
 | **VS Code TextDocumentContentProvider** | Virtual file content | `lakebase-git-base://` for merge-base file versions; `lakebase-schema-content://` for DDL in multi-diff |
 | **VS Code FileSystemWatcher** | Live file tracking | Watches `.git/HEAD`, `.git/index`, `.git/COMMIT_EDITMSG`, and migration files |
 | **`vscode.diff` command** | Side-by-side diffs | Code diffs (main vs branch) and schema DDL diffs (production vs branch) |
 | **`vscode.changes` command** | Multi-diff editor | Review Branch opens all code + schema diffs in one tab |
-| **Databricks CLI** | Lakebase operations | Branch CRUD, endpoint management, credential generation via `child_process.exec` |
+| **Databricks CLI** | Lakebase operations | Branch CRUD, endpoint management, credential generation, project listing via `child_process.exec` |
 | **GitHub CLI (`gh`)** | PR and repo operations | `gh pr create`, `gh pr merge`, `gh pr view`, `gh secret set` |
 | **`pg_dump`** | Schema comparison | `--schema-only` dumps of branch and production databases, parsed to extract CREATE TABLE statements |
 | **Flyway** | Migration management | Extension reads V*.sql files to detect schema changes; CI workflows run `flyway:migrate` |
@@ -304,6 +395,8 @@ Schema diffs are expensive (two pg_dump calls + credential generation). The exte
 2. **10-minute max age** — guards against stale results after credential expiry or external changes
 
 Error results are never cached — the next access always retries.
+
+The `SchemaContentProvider` falls back to parsing migration files for table DDL when no pg_dump cache is available, so table definitions are always viewable even without running Branch Diff first.
 
 ### CI/CD Pipeline
 
@@ -357,6 +450,7 @@ VS Code's SCM "big blue button" (the Commit/Sync Changes button shown by the bui
 - **Offline mode** — The extension requires network access for every Lakebase operation. A local cache of branch state would improve the experience on unreliable connections.
 - **Multi-project support** — Currently assumes one Lakebase project per workspace. Multi-project workspaces would need project selection per branch.
 - **Token lifecycle** — The 20-minute background refresh is a workaround for short-lived Lakebase tokens. A proper OAuth refresh token flow would be more reliable.
+- **Tree view icon limitation** — VS Code tree view inline buttons are icon-only; they cannot display dynamic text like the SCM `statusBarCommands` can. The branch name with dirty indicator is visible in the SCM status bar but cannot be embedded in sidebar action buttons.
 
 ## Roadmap
 
