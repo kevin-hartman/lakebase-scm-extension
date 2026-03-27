@@ -1,4 +1,4 @@
-# Lakebase Branch Sync — VS Code / Cursor Extension Plan
+# Lakebase SCM Extension — VS Code / Cursor Extension Plan
 
 ## Workflow Process Analysis
 
@@ -28,23 +28,55 @@ A VS Code / Cursor extension that provides unified visibility into both code cha
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│              VS Code / Cursor Extension          │
-├─────────────┬───────────────┬───────────────────┤
-│  Tree Views │  Diff Editor  │  Status Bar       │
-│  - Branches │  - Code diff  │  - Branch sync    │
-│  - Schemas  │  - Schema diff│  - Migration ver  │
-│  - Migrations│              │  - DB status      │
-├─────────────┴───────────────┴───────────────────┤
-│              Extension Core                      │
-│  ┌──────────┐  ┌──────────┐  ┌────────────────┐ │
-│  │ Git      │  │ Lakebase │  │ Flyway         │ │
-│  │ Watcher  │  │ API      │  │ Migration      │ │
-│  │          │  │ Client   │  │ Parser         │ │
-│  └──────────┘  └──────────┘  └────────────────┘ │
-├─────────────────────────────────────────────────┤
-│  Databricks CLI  │  Git CLI  │  psql / pg_dump  │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                    VS Code Extension Host                     │
+├──────────────┬────────────────┬──────────────────────────────┤
+│  Lakebase    │  SCM Provider  │  Webview Panels              │
+│  Sidebar     │  (Git+Lakebase)│                              │
+│  ┌─────────┐ │  ┌──────────┐  │  ┌─────────────────────────┐ │
+│  │ Project │ │  │ Staged   │  │  │ Branch Diff Summary     │ │
+│  │ Changes │ │  │ Code     │  │  │ Table Diff              │ │
+│  │ Schema  │ │  │ Lakebase │  │  │ Health Check            │ │
+│  │ Migr.   │ │  │ PR       │  │  │ PR Schema Diff          │ │
+│  │ PR      │ │  │ Migr.    │  │  └─────────────────────────┘ │
+│  │ Merges  │ │  │ Merges   │  │                              │
+│  └─────────┘ │  └──────────┘  │  Status Bar                  │
+│              │                │  - Branch picker             │
+│              │                │  - Sync indicator            │
+│              │                │  - Lakebase status           │
+├──────────────┴────────────────┴──────────────────────────────┤
+│                      Service Layer                            │
+│  ┌─────────────┐  ┌──────────────┐  ┌──────────────────────┐ │
+│  │ GitService   │  │ LakebaseServ │  │ SchemaDiffService    │ │
+│  │ - branch ops │  │ - branch CRUD│  │ - pg_dump comparison │ │
+│  │ - staging    │  │ - endpoints  │  │ - per-branch cache   │ │
+│  │ - commit     │  │ - credentials│  │ - migration parsing  │ │
+│  │ - PR via gh  │  │ - console URL│  │                      │ │
+│  │ - ahead/behind│ │ - display name│ │                      │ │
+│  └──────┬──────┘  └──────┬───────┘  └──────────┬───────────┘ │
+│         │                │                      │             │
+│  ┌──────────────┐  ┌──────────────┐  ┌─────────────────────┐ │
+│  │ FlywayService│  │ SchemaContent│  │ GitBaseContent       │ │
+│  │ - list/parse │  │ Provider     │  │ Provider             │ │
+│  │   migrations │  │ - DDL for    │  │ - file at merge-base │ │
+│  │ - watch files│  │   multi-diff │  │   for code diffs     │ │
+│  └──────────────┘  └──────────────┘  └─────────────────────┘ │
+├──────────────────────────────────────────────────────────────┤
+│                    External CLIs                              │
+│  ┌──────────┐  ┌───────────────────┐  ┌────────────────────┐ │
+│  │ git      │  │ databricks CLI    │  │ gh (GitHub CLI)    │ │
+│  │          │  │ - postgres        │  │ - pr create/merge  │ │
+│  │          │  │   list-branches   │  │ - secret set       │ │
+│  │          │  │   create-branch   │  │ - pr view          │ │
+│  │          │  │   list-endpoints  │  │                    │ │
+│  │          │  │   generate-cred   │  │                    │ │
+│  │          │  │   list-projects   │  │                    │ │
+│  └──────────┘  └───────────────────┘  └────────────────────┘ │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │ pg_dump (PostgreSQL client)                              │ │
+│  │ - schema-only dumps for branch vs production comparison  │ │
+│  └──────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -120,10 +152,68 @@ A VS Code / Cursor extension that provides unified visibility into both code cha
 21. ✅ **Merge awareness** — On main: Lakebase group shows production branch status; Schema Migrations group lists all V*.sql files; Recent Merges group shows last 5 merge commits with PR titles linking to GitHub
 22. ✅ **Branch picker** — Status bar shows `⑂ branch*` with Lakebase pairing; click opens QuickPick with local + remote branches, each showing Lakebase branch; actions: Create, Create From, Checkout Detached; remote branches checkout with tracking
 23. ✅ **Sync indicator** — Status bar shows `⟳ N↓ M↑` with ahead/behind counts; Sync Changes group appears when behind/ahead; click syncs with Lakebase credential refresh
-24. ✅ **Review Branch** — Multi-diff editor via `vscode.changes` API showing all code + schema DDL diffs; Unified Branch Diff Summary webview with two-column layout
+24. ✅ **Review Branch** — Multi-diff editor via `vscode.changes` API showing all code + schema DDL diffs; Branch Diff Summary webview with two-column layout
 25. ✅ **Health check** — Validates workflows, secrets, CLI auth, gh CLI, migration directory, post-checkout hook; webview panel with ✅/❌ per item
 26. ✅ **Open in Databricks Console** — Per-branch console URL using branch UID; CI branch resolves to correct `ci-pr-<N>` UID
 27. ✅ **Test suite** — 277 tests across 15 suites covering all services, providers, git operations, Lakebase sync, branch picker, merge awareness, and PR integration
+
+---
+
+## Phase 3.5: Lakebase Sidebar ✅ COMPLETE (v0.3.5)
+
+### Goals
+- Reproduce the full SCM functionality in the Lakebase sidebar
+- Provide an alternative to the SCM view with richer branch and schema exploration
+- Full feature parity: every action available from the SCM view is available from the sidebar
+
+### Deliverables
+28. ✅ **SchemaScmProvider public API** — Added 7 public accessors (`getStaged()`, `getCode()`, `getLakebase()`, `getMigrations()`, `getMerges()`, `getPr()`, `getSync()`) and `onDidRefresh` event firing after every refresh cycle
+29. ✅ **Project view** — Repo name + "Git + Lakebase" root item with full inline action bar (Checkout, Publish, Commit, Create PR, Refresh, Review Branch, Branch Diff Summary) and complete overflow menu (9 submenus + top actions). Expandable to show:
+    - GitHub repo link (clickable, opens browser)
+    - Lakebase project display name + workspace URL (clickable, opens workspace; fetched via `getProjectDisplayName()` API)
+    - Connection status via auth check
+    - Current Branch section with expandable branch details
+    - Other Branches section with Lakebase-only branches
+30. ✅ **Expandable branch details** — Each branch expands to show:
+    - **Git tracking** (`fileList`) — Collapsible; shows all changed files vs main with diff status icons (green/yellow/red/blue); click opens diff view or file
+    - **Database** (`tableList`) — Collapsible; color-coded tables: green (new), amber (modified), red (removed), white (unchanged); click opens CREATE TABLE DDL or production-vs-branch diff; column count + tooltip with column definitions; compares branch migrations against main to determine status
+    - **Endpoint status** — ACTIVE/INACTIVE indicator
+    - **Schema migrations** (`migrationList`) — Collapsible; lists individual V*.sql files with parsed descriptions; click opens file
+31. ✅ **Changes view** — Three groups: Staged, Code (renamed from Changes), Lakebase (moved from standalone view):
+    - **File rendering** — Mirrors SCM exactly: file-type icons from VS Code icon theme, status decorations (M/A/D/R) on the right via `resourceUri`, relative directory path as description
+    - **List/tree toggle** — Title bar button switches between flat list and folder-grouped tree view with collapsed single-child directory chains
+    - **Inline actions on files** — Stage (+), Discard (↩) on unstaged; Unstage (−) on staged
+    - **Inline actions on group headers** — Stage All (+), Discard All (↩) on Code group; Unstage All (−) on Staged group
+    - **Title bar** — Commit, Publish, Create PR, Refresh, Review Branch + full overflow menu with all 9 submenus
+    - **Lakebase subgroup** — Schema changes from uncommitted migration files (moved from standalone view)
+    - **Sync Changes** — Shows ahead/behind status when out of sync
+32. ✅ **Schema Migrations view** — All V*.sql files on main branch; `when` clause hides on feature branches
+33. ✅ **Pull Request view** — PR status + CI branch with merge/schema diff/refresh title bar actions; `when` clause shows only when PR exists
+34. ✅ **Recent Merges view** — Last 5 merge commits on main with PR titles; clickable to GitHub
+35. ✅ **Badge count** — Activity bar icon shows pending change count (staged + unstaged + schema)
+36. ✅ **SchemaContentProvider fallback** — Falls back to parsing migration files for table DDL when no pg_dump cache is available, so table definitions are always viewable
+37. ✅ **Graceful branch switch** — Catches "local changes would be overwritten" error; offers Stash & Switch, Commit First, or Cancel
+38. ✅ **LakebaseService.getProjectDisplayName()** — Fetches human-readable project name from `databricks postgres list-projects` API
+39. ✅ **Updated sidebar icon** — New SVG with Lakebase bars + SCM symbol
+40. ✅ **Renamed** — "Unified Branch Diff Summary" → "Branch Diff Summary"
+41. ✅ **Test suite** — 299 tests across 16 suites; all existing tests preserved; new tests for Project view hierarchy
+
+### Files created
+- `src/providers/changesTreeProvider.ts` — Changes view with Staged/Code/Lakebase groups, list/tree toggle
+- `src/providers/migrationsTree.ts` — Schema Migrations view
+- `src/providers/pullRequestTree.ts` — Pull Request view
+- `src/providers/mergesTree.ts` — Recent Merges view
+- `src/providers/lakebaseSchemaTree.ts` — (Created but later merged into Changes view as Lakebase subgroup)
+
+### Files modified
+- `src/providers/schemaScmProvider.ts` — Public accessors + `onDidRefresh` event
+- `src/providers/branchTreeProvider.ts` — Restructured as Project view with expandable branch details, table color coding, migration listing, file listing
+- `src/providers/schemaContentProvider.ts` — Migration file parsing fallback
+- `src/providers/schemaDiffProvider.ts` — Renamed to "Branch Diff Summary"
+- `src/services/lakebaseService.ts` — `getProjectDisplayName()` method
+- `src/extension.ts` — Register sidebar views, badge count, list/tree toggle commands, graceful branch switch
+- `package.json` — 5 sidebar views, view/title menus, view/item/context menus with inline actions, overflow submenus, version bump to 0.3.5
+- `test/suite/branchTreeProvider.test.ts` — Updated for Project view hierarchy
 
 ---
 
@@ -161,7 +251,7 @@ lakebase-sync/
 
 ### Command: `lakebaseSync.createProject`
 
-Available from Command Palette and Unified Repo SCM title bar.
+Available from Command Palette and Project view title bar.
 
 ### Execution Steps
 
@@ -182,12 +272,12 @@ Available from Command Palette and Unified Repo SCM title bar.
 | 13 | Run health check | Auto-run `lakebaseSync.healthCheck` to verify all components are in place (workflows, secrets, CLI auth, hooks, migration dir) |
 
 ### Deliverables
-21. **Project scaffold template** — Embedded in extension under `templates/project/`; stripped of demo-specific code; placeholder substitution at creation time
-22. **Lakebase project creation via REST API** — `POST /api/2.0/lakebase/projects` with OAuth token from CLI config
-23. **GitHub repo creation** — `gh repo create` with secrets setup
-24. **Create Project command** — Full wizard with progress notification; each step logged; graceful failure (partial creation preserved)
-25. **`.vscodeignore` update** — Include `templates/` in packaged extension
-26. **Disable built-in Git SCM in workspace** — Scaffold includes `.vscode/settings.json` with `"git.enabled": false` so the built-in Git SCM is hidden and the Unified Repo is the only SCM view for the project
+42. **Project scaffold template** — Embedded in extension under `templates/project/`; stripped of demo-specific code; placeholder substitution at creation time
+43. **Lakebase project creation via REST API** — `POST /api/2.0/lakebase/projects` with OAuth token from CLI config
+44. **GitHub repo creation** — `gh repo create` with secrets setup
+45. **Create Project command** — Full wizard with progress notification; each step logged; graceful failure (partial creation preserved)
+46. **`.vscodeignore` update** — Include `templates/` in packaged extension
+47. **Disable built-in Git SCM in workspace** — Scaffold includes `.vscode/settings.json` with `"git.enabled": false` so the built-in Git SCM is hidden and the Unified Repo is the only SCM view for the project
 
 ### Open Questions
 - Verify exact Databricks REST API endpoint for Lakebase project creation
@@ -203,45 +293,58 @@ Available from Command Palette and Unified Repo SCM title bar.
 - Conflict detection warning when two branches modify the same tables
 - Branch comparison between any two Lakebase branches
 - Cursor AI integration exposing database context
+- Visual commit graph in the Lakebase sidebar
 
 ### Deliverables
-26. **Data preview** — Read-only table viewer for branch databases
-27. **Conflict detection** — Table-level conflict warnings
-28. **Branch comparison** — Any-to-any Lakebase branch diff
-29. **Cursor AI context** — Schema-aware code generation
+48. **Data preview** — Read-only table viewer for branch databases
+49. **Conflict detection** — Table-level conflict warnings
+50. **Branch comparison** — Any-to-any Lakebase branch diff
+51. **Cursor AI context** — Schema-aware code generation
+52. **Graph webview** — Visual commit graph with branch lines, Lakebase pairing annotations, and clickable commits
 
 ---
 
 ## Extension Structure
 
 ```
-lakebase-sync/
-├── package.json              # Extension manifest, contributions, commands
+lakebase-scm-extension/
+├── package.json              # Extension manifest, contributions, commands, views, menus
 ├── tsconfig.json             # TypeScript configuration
 ├── webpack.config.js         # Bundling configuration
 ├── src/
-│   ├── extension.ts          # Activation, command registration
+│   ├── extension.ts          # Activation, command registration, view registration
 │   ├── providers/
-│   │   ├── branchTreeProvider.ts    # Tree view data provider
+│   │   ├── branchTreeProvider.ts    # Project view: repo identity, branches, expandable details
+│   │   ├── changesTreeProvider.ts   # Changes view: Staged, Code, Lakebase, list/tree toggle
+│   │   ├── migrationsTree.ts        # Schema Migrations view
+│   │   ├── pullRequestTree.ts       # Pull Request view
+│   │   ├── mergesTree.ts            # Recent Merges view
+│   │   ├── lakebaseSchemaTree.ts    # Standalone Lakebase schema view (now merged into Changes)
 │   │   ├── statusBarProvider.ts     # Status bar management
-│   │   ├── schemaDiffProvider.ts    # Branch diff + table diff webviews
-│   │   └── schemaScmProvider.ts     # Unified Repo SCM (Code + Lakebase groups)
+│   │   ├── schemaDiffProvider.ts    # Branch Diff Summary + table diff webviews
+│   │   ├── schemaContentProvider.ts # DDL content for multi-diff (with migration fallback)
+│   │   └── schemaScmProvider.ts     # SCM provider with public accessors + onDidRefresh
 │   ├── services/
-│   │   ├── lakebaseService.ts       # Databricks CLI wrapper + console URLs
+│   │   ├── lakebaseService.ts       # Databricks CLI wrapper + console URLs + display name
 │   │   ├── gitService.ts            # Git operations + event watching + diff content
 │   │   ├── flywayService.ts         # Migration parsing + execution
 │   │   └── schemaDiffService.ts     # pg_dump diff generation + per-branch cache
 │   └── utils/
 │       └── config.ts                # .env + settings management + connection updates
+├── resources/
+│   └── icons/
+│       ├── lakebase-sidebar.svg     # Activity bar icon (Lakebase + SCM composite)
+│       └── extension-icon.png       # Marketplace icon
 ├── templates/
 │   └── project/                     # Project scaffold template (Phase 4)
-├── resources/
-│   └── icons/                       # Tree view icons
+├── docs/
+│   ├── plugin-plan.md               # This file
+│   └── sidebar-plan.md              # Original sidebar implementation plan
 ├── test/
 │   ├── setup.js                     # vscode module mock loader
 │   ├── mocks/
 │   │   └── vscode.js                # Full vscode API mock
-│   └── suite/
+│   └── suite/                       # 299 tests across 16 suites
 │       ├── config.test.ts
 │       ├── flywayService.test.ts
 │       ├── gitService.test.ts
@@ -251,7 +354,13 @@ lakebase-sync/
 │       ├── schemaScmProvider.test.ts
 │       ├── branchTreeProvider.test.ts
 │       ├── statusBarProvider.test.ts
-│       └── autoBranchCreation.test.ts
+│       ├── autoBranchCreation.test.ts
+│       ├── branchPicker.test.ts
+│       ├── branchReview.test.ts
+│       ├── gitOperations.test.ts
+│       ├── lakebaseSync.test.ts
+│       ├── mergeAwareness.test.ts
+│       └── ciSecrets.test.ts
 └── .vscodeignore
 ```
 
@@ -273,24 +382,21 @@ lakebase-sync/
 
 1. **CLI-based, not API-based** — Wraps `databricks` CLI rather than calling REST APIs directly. Reuses existing auth (OAuth, PAT) and avoids token management complexity. Exception: Lakebase project creation (Phase 4) uses REST API since the CLI doesn't support `create-project`.
 2. **Event-driven, not polling** — Uses VS Code FileSystemWatcher and git extension events rather than polling Lakebase API. File saves and git index changes trigger debounced code refreshes.
-3. **Schema diff at multiple layers** — Per-branch cache with migration-mtime invalidation for speed; pg_dump for accuracy; cache cleared on migration changes, Flyway runs, and branch switches.
+3. **Schema diff at multiple layers** — Per-branch cache with migration-mtime invalidation for speed; pg_dump for accuracy; migration parsing as fallback; cache cleared on migration changes, Flyway runs, and branch switches.
 4. **Complements existing hooks** — Provides visibility into what post-checkout and prepare-commit-msg hooks do, does not replace them. Auto-branch creation syncs `.env` on every branch change.
 5. **Cursor-compatible** — Standard VS Code extension, automatically works in Cursor. Phase 5 adds Cursor-specific AI context.
-6. **Unified Repo SCM** — Single flat view with Code and Lakebase groups; no sub-folders for status types; icons convey added/modified/removed; clicking code files opens git diff against merge-base.
+6. **Dual interface** — Both the Lakebase sidebar (recommended) and SCM view provide full functionality. The sidebar offers richer exploration (expandable branch details, color-coded tables, migration files) while the SCM view provides the familiar Git workflow with a commit input box.
+7. **Graceful degradation** — Schema content provider falls back to migration file parsing when pg_dump cache is unavailable. Branch switch offers stash/commit options when working tree is dirty. Auth failures prompt reconnection.
 
-## Commands
+## Summary
 
-```
-Lakebase: Show Branch Status
-Lakebase: Branch Diff (any branch, cached or fresh)
-Lakebase: Schema Diff (per-table)
-Lakebase: Run Flyway Migrate
-Lakebase: Refresh Database Credentials
-Lakebase: Create Branch (Lakebase only)
-Create Branch (Code + Database)
-Lakebase: Delete Branch
-Lakebase: Connect to Workspace
-Lakebase: Open in Databricks Console
-Lakebase: Show Migration History
-Create Unified Project (Phase 4)
-```
+| Phase | What | Status | Version |
+|-------|------|--------|---------|
+| 1 | Foundation (MVP) | ✅ Complete | — |
+| 2 | Diff & Visibility | ✅ Complete | — |
+| 3 | Workflow Automation | ✅ Complete | — |
+| 3.5 | Lakebase Sidebar | ✅ Complete | v0.3.5 |
+| 4 | Unified Project Creation | Not started | — |
+| 5 | Advanced Features | Not started | — |
+
+**Current state:** v0.3.5 — 299 tests, 16 suites, 60 files in vsix, full Git + Lakebase parity across both sidebar and SCM interfaces.
