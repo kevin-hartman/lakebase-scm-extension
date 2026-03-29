@@ -411,6 +411,8 @@ describe('GitService — branch operations', () => {
         commands.push(cmd);
         if (cmd.includes('rev-parse --abbrev-ref @{u}')) {
           cb(null, 'origin/feature-x', '');
+        } else if (cmd.includes('rev-parse --abbrev-ref HEAD')) {
+          cb(null, 'feature-x', '');
         } else if (cmd.includes('gh pr create')) {
           cb(null, 'https://github.com/user/repo/pull/43', '');
         } else {

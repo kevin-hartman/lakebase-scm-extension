@@ -51,8 +51,9 @@ describe('BranchTreeProvider', () => {
       const projectItem = root[0];
       const children = await provider.getChildren(projectItem);
 
-      // Should have: connection status + Current Branch header + Other Branches header
-      assert.strictEqual(children.length, 3);
+      // Should have at minimum: Current Branch header + Other Branches header
+      // (GitHub, Lakebase project, and connection items depend on environment)
+      assert.ok(children.length >= 2);
       const currentHeader = children.find(c => c.label === 'Current Branch');
       assert.ok(currentHeader, 'should have Current Branch section');
       const otherHeader = children.find(c => c.label === 'Other Branches');

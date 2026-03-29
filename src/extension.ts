@@ -116,7 +116,7 @@ export async function activate(context: vscode.ExtensionContext) {
   // Register sidebar tree views (Phases A-G)
   const changesTreeProvider = new ChangesTreeProvider(schemaScmProvider);
   const migrationsTreeProvider = new MigrationsTreeProvider(schemaScmProvider);
-  const pullRequestTreeProvider = new PullRequestTreeProvider(schemaScmProvider);
+  const pullRequestTreeProvider = new PullRequestTreeProvider(schemaScmProvider, gitService);
   const mergesTreeProvider = new MergesTreeProvider(schemaScmProvider);
 
   const changesView = vscode.window.createTreeView('lakebaseChanges', {
@@ -140,7 +140,12 @@ export async function activate(context: vscode.ExtensionContext) {
       ? { value: count, tooltip: `Lakebase SCM Extension — ${count} pending changes` }
       : undefined;
   };
-  schemaScmProvider.onDidRefresh(updateBadge);
+  schemaScmProvider.onDidRefresh(() => {
+    updateBadge();
+    branchTreeProvider.refresh();
+    // Second refresh after a short delay to catch async Lakebase data
+    setTimeout(() => branchTreeProvider.refresh(), 2000);
+  });
   updateBadge();
 
   // Watch migration files for status bar + tree updates
@@ -985,11 +990,16 @@ export async function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand('lakebaseSync.commit', async () => {
       const scm = schemaScmProvider.getScm();
-      if (!scm) { return; }
-      const message = scm.inputBox.value;
+      let message = scm?.inputBox.value || '';
       if (!message.trim()) {
-        vscode.window.showWarningMessage('Enter a commit message.');
-        return;
+        // Prompt for message when SCM input box is empty (e.g. committing from sidebar)
+        const input = await vscode.window.showInputBox({
+          prompt: 'Commit message',
+          placeHolder: 'Describe your changes...',
+          validateInput: (val) => val.trim() ? undefined : 'Commit message is required',
+        });
+        if (!input) { return; }
+        message = input;
       }
       try {
         // If nothing is staged, stage all changes first (like Git SCM behavior)
@@ -998,7 +1008,7 @@ export async function activate(context: vscode.ExtensionContext) {
           await gitService.stageFile('.');
         }
         await gitService.commit(message);
-        scm.inputBox.value = '';
+        if (scm) { scm.inputBox.value = ''; }
         vscode.window.showInformationMessage('Committed successfully.');
         schemaScmProvider.refresh();
       } catch (err: any) {
@@ -1013,15 +1023,19 @@ export async function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand('lakebaseSync.commitAll', async () => {
       const scm = schemaScmProvider.getScm();
-      if (!scm) { return; }
-      const message = scm.inputBox.value;
+      let message = scm?.inputBox.value || '';
       if (!message.trim()) {
-        vscode.window.showWarningMessage('Enter a commit message.');
-        return;
+        const input = await vscode.window.showInputBox({
+          prompt: 'Commit message',
+          placeHolder: 'Describe your changes...',
+          validateInput: (val) => val.trim() ? undefined : 'Commit message is required',
+        });
+        if (!input) { return; }
+        message = input;
       }
       try {
         await gitService.commitAll(message);
-        scm.inputBox.value = '';
+        if (scm) { scm.inputBox.value = ''; }
         vscode.window.showInformationMessage('All changes committed.');
         schemaScmProvider.refresh();
       } catch (err: any) {
@@ -1746,6 +1760,26 @@ export async function activate(context: vscode.ExtensionContext) {
           return;
         }
 
+        // Check for commits ahead of main — PR requires at least one
+        try {
+          const { ahead } = await gitService.getAheadBehind();
+          if (ahead === 0) {
+            const uncommitted = (await gitService.getStagedChanges()).length + (await gitService.getUnstagedChanges()).length;
+            if (uncommitted > 0) {
+              const action = await vscode.window.showWarningMessage(
+                `No commits on this branch yet. You have ${uncommitted} uncommitted change${uncommitted !== 1 ? 's' : ''} — commit them first.`,
+                'Commit Now', 'Cancel'
+              );
+              if (action === 'Commit Now') {
+                vscode.commands.executeCommand('lakebaseSync.commit');
+              }
+              return;
+            }
+            vscode.window.showWarningMessage('No commits between main and this branch. Nothing to create a PR for.');
+            return;
+          }
+        } catch { /* ignore — let gh pr create handle it */ }
+
         // Pre-flight: ensure GitHub secrets are set and fresh for CI
         const root = getWorkspaceRoot();
         if (root) {
@@ -1852,6 +1886,12 @@ export async function activate(context: vscode.ExtensionContext) {
           }
         );
 
+        // Refresh immediately so PR view appears
+        statusBarProvider.refresh();
+        branchTreeProvider.refresh();
+        schemaScmProvider.refresh();
+        await pullRequestTreeProvider.forceRefresh();
+
         const ciMsg = lakebaseBranchId
           ? `PR created → CI will create ci-pr-<N> Lakebase branch. Dev branch: ${lakebaseBranchId}`
           : 'PR created → CI will create ci-pr-<N> Lakebase branch.';
@@ -1863,10 +1903,6 @@ export async function activate(context: vscode.ExtensionContext) {
         if (action === 'Open PR' && prUrl) {
           vscode.env.openExternal(vscode.Uri.parse(prUrl));
         }
-
-        statusBarProvider.refresh();
-        branchTreeProvider.refresh();
-        schemaScmProvider.refresh();
       } catch (err: any) {
         vscode.window.showErrorMessage(`Create PR failed: ${err.message}`);
       }
