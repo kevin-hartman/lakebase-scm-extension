@@ -2,7 +2,7 @@
   "name": "lakebase-scm-extension",
   "displayName": "Lakebase SCM Extension",
   "description": "Unified visibility into code and database branch changes for Databricks Lakebase",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "publisher": "databricks-field-eng",
   "icon": "resources/icons/extension-icon.png",
   "repository": {
@@ -56,6 +56,11 @@
           "id": "lakebaseMerges",
           "name": "Recent Merges",
           "when": "!lakebaseSync.onFeatureBranch"
+        },
+        {
+          "id": "lakebaseGraph",
+          "name": "Graph",
+          "type": "webview"
         }
       ]
     },
@@ -192,6 +197,41 @@
         "command": "lakebaseSync.switchBranchPicker",
         "title": "Create New Branch | Create Branch From | Switch Branch to...",
         "icon": "$(git-branch)"
+      },
+      {
+        "command": "lakebaseSync.graphPickRepo",
+        "title": "Select Repository",
+        "icon": "$(repo)"
+      },
+      {
+        "command": "lakebaseSync.graphPickRef",
+        "title": "Filter Branch/Ref",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "lakebaseSync.graphGoToCurrent",
+        "title": "Go to Current History Item",
+        "icon": "$(target)"
+      },
+      {
+        "command": "lakebaseSync.graphFetchAll",
+        "title": "Fetch from All Remotes",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "lakebaseSync.graphPull",
+        "title": "Pull",
+        "icon": "$(arrow-down)"
+      },
+      {
+        "command": "lakebaseSync.graphPush",
+        "title": "Push",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "lakebaseSync.graphRefresh",
+        "title": "Refresh",
+        "icon": "$(refresh)"
       },
       {
         "command": "lakebaseSync.fetch",
@@ -749,6 +789,41 @@
           "group": "3_misc@1"
         },
         {
+          "command": "lakebaseSync.graphPickRepo",
+          "when": "view == lakebaseGraph",
+          "group": "navigation@1"
+        },
+        {
+          "command": "lakebaseSync.graphPickRef",
+          "when": "view == lakebaseGraph",
+          "group": "navigation@2"
+        },
+        {
+          "command": "lakebaseSync.graphGoToCurrent",
+          "when": "view == lakebaseGraph",
+          "group": "navigation@3"
+        },
+        {
+          "command": "lakebaseSync.graphFetchAll",
+          "when": "view == lakebaseGraph",
+          "group": "navigation@4"
+        },
+        {
+          "command": "lakebaseSync.graphPull",
+          "when": "view == lakebaseGraph",
+          "group": "navigation@5"
+        },
+        {
+          "command": "lakebaseSync.graphPush",
+          "when": "view == lakebaseGraph",
+          "group": "navigation@6"
+        },
+        {
+          "command": "lakebaseSync.graphRefresh",
+          "when": "view == lakebaseGraph",
+          "group": "navigation@7"
+        },
+        {
           "command": "lakebaseSync.mergePullRequest",
           "when": "view == lakebasePR",
           "group": "navigation@1"
@@ -967,7 +1042,7 @@
     "compile": "webpack --mode production",
     "watch": "webpack --mode development --watch",
     "lint": "eslint src --ext ts",
-    "test": "mocha --require test/setup.js --require ts-node/register 'test/suite/**/*.test.ts' --timeout 10000"
+    "test": "TS_NODE_TRANSPILE_ONLY=1 mocha --require test/setup.js --require ts-node/register 'test/suite/**/*.test.ts' --timeout 10000"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.0",

@@ -12,6 +12,7 @@ import { ChangesTreeProvider } from './providers/changesTreeProvider';
 import { MigrationsTreeProvider } from './providers/migrationsTree';
 import { PullRequestTreeProvider } from './providers/pullRequestTree';
 import { MergesTreeProvider } from './providers/mergesTree';
+import { GraphWebviewProvider } from './providers/graphWebview';
 import { getConfig, getWorkspaceRoot, updateEnvConnection } from './utils/config';
 
 let gitService: GitService;
@@ -106,6 +107,25 @@ export async function activate(context: vscode.ExtensionContext) {
     new SchemaContentProvider(schemaDiffService, flywayService)
   );
 
+  // Register commit content provider for graph review diffs
+  const commitContentProvider = vscode.workspace.registerTextDocumentContentProvider(
+    'lakebase-commit',
+    {
+      provideTextDocumentContent(uri: vscode.Uri): string {
+        const ref = uri.authority; // e.g., "abc1234" or "abc1234~1"
+        const filePath = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
+        const root = getWorkspaceRoot();
+        if (!root) { return ''; }
+        try {
+          const cp = require('child_process');
+          return cp.execSync(`git show "${ref}:${filePath}"`, { cwd: root, timeout: 10000 }).toString();
+        } catch {
+          return '';
+        }
+      }
+    }
+  );
+
   // Register tree view
   const treeView = vscode.window.createTreeView('lakebaseBranches', {
     treeDataProvider: branchTreeProvider,
@@ -133,6 +153,10 @@ export async function activate(context: vscode.ExtensionContext) {
     treeDataProvider: mergesTreeProvider,
   });
 
+  // Graph webview
+  const graphWebviewProvider = new GraphWebviewProvider(context.extensionUri, lakebaseService);
+  const graphView = vscode.window.registerWebviewViewProvider('lakebaseGraph', graphWebviewProvider);
+
   // Badge count on the activity bar icon (uses the Changes view)
   const updateBadge = () => {
     const count = changesTreeProvider.getChangeCount();
@@ -143,6 +167,7 @@ export async function activate(context: vscode.ExtensionContext) {
   schemaScmProvider.onDidRefresh(() => {
     updateBadge();
     branchTreeProvider.refresh();
+    graphWebviewProvider.refresh();
     // Second refresh after a short delay to catch async Lakebase data
     setTimeout(() => branchTreeProvider.refresh(), 2000);
   });
@@ -247,8 +272,107 @@ export async function activate(context: vscode.ExtensionContext) {
     migrationsView,
     prView,
     mergesView,
+    graphView,
     migrationWatcher,
     autoBranchDisposable,
+
+    vscode.commands.registerCommand('lakebaseSync.graphPickRepo', async () => {
+      const root = getWorkspaceRoot();
+      if (!root) { return; }
+      const repoName = require('path').basename(root);
+      const items: Array<{label: string; description?: string; action: string}> = [
+        { label: '$(sparkle) Auto', description: 'Show graph for the active repository', action: 'auto' },
+        { label: `$(repo) ${repoName}`, description: root, action: 'current' },
+      ];
+      const pick = await vscode.window.showQuickPick(items, {
+        placeHolder: 'Select the repository to view, type to filter all repositories',
+      });
+      if (pick) { graphWebviewProvider.refresh(); }
+    }),
+    vscode.commands.registerCommand('lakebaseSync.graphGoToCurrent', () => {
+      graphWebviewProvider.goToCurrent();
+    }),
+    vscode.commands.registerCommand('lakebaseSync.graphPickRef', async () => {
+      const root = getWorkspaceRoot();
+      if (!root) { return; }
+      const cp = require('child_process');
+      try {
+        // Get local and remote branches
+        const localRaw = cp.execSync('git branch --format="%(refname:short)"', { cwd: root, timeout: 5000 }).toString();
+        const remoteRaw = cp.execSync('git branch -r --format="%(refname:short)"', { cwd: root, timeout: 5000 }).toString();
+        const locals = localRaw.split('\n').filter(Boolean);
+        const remotes = remoteRaw.split('\n').filter(Boolean).filter((r: string) => !r.includes('HEAD'));
+        const currentBranch = await gitService.getCurrentBranch();
+
+        const filterRefs = graphWebviewProvider.graphFilterRefs;
+        const isAll = graphWebviewProvider.showAllRefs && !filterRefs;
+        const isAuto = !graphWebviewProvider.showAllRefs && !filterRefs;
+        const selectedSet = new Set(filterRefs || []);
+
+        const items: vscode.QuickPickItem[] = [
+          { label: '$(star-full) All', description: 'All history item references', picked: isAll },
+          { label: '$(sparkle) Auto', description: 'Current history item reference(s)', picked: isAuto },
+          { label: '', kind: vscode.QuickPickItemKind.Separator },
+        ];
+        for (const b of locals) {
+          items.push({ label: `$(git-branch) ${b}`, description: b === currentBranch ? '(current)' : '', picked: selectedSet.has(b) });
+        }
+        items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
+        for (const r of remotes) {
+          items.push({ label: `$(cloud) ${r}`, picked: selectedSet.has(r) });
+        }
+
+        const picks = await vscode.window.showQuickPick(items, {
+          placeHolder: 'Select one/more history item references to view, type to filter',
+          canPickMany: true,
+        });
+        if (!picks || picks.length === 0) { return; }
+
+        const hasAll = picks.some(p => p.label.includes('All'));
+        const hasAuto = picks.some(p => p.label.includes('Auto'));
+
+        if (hasAll) {
+          (graphWebviewProvider as any).showAllRefs = true;
+          (graphWebviewProvider as any).graphFilterRefs = null;
+        } else if (hasAuto) {
+          (graphWebviewProvider as any).showAllRefs = false;
+          (graphWebviewProvider as any).graphFilterRefs = null;
+        } else {
+          // Specific branches selected — show all refs but filter in display
+          (graphWebviewProvider as any).showAllRefs = true;
+          (graphWebviewProvider as any).graphFilterRefs = picks.map(p =>
+            p.label.replace('$(git-branch) ', '').replace('$(cloud) ', '')
+          );
+        }
+        graphWebviewProvider.refresh();
+      } catch { /* ignore */ }
+    }),
+    vscode.commands.registerCommand('lakebaseSync.graphFetchAll', async () => {
+      const root = getWorkspaceRoot();
+      if (!root) { return; }
+      try {
+        require('child_process').execSync('git fetch --all', { cwd: root, timeout: 30000 });
+        vscode.window.showInformationMessage('Fetched from all remotes.');
+        graphWebviewProvider.refresh();
+      } catch (err: any) { vscode.window.showErrorMessage(`Fetch failed: ${err.message}`); }
+    }),
+    vscode.commands.registerCommand('lakebaseSync.graphPull', async () => {
+      try {
+        await gitService.pull();
+        vscode.window.showInformationMessage('Pulled successfully.');
+        graphWebviewProvider.refresh();
+      } catch (err: any) { vscode.window.showErrorMessage(`Pull failed: ${err.message}`); }
+    }),
+    vscode.commands.registerCommand('lakebaseSync.graphPush', async () => {
+      try {
+        await gitService.push();
+        vscode.window.showInformationMessage('Pushed successfully.');
+        graphWebviewProvider.refresh();
+      } catch (err: any) { vscode.window.showErrorMessage(`Push failed: ${err.message}`); }
+    }),
+    vscode.commands.registerCommand('lakebaseSync.graphRefresh', () => {
+      graphWebviewProvider.refresh();
+    }),
 
     vscode.commands.registerCommand('lakebaseSync.toggleChangesTree', () => {
       if (!changesTreeProvider.viewAsTree) { changesTreeProvider.toggleViewMode(); }

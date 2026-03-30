@@ -56,7 +56,19 @@ export class SchemaContentProvider implements vscode.TextDocumentContentProvider
       const migrations = this.flywayService.listMigrations();
       if (migrations.length > 0) {
         const changes = this.flywayService.parseMigrationSchemaChanges(migrations);
-        // Accumulate columns across all migrations for this table
+
+        if (side === 'production') {
+          // Production side: only show DDL for tables that are MODIFIED (existed before)
+          // For CREATED tables, production should be empty (table didn't exist)
+          const isCreated = changes.some(c => c.tableName === tableName && c.type === 'created');
+          if (isCreated) { return ''; }
+          // For modified tables, we don't have the "before" state from migrations alone
+          // Return empty to show the full diff as additions
+          const isModified = changes.some(c => c.tableName === tableName && c.type === 'modified');
+          if (isModified) { return ''; }
+        }
+
+        // Branch side: accumulate all columns from migrations
         const columns: Array<{ name: string; dataType: string }> = [];
         for (const c of changes) {
           if (c.tableName === tableName) {

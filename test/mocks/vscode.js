@@ -96,6 +96,7 @@ const window = {
     dispose() {},
   }),
   withProgress: async (opts, task) => task({ report() {} }),
+  registerWebviewViewProvider: (id, provider) => ({ dispose() {} }),
   createTerminal: (opts) => ({ show() {}, sendText() {}, dispose() {} }),
   onDidCloseTerminal: new EventEmitter().event,
   createOutputChannel: () => ({ appendLine() {}, show() {}, dispose() {} }),
@@ -145,6 +146,7 @@ module.exports = {
   Disposable,
   env: {
     openExternal: async () => true,
+    clipboard: { writeText: async () => {}, readText: async () => '' },
   },
   window,
   workspace,

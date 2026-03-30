@@ -105,13 +105,15 @@ export class ChangesTreeProvider implements vscode.TreeDataProvider<ChangeTreeIt
     items.push(codeItem);
 
     const lakebase = this.scmProvider.getLakebase();
-    if (lakebase.length > 0) {
+    // Filter out status items (lakebase-prod://status/*) — only count actual schema changes
+    const schemaChanges = lakebase.filter(s => !s.resourceUri.toString().includes('lakebase-prod://'));
+    if (schemaChanges.length > 0) {
       const lbItem = new ChangeTreeItem(
         'Lakebase',
         vscode.TreeItemCollapsibleState.Expanded,
         'lakebase'
       );
-      lbItem.description = `${lakebase.length}`;
+      lbItem.description = `${schemaChanges.length}`;
       items.push(lbItem);
     }
 
@@ -119,7 +121,7 @@ export class ChangesTreeProvider implements vscode.TreeDataProvider<ChangeTreeIt
   }
 
   private getLakebaseChildren(): ChangeTreeItem[] {
-    return this.scmProvider.getLakebase().map(state => {
+    return this.scmProvider.getLakebase().filter(s => !s.resourceUri.toString().includes('lakebase-prod://')).map(state => {
       const name = state.resourceUri.path.split('/').pop() || state.resourceUri.path;
       const item = new ChangeTreeItem(name, vscode.TreeItemCollapsibleState.None, undefined, state);
       item.resourceUri = state.resourceUri;
@@ -306,8 +308,9 @@ export class ChangesTreeProvider implements vscode.TreeDataProvider<ChangeTreeIt
   }
 
   getChangeCount(): number {
+    const schemaChanges = this.scmProvider.getLakebase().filter(s => !s.resourceUri.toString().includes('lakebase-prod://'));
     return this.scmProvider.getStaged().length +
       this.scmProvider.getCode().length +
-      this.scmProvider.getLakebase().length;
+      schemaChanges.length;
   }
 }
