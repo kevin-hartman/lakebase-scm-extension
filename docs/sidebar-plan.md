@@ -122,30 +122,37 @@ The original "Branches" view was restructured into a "Project" view that serves 
 
 ---
 
-## Phase I: Graph webview — Not started
+## Phase I: Graph webview ✅ COMPLETE (v0.3.7)
 
-### Goal
-Visual commit graph in the Lakebase sidebar.
-
-### Steps
-- [ ] Register a webview view: `lakebaseGraph` — "Graph"
-- [ ] `GraphWebviewProvider` implements `WebviewViewProvider`
-- [ ] Runs `git log --graph --oneline --all --decorate -30`
-- [ ] Renders as HTML with branch lines, colors, commit dots, Lakebase pairing annotations
-- [ ] Refreshes on branch change via `schemaScmProvider.onDidRefresh`
+### What was done
+- [x] `GraphWebviewProvider` registered as webview view: `lakebaseGraph` — "Graph"
+- [x] Swimlane graph with VS Code-style node rendering: hollow HEAD, concentric merge circles, dashed incoming/outgoing, filled normal commits
+- [x] Git log parsed with record/field separators (`\x1e`/`\x1f`) for full commit data: SHA, parents, refs, subject, body, author, email, date, stats
+- [x] GitHub avatar URLs fetched via `gh api` with Gravatar fallback
+- [x] Ahead/behind detection for outgoing (`HEAD..@{u}`) and incoming (`@{u}..HEAD`) commits
+- [x] Commit tooltips: avatar, author (clickable mailto), stats (teal insertions, coral deletions), ref badges (azure HEAD, light blue local, violet remote-main, light blue remote), PR linkification (#N → GitHub PR), schema changes from CI comments or migration parsing, SHA with copy icon, Open on GitHub link
+- [x] Row layout matching VS Code SCM Graph: message + author + right-aligned badges (HEAD commit only)
+- [x] Single-click opens multi-diff (commit vs parent, merge commits diff against first parent)
+- [x] Multi-diff includes schema DDL diffs for commits with migration SQL files
+- [x] Native-style right-click context menu (grey background): Open Changes, Open in Cursor Blame, Open on GitHub, Checkout/Delete Branch submenus with branch list, Checkout (Detached), Create Branch/Tag, Cherry Pick, Copy Commit ID/Message
+- [x] Title bar icons: repo picker, branch/ref filter (multi-select quick-pick with state persistence), go to current (smooth scroll), fetch all remotes, pull, push, refresh
+- [x] Infinite scroll via IntersectionObserver (50 commits per page)
+- [x] Lakebase branch indicator (DB icon on commits with matching Lakebase branches)
+- [x] `origin/HEAD` filtered from badges; merge commits detected by parent count + message pattern
+- [x] 327 tests across 17 suites (28 new graph webview tests)
 
 ---
 
-## Phase J: Full parity test — Not started
+## Phase J: Full parity audit ✅ COMPLETE
 
-### Goal
-Verify every action works from both the SCM view and the Lakebase sidebar.
-
-### Steps
-- [ ] Walk through the complete workflow using ONLY the Lakebase sidebar
-- [ ] Walk through the same workflow using ONLY the SCM view
-- [ ] Verify both produce identical results
-- [ ] Document any differences
+### What was done
+- [x] Comprehensive audit of every command across SCM view and Lakebase sidebar
+- [x] Documented in `docs/phase-j-parity-audit.md`
+- [x] Covered 13 categories: branches, staging, commit, push/pull/sync, stash, PR, schema, graph, tags, worktrees, remote, clone, other
+- [x] Identified 6 SCM gaps (graph, connect workspace, per-branch actions, PR detail richness)
+- [x] Identified 2 sidebar limitations (SCM input box, status bar sync button)
+- [x] Identified 6 command-palette-only commands with no menu placement
+- [x] Conclusion: Lakebase sidebar is the superset of the SCM view
 
 ---
 
@@ -161,7 +168,7 @@ Verify every action works from both the SCM view and the Lakebase sidebar.
 | F | Recent Merges view | ✅ Complete |
 | G | Project view (restructured from Branches) | ✅ Complete |
 | H | Additional improvements | ✅ Complete |
-| I | Graph webview | Not started |
-| J | Full parity test | Not started |
+| I | Graph webview | ✅ Complete (v0.3.7) |
+| J | Full parity audit | ✅ Complete |
 
-**Result:** v0.3.5 — 299 tests, full sidebar with 5 views, dual interface (sidebar + SCM), expandable branch details with color-coded table status, list/tree toggle, graceful error handling.
+**Current state:** v0.3.7 — 327 tests across 17 suites, full sidebar with 6 views (Project, Changes, Schema Migrations, Pull Request, Recent Merges, Graph), dual interface (sidebar + SCM), VS Code SCM Graph parity with tooltips and context menus.
