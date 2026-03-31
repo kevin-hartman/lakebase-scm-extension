@@ -1,5 +1,6 @@
 import * as cp from 'child_process';
 import { getConfig } from '../utils/config';
+import { exec } from '../utils/exec';
 
 export interface LakebaseBranch {
   /** Internal API uid (e.g. br-red-thunder-d24muck6) */
@@ -37,30 +38,8 @@ export interface DatabricksProfile {
   lakebaseProjects?: Array<{ uid: string; displayName: string }>;
 }
 
-function exec(command: string, cwd?: string, env?: Record<string, string>): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const options: cp.ExecOptions = { cwd, timeout: 30000 };
-    if (env) {
-      options.env = { ...process.env, ...env };
-    }
-    cp.exec(command, options, (err, stdout, stderr) => {
-      if (err) {
-        const msg = String(stderr || err.message);
-        // Tag auth/workspace errors so callers can detect them
-        if (msg.includes('project id not found') || msg.includes('not authenticated') ||
-            msg.includes('PERMISSION_DENIED') || msg.includes('401') ||
-            msg.includes('invalid token') || msg.includes('no configuration')) {
-          const authErr = new Error(msg);
-          (authErr as any).isAuthError = true;
-          reject(authErr);
-          return;
-        }
-        reject(new Error(`${command}: ${msg}`));
-        return;
-      }
-      resolve(String(stdout).trim());
-    });
-  });
+function lakebaseExec(command: string, cwd?: string, env?: Record<string, string>): Promise<string> {
+  return exec(command, { cwd, env, timeout: 30000, tagAuthErrors: true });
 }
 
 function sanitizeBranchName(gitBranch: string): string {
@@ -105,12 +84,12 @@ export class LakebaseService {
 
   /** Run a databricks CLI command, injecting DATABRICKS_HOST as env var */
   private dbcli(args: string, cwd?: string): Promise<string> {
-    return exec(`databricks ${args}`, cwd, this.cliEnv());
+    return lakebaseExec(`databricks ${args}`, cwd, this.cliEnv());
   }
 
   async isAvailable(): Promise<boolean> {
     try {
-      await exec('databricks --version');
+      await lakebaseExec('databricks --version');
       return true;
     } catch {
       return false;
@@ -120,7 +99,7 @@ export class LakebaseService {
   /** List all configured Databricks CLI profiles from ~/.databrickscfg */
   async listProfiles(): Promise<DatabricksProfile[]> {
     try {
-      const raw = await exec('databricks auth profiles -o json');
+      const raw = await lakebaseExec('databricks auth profiles -o json');
       const parsed = JSON.parse(raw);
       const profiles: any[] = parsed.profiles || [];
       return profiles.map(p => ({
@@ -153,7 +132,7 @@ export class LakebaseService {
           return { ...p, hasLakebase: false, lakebaseProjects: [] };
         }
         try {
-          const raw = await exec(
+          const raw = await lakebaseExec(
             `databricks postgres list-projects -o json`,
             undefined,
             { DATABRICKS_HOST: p.host }
@@ -409,6 +388,20 @@ export class LakebaseService {
       })
     );
     return enriched;
+  }
+
+  /**
+   * Sync connection for a branch: get endpoint, get credential, update .env.
+   * Encapsulates the 3-step pattern used in 7 places across extension.ts.
+   * @returns Connection info, or undefined if endpoint is not available.
+   */
+  async syncConnection(branchId: string): Promise<{ host: string; branchId: string; username: string; password: string } | undefined> {
+    const { updateEnvConnection } = require('../utils/config');
+    const ep = await this.getEndpoint(branchId);
+    if (!ep?.host) { return undefined; }
+    const cred = await this.getCredential(branchId);
+    updateEnvConnection({ host: ep.host, branchId, username: cred.email, password: cred.token });
+    return { host: ep.host, branchId, username: cred.email, password: cred.token };
   }
 
   /**

@@ -13,7 +13,9 @@ import { MigrationsTreeProvider } from './providers/migrationsTree';
 import { PullRequestTreeProvider } from './providers/pullRequestTree';
 import { MergesTreeProvider } from './providers/mergesTree';
 import { GraphWebviewProvider } from './providers/graphWebview';
-import { getConfig, getWorkspaceRoot, updateEnvConnection } from './utils/config';
+import { getConfig, getWorkspaceRoot } from './utils/config';
+import { isMainBranch } from './utils/theme';
+import { buildDiffTuples, DiffTuple } from './utils/diffBuilder';
 
 let gitService: GitService;
 let lakebaseService: LakebaseService;
@@ -192,7 +194,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.executeCommand('setContext', 'lakebaseSync.onFeatureBranch', onFeature);
     vscode.commands.executeCommand('setContext', 'lakebaseSync.isRebasing', await gitService.isRebasing());
 
-    if (!newBranch || newBranch === 'main' || newBranch === 'master') { return; }
+    if (!newBranch || isMainBranch(newBranch)) { return; }
 
     // Clear schema cache — new branch may have different schema
     schemaDiffService.clearCache();
@@ -204,16 +206,7 @@ export async function activate(context: vscode.ExtensionContext) {
       const existing = await lakebaseService.getBranchByName(newBranch);
       if (existing) {
         // Branch exists — just refresh credentials and update .env
-        const ep = await lakebaseService.getEndpoint(existing.branchId);
-        if (ep?.host) {
-          const cred = await lakebaseService.getCredential(existing.branchId);
-          updateEnvConnection({
-            host: ep.host,
-            branchId: existing.branchId,
-            username: cred.email,
-            password: cred.token,
-          });
-        }
+        await lakebaseService.syncConnection(existing.branchId);
         return;
       }
 
@@ -233,21 +226,8 @@ export async function activate(context: vscode.ExtensionContext) {
           const branch = await lakebaseService.createBranch(newBranch);
           if (!branch) { return undefined; }
 
-          progress.report({ message: 'Getting endpoint...' });
-          const ep = await lakebaseService.getEndpoint(branch.branchId);
-          if (!ep?.host) { return branch; }
-
-          progress.report({ message: 'Refreshing credentials...' });
-          const cred = await lakebaseService.getCredential(branch.branchId);
-
-          progress.report({ message: 'Updating connection config...' });
-          updateEnvConnection({
-            host: ep.host,
-            branchId: branch.branchId,
-            username: cred.email,
-            password: cred.token,
-          });
-
+          progress.report({ message: 'Syncing connection...' });
+          await lakebaseService.syncConnection(branch.branchId);
           return branch;
         }
       );
@@ -410,7 +390,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand('lakebaseSync.createBranch', async () => {
       const gitBranch = await gitService.getCurrentBranch();
-      if (!gitBranch || gitBranch === 'main' || gitBranch === 'master') {
+      if (!gitBranch || isMainBranch(gitBranch)) {
         vscode.window.showWarningMessage('Cannot create a Lakebase branch for main/master.');
         return;
       }
@@ -462,7 +442,7 @@ export async function activate(context: vscode.ExtensionContext) {
         placeHolder: 'feature/my-feature',
         validateInput: (val) => {
           if (!val.trim()) { return 'Branch name is required'; }
-          if (val === 'main' || val === 'master') { return 'Cannot branch from main/master with this name'; }
+          if (isMainBranch(val)) { return 'Cannot branch from main/master with this name'; }
           return undefined;
         },
       });
@@ -494,21 +474,8 @@ export async function activate(context: vscode.ExtensionContext) {
             }
 
             // 3. Get endpoint and credentials
-            progress.report({ message: 'Getting database endpoint...' });
-            const ep = await lakebaseService.getEndpoint(lb.branchId);
-
-            if (ep?.host) {
-              progress.report({ message: 'Refreshing credentials...' });
-              const cred = await lakebaseService.getCredential(lb.branchId);
-
-              progress.report({ message: 'Updating connection config...' });
-              updateEnvConnection({
-                host: ep.host,
-                branchId: lb.branchId,
-                username: cred.email,
-                password: cred.token,
-              });
-            }
+            progress.report({ message: 'Syncing connection...' });
+            await lakebaseService.syncConnection(lb.branchId);
 
             vscode.window.showInformationMessage(
               `Branch "${branchName}" created — code + database ready.`
@@ -578,7 +545,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand('lakebaseSync.refreshCredentials', async () => {
       const gitBranch = await gitService.getCurrentBranch();
-      const isMain = gitBranch === 'main' || gitBranch === 'master';
+      const isMain = isMainBranch(gitBranch);
 
       let branchId: string;
       if (isMain) {
@@ -810,7 +777,7 @@ export async function activate(context: vscode.ExtensionContext) {
       if (!branchUid) {
         try {
           const gitBranch = await gitService.getCurrentBranch();
-          const isMain = gitBranch === 'main' || gitBranch === 'master';
+          const isMain = isMainBranch(gitBranch);
           const lb = isMain
             ? await lakebaseService.getDefaultBranch()
             : await lakebaseService.getBranchByName(gitBranch);
@@ -837,7 +804,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
 
       const targetGitBranch = item.gitBranch.name;
-      const isMain = targetGitBranch === 'main' || targetGitBranch === 'master';
+      const isMain = isMainBranch(targetGitBranch);
 
       // Suppress automatic refreshes until the full switch completes
       statusBarProvider.suppressRefresh = true;
@@ -889,10 +856,10 @@ export async function activate(context: vscode.ExtensionContext) {
               return;
             }
 
-            // 3. Get endpoint
-            progress.report({ message: 'Getting database endpoint...' });
-            const endpoint = await lakebaseService.getEndpoint(lb.branchId);
-            if (!endpoint?.host) {
+            // 3-5. Sync connection (endpoint + credential + .env)
+            progress.report({ message: 'Syncing connection...' });
+            const conn = await lakebaseService.syncConnection(lb.branchId);
+            if (!conn) {
               vscode.window.showWarningMessage(
                 `Switched to ${targetGitBranch}. DB branch exists but no endpoint available.`
               );
@@ -900,19 +867,6 @@ export async function activate(context: vscode.ExtensionContext) {
               branchTreeProvider.refresh();
               return;
             }
-
-            // 4. Get credential
-            progress.report({ message: 'Refreshing credentials...' });
-            const cred = await lakebaseService.getCredential(lb.branchId);
-
-            // 5. Update .env and application-local.properties
-            progress.report({ message: 'Updating connection config...' });
-            updateEnvConnection({
-              host: endpoint.host,
-              branchId: lb.branchId,
-              username: cred.email,
-              password: cred.token,
-            });
 
             // 6. Run Flyway migrate (applies only migrations present on this branch)
             progress.report({ message: 'Applying migrations...' });
@@ -976,7 +930,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const title = `Branch Review: ${currentBranch}`;
 
         // vscode.changes expects [labelUri, originalUri, modifiedUri][] — 3-element tuples
-        const changes: [vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined][] = [];
+        const changes: DiffTuple[] = [];
 
         // Collect code diffs
         const fileChanges = await gitService.getChangedFiles();
@@ -1357,7 +1311,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
 
         function getLakebaseInfo(branchName: string): string {
-          const isMain = branchName === 'main' || branchName === 'master';
+          const isMain = isMainBranch(branchName);
           const sanitized = lakebaseService.sanitizeBranchName(branchName);
           if (isMain) {
             return defaultLb ? `→ ${defaultLb.branchId} (default)` : '→ no Lakebase';
@@ -1640,28 +1594,8 @@ export async function activate(context: vscode.ExtensionContext) {
             if (root) {
               try {
                 const cp = require('child_process');
-                const fs = require('fs');
-                const path = require('path');
-                const envContent = fs.readFileSync(path.join(root, '.env'), 'utf-8');
-                const getEnvVal = (key: string) => {
-                  const match = envContent.match(new RegExp(`^${key}=(.+)$`, 'm'));
-                  return match ? match[1].trim() : '';
-                };
-                const host = getEnvVal('DATABRICKS_HOST');
-                const projectId = getEnvVal('LAKEBASE_PROJECT_ID');
-                if (host) { cp.execSync(`gh secret set DATABRICKS_HOST --body "${host}"`, { cwd: root, timeout: 10000 }); }
-                if (projectId) { cp.execSync(`gh secret set LAKEBASE_PROJECT_ID --body "${projectId}"`, { cwd: root, timeout: 10000 }); }
-                try {
-                  const tokenRaw = cp.execSync(
-                    `databricks tokens create --comment "CI merge" --lifetime-seconds 3600 -o json`,
-                    { cwd: root, timeout: 15000, env: { ...process.env, DATABRICKS_HOST: host } }
-                  ).toString();
-                  const token = JSON.parse(tokenRaw).token_value || JSON.parse(tokenRaw).token || '';
-                  if (token) { cp.execSync(`gh secret set DATABRICKS_TOKEN --body "${token}"`, { cwd: root, timeout: 10000 }); }
-                } catch {
-                  const existingToken = getEnvVal('DATABRICKS_TOKEN');
-                  if (existingToken) { cp.execSync(`gh secret set DATABRICKS_TOKEN --body "${existingToken}"`, { cwd: root, timeout: 10000 }); }
-                }
+                const { syncCiSecrets } = require('./utils/ciSecrets');
+                syncCiSecrets(root, 'CI merge', 3600);
               } catch { /* non-fatal */ }
             }
 
@@ -1879,7 +1813,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('lakebaseSync.createPullRequest', async () => {
       try {
         const currentBranch = await gitService.getCurrentBranch();
-        if (!currentBranch || currentBranch === 'main' || currentBranch === 'master') {
+        if (!currentBranch || isMainBranch(currentBranch)) {
           vscode.window.showWarningMessage('Cannot create a PR from main/master.');
           return;
         }
@@ -1928,39 +1862,8 @@ export async function activate(context: vscode.ExtensionContext) {
             await vscode.window.withProgress(
               { location: vscode.ProgressLocation.Notification, title: 'Syncing CI secrets...' },
               async () => {
-                const envConfig = require('fs').readFileSync(require('path').join(root, '.env'), 'utf-8');
-                const getEnvVal = (key: string) => {
-                  const match = envConfig.match(new RegExp(`^${key}=(.+)$`, 'm'));
-                  return match ? match[1].trim() : '';
-                };
-
-                const host = getEnvVal('DATABRICKS_HOST');
-                const projectId = getEnvVal('LAKEBASE_PROJECT_ID');
-
-                if (host) {
-                  cp.execSync(`gh secret set DATABRICKS_HOST --body "${host}"`, { cwd: root, timeout: 10000 });
-                }
-                if (projectId) {
-                  cp.execSync(`gh secret set LAKEBASE_PROJECT_ID --body "${projectId}"`, { cwd: root, timeout: 10000 });
-                }
-
-                // Generate a fresh token for CI
-                try {
-                  const tokenRaw = cp.execSync(
-                    `databricks tokens create --comment "GitHub Actions CI" --lifetime-seconds 86400 -o json`,
-                    { cwd: root, timeout: 15000, env: { ...process.env, DATABRICKS_HOST: host } }
-                  ).toString();
-                  const token = JSON.parse(tokenRaw).token_value || JSON.parse(tokenRaw).token || '';
-                  if (token) {
-                    cp.execSync(`gh secret set DATABRICKS_TOKEN --body "${token}"`, { cwd: root, timeout: 10000 });
-                  }
-                } catch {
-                  // Token creation may fail — use existing if available
-                  const existingToken = getEnvVal('DATABRICKS_TOKEN');
-                  if (existingToken) {
-                    cp.execSync(`gh secret set DATABRICKS_TOKEN --body "${existingToken}"`, { cwd: root, timeout: 10000 });
-                  }
-                }
+                const { syncCiSecrets } = require('./utils/ciSecrets');
+                syncCiSecrets(root, 'GitHub Actions CI', 86400);
               }
             );
             vscode.window.showInformationMessage('CI secrets synced.');
@@ -2050,11 +1953,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 const lb = await lakebaseService.getBranchByName(currentBranch);
                 if (lb) {
                   lakebaseBranchId = lb.branchId;
-                  const ep = await lakebaseService.getEndpoint(lb.branchId);
-                  if (ep?.host) {
-                    const cred = await lakebaseService.getCredential(lb.branchId);
-                    updateEnvConnection({ host: ep.host, branchId: lb.branchId, username: cred.email, password: cred.token });
-                  }
+                  await lakebaseService.syncConnection(lb.branchId);
                 }
               } catch { /* Lakebase sync is optional */ }
             }
@@ -2083,13 +1982,7 @@ export async function activate(context: vscode.ExtensionContext) {
             if (currentBranch && currentBranch !== 'main' && currentBranch !== 'master') {
               try {
                 const lb = await lakebaseService.getBranchByName(currentBranch);
-                if (lb) {
-                  const ep = await lakebaseService.getEndpoint(lb.branchId);
-                  if (ep?.host) {
-                    const cred = await lakebaseService.getCredential(lb.branchId);
-                    updateEnvConnection({ host: ep.host, branchId: lb.branchId, username: cred.email, password: cred.token });
-                  }
-                }
+                if (lb) { await lakebaseService.syncConnection(lb.branchId); }
               } catch { /* Lakebase sync is optional */ }
             }
           }
@@ -2618,23 +2511,14 @@ export async function activate(context: vscode.ExtensionContext) {
         const currentBranch = await gitService.getCurrentBranch();
         if (!currentBranch) { return; }
 
-        const isMain = currentBranch === 'main' || currentBranch === 'master';
+        const isMain = isMainBranch(currentBranch);
         const lb = isMain
           ? await lakebaseService.getDefaultBranch()
           : await lakebaseService.getBranchByName(currentBranch);
 
         if (!lb) { return; }
 
-        const ep = await lakebaseService.getEndpoint(lb.branchId);
-        if (!ep?.host) { return; }
-
-        const cred = await lakebaseService.getCredential(lb.branchId);
-        updateEnvConnection({
-          host: ep.host,
-          branchId: lb.branchId,
-          username: cred.email,
-          password: cred.token,
-        });
+        await lakebaseService.syncConnection(lb.branchId);
       } catch {
         // Silently fail — don't interrupt the user
       }

@@ -300,7 +300,12 @@ Available from Command Palette and Project view title bar.
 49. **Conflict detection** — Table-level conflict warnings
 50. **Branch comparison** — Any-to-any Lakebase branch diff
 51. **Cursor AI context** — Schema-aware code generation
-52. **Graph webview** — Visual commit graph with branch lines, Lakebase pairing annotations, and clickable commits
+52. **Graph webview** — Visual commit graph with branch lines, Lakebase pairing annotations, and clickable commits ✅ (v0.3.7)
+53. **Adopt STATUS_ICONS/STATUS_COLORS from theme.ts** — Replace all inline icon/color object literals in schemaScmProvider.ts (3 maps), branchTreeProvider.ts (3 maps + inline assignments), and pullRequestTree.ts (1 map) with imports from `src/utils/theme.ts`. The constants exist but are not yet consumed by callers.
+54. **Evaluate pg_dump vs migration SQL parsing consolidation** — `schemaDiffService.parsePgDumpTables` and `FlywayService.parseSql` both parse CREATE TABLE statements but from different sources and with different regex patterns. Determine whether these should share a common parser or remain separate. Investigation needed:
+    - `parsePgDumpTables` parses `pg_dump --schema-only` output: no `IF NOT EXISTS`, no `public.` prefix, includes `CONSTRAINT` lines, output is a complete DDL dump of all tables
+    - `FlywayService.parseSql` parses hand-written migration SQL: includes `IF NOT EXISTS`, may have `public.` prefix, mixed with ALTER/DROP statements, output is incremental changes
+    - Key question: are the regex differences driven by actual format differences in pg_dump vs migration SQL, or are they accidental divergence that should be unified?
 
 ---
 

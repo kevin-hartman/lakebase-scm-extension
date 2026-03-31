@@ -4,6 +4,8 @@ import { getWorkspaceRoot } from '../utils/config';
 import { LakebaseService, LakebaseBranch } from '../services/lakebaseService';
 import { GitService } from '../services/gitService';
 import { GraphService } from '../services/graphService';
+import { FlywayService } from '../services/flywayService';
+import { buildDiffTuples, sortMigrationsToEnd, DiffTuple } from '../utils/diffBuilder';
 
 interface Commit {
   sha: string;
@@ -234,37 +236,22 @@ export class GraphWebviewProvider implements vscode.WebviewViewProvider {
                 for (const mf of migFiles) {
                   try {
                     const sql = await this.gitService.getFileAtRef(msg.sha, mf.path);
-                    // CREATE TABLE
-                    const createRx = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?(\w+)\s*\(([\s\S]*?)\);/gi;
-                    let cm: RegExpExecArray | null;
-                    while ((cm = createRx.exec(sql)) !== null) {
-                      if (cm[1] === 'flyway_schema_history' || seen.has(cm[1])) { continue; }
-                      seen.add(cm[1]);
-                      const cols: Array<{name: string; type: string; change: string}> = [];
-                      for (const line of cm[2].split('\n')) {
-                        const colM = line.trim().match(/^(\w+)\s+(.+?)(?:,?\s*$)/);
-                        if (colM && !/^(CONSTRAINT|PRIMARY|FOREIGN|UNIQUE|CHECK)\b/i.test(colM[2])) {
-                          cols.push({ name: colM[1], type: colM[2].replace(/,\s*$/, ''), change: 'add' });
+                    const changes = FlywayService.parseSql(sql);
+                    for (const c of changes) {
+                      if (seen.has(c.tableName)) {
+                        // Merge columns into existing table entry (e.g. ALTER on already-seen table)
+                        const existing = tables.find((t: any) => t.name === c.tableName);
+                        if (existing && c.columns.length > 0) {
+                          existing.columns.push(...c.columns.map(col => ({ name: col.name, type: col.dataType, change: c.type === 'removed' ? 'del' : 'add' })));
                         }
-                      }
-                      tables.push({ name: cm[1], status: 'CREATED', columns: cols });
-                    }
-                    // ALTER TABLE ADD COLUMN
-                    const alterRx = /ALTER\s+TABLE\s+(?:public\.)?(\w+)\s+ADD\s+(?:COLUMN\s+)?(\w+)\s+(.+?);/gi;
-                    while ((cm = alterRx.exec(sql)) !== null) {
-                      const tName = cm[1], cName = cm[2], cType = cm[3];
-                      if (seen.has(tName)) {
-                        const t = tables.find((x: any) => x.name === tName);
-                        if (t) { t.columns.push({ name: cName, type: cType, change: 'add' }); }
                       } else {
-                        seen.add(tName);
-                        tables.push({ name: tName, status: 'MODIFIED', columns: [{ name: cName, type: cType, change: 'add' }] });
+                        seen.add(c.tableName);
+                        tables.push({
+                          name: c.tableName,
+                          status: c.type === 'created' ? 'CREATED' : c.type === 'modified' ? 'MODIFIED' : 'REMOVED',
+                          columns: c.columns.map(col => ({ name: col.name, type: col.dataType, change: c.type === 'removed' ? 'del' : 'add' })),
+                        });
                       }
-                    }
-                    // DROP TABLE
-                    const dropRx = /DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:public\.)?(\w+)/gi;
-                    while ((cm = dropRx.exec(sql)) !== null) {
-                      if (!seen.has(cm[1])) { seen.add(cm[1]); tables.push({ name: cm[1], status: 'REMOVED', columns: [] }); }
                     }
                   } catch { /* skip file */ }
                 }
@@ -540,7 +527,7 @@ export class GraphWebviewProvider implements vscode.WebviewViewProvider {
       }).join('');
       const dbIcon = hasLakebase ? '<span class="db-icon" title="Lakebase branch">&#x1F5C3;</span>' : '';
 
-      return `<div class="row${c.isHead ? ' sel' : ''}" data-s="${c.sha}" data-m="${this.e(c.message)}" data-fs="${this.e(c.fullSha)}" data-au="${this.e(c.author)}" data-ae="${this.e(c.authorEmail)}" data-av="${this.e(c.avatarUrl)}" data-dt="${this.e(c.date)}" data-rt="${this.e(c.time)}" data-fm="${this.e(c.fullMessage)}" data-st="${this.e(c.stats)}" data-rf="${this.e(c.refs.join(', '))}">
+      return `<div class="row${c.isHead ? ' sel' : ''}"${c.isHead ? ' data-head="true"' : ''} data-s="${c.sha}" data-m="${this.e(c.message)}" data-fs="${this.e(c.fullSha)}" data-au="${this.e(c.author)}" data-ae="${this.e(c.authorEmail)}" data-av="${this.e(c.avatarUrl)}" data-dt="${this.e(c.date)}" data-rt="${this.e(c.time)}" data-fm="${this.e(c.fullMessage)}" data-st="${this.e(c.stats)}" data-rf="${this.e(c.refs.join(', '))}">
 <svg class="g" width="${width}" height="${SLH}" xmlns="http://www.w3.org/2000/svg">${svg}</svg>
 ${dbIcon}<span class="msg">${this.e(c.message)}</span><span class="author">${this.e(c.author)}</span><span class="spacer"></span>${c.isHead && badges ? `<span class="badges">${badges}</span>` : ''}
 </div>`;
@@ -659,9 +646,9 @@ window.addEventListener('message',function(ev){
     return;
   }
   if(msg.type==='goToCurrent'){
-    var sel=document.querySelector('.row.sel');
-    if(!sel){sel=document.querySelector('.row')}
-    if(sel){sel.scrollIntoView({behavior:'smooth',block:'center'});document.querySelectorAll('.row.sel').forEach(function(r){r.classList.remove('sel')});sel.classList.add('sel')}
+    var head=document.querySelector('.row[data-head="true"]');
+    if(!head){head=document.querySelector('.row')}
+    if(head){head.scrollIntoView({behavior:'smooth',block:'center'});document.querySelectorAll('.row.sel').forEach(function(r){r.classList.remove('sel')});head.classList.add('sel')}
     return;
   }
   if(msg.type==='schemaData'){
@@ -797,33 +784,17 @@ ctx.querySelectorAll('.ctx-item').forEach(el=>{
     try {
       const commitFiles = await this.gitService.getCommitFiles(sha);
       if (!commitFiles.length) { vscode.window.showInformationMessage('No file changes in this commit.'); return; }
-      const changes: [vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined][] = [];
-      for (const f of commitFiles) {
-        const orig = vscode.Uri.parse(`lakebase-commit://${sha}~1/${f.path}`);
-        const mod = vscode.Uri.parse(`lakebase-commit://${sha}/${f.path}`);
-        const label = vscode.Uri.file(`${root}/${f.path}`);
-        changes.push([label, orig, mod]);
-      }
-      if (!changes.length) { vscode.window.showInformationMessage('No file changes.'); return; }
+      const allTuples = buildDiffTuples(commitFiles, {
+        makeOrigUri: (p) => vscode.Uri.parse(`lakebase-commit://${sha}~1/${p}`),
+        makeModUri: (p) => vscode.Uri.parse(`lakebase-commit://${sha}/${p}`),
+        makeLabelUri: (p) => vscode.Uri.file(`${root}/${p}`),
+      });
 
-      // Move migration SQL files to end, then append schema-content diffs
-      // matching the branch review format (code first, schema DDL diffs at end)
-      const migPaths = new Set(commitFiles
-        .map(f => f.path)
-        .filter(fp => /V\d+.*\.sql$/i.test(fp)));
+      // Sort: code first, migrations at end, then append schema DDL diffs
+      const { code, migrations } = sortMigrationsToEnd(allTuples);
+      const changes: DiffTuple[] = [...code, ...migrations];
+      const migPaths = new Set(commitFiles.map(f => f.path).filter(fp => /V\d+.*\.sql$/i.test(fp)));
       if (migPaths.size > 0) {
-        const codeChanges: typeof changes = [];
-        const schemaChanges: typeof changes = [];
-        for (const c of changes) {
-          const path = c[0].fsPath || c[0].path;
-          if ([...migPaths].some(mp => path.includes(mp.split('/').pop() || ''))) {
-            schemaChanges.push(c);
-          } else {
-            codeChanges.push(c);
-          }
-        }
-        changes.length = 0;
-        changes.push(...codeChanges, ...schemaChanges);
 
         // Append table-level DDL diffs using the same URI format as branch review
         // For HEAD commit: schema-content provider has live data from cached diff
@@ -851,17 +822,14 @@ ctx.querySelectorAll('.ctx-item').forEach(el=>{
     } catch (err: any) { vscode.window.showErrorMessage(`Review failed: ${err.message}`); }
   }
 
-  private async buildComparisonTuples(root: string, fromSha: string, toRef: string | null): Promise<[vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined][]> {
+  private async buildComparisonTuples(root: string, fromSha: string, toRef: string | null): Promise<DiffTuple[]> {
     const files = await this.graphService.getDiffFiles(fromSha, toRef);
-    return files.map(f => {
-      const left = vscode.Uri.parse(`lakebase-commit://${fromSha}/${f.path}`);
-      const right = toRef
-        ? vscode.Uri.parse(`lakebase-commit://${toRef}/${f.path}`)
-        : vscode.Uri.file(`${root}/${f.path}`);
-      const label = vscode.Uri.file(`${root}/${f.path}`);
-      if (f.status === 'A') return [label, undefined, right] as [vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined];
-      if (f.status === 'D') return [label, left, undefined] as [vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined];
-      return [label, left, right] as [vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined];
+    return buildDiffTuples(files, {
+      makeOrigUri: (p) => vscode.Uri.parse(`lakebase-commit://${fromSha}/${p}`),
+      makeModUri: (p) => toRef
+        ? vscode.Uri.parse(`lakebase-commit://${toRef}/${p}`)
+        : vscode.Uri.file(`${root}/${p}`),
+      makeLabelUri: (p) => vscode.Uri.file(`${root}/${p}`),
     });
   }
 

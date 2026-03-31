@@ -3,6 +3,7 @@ import { GitService, GitFileChange, PullRequestInfo } from '../services/gitServi
 import { FlywayService } from '../services/flywayService';
 import { SchemaDiffService, SchemaDiffResult } from '../services/schemaDiffService';
 import { LakebaseService } from '../services/lakebaseService';
+import { isMainBranch } from '../utils/theme';
 import { getConfig, getWorkspaceRoot } from '../utils/config';
 
 /**
@@ -158,7 +159,7 @@ export class SchemaScmProvider {
     if (!this.scm) { return; }
 
     const currentBranch = this.gitService.getCachedBranch() || await this.gitService.getCurrentBranch();
-    const isMain = currentBranch === 'main' || currentBranch === 'master';
+    const isMain = isMainBranch(currentBranch);
 
     if (!currentBranch) {
       this.clearGroups();
@@ -310,11 +311,7 @@ export class SchemaScmProvider {
 
         let repoUrl = '';
         try {
-          const remoteRaw = cp.execSync('git remote get-url origin', { cwd: root, timeout: 5000 }).toString().trim();
-          repoUrl = remoteRaw
-            .replace(/\.git$/, '')
-            .replace(/^git@github\.com:/, 'https://github.com/')
-            .replace(/^ssh:\/\/git@github\.com\//, 'https://github.com/');
+          repoUrl = await this.gitService.getGitHubUrl();
         } catch { /* ignore */ }
 
         // Use %h|%s|%b format to get sha, subject, and body (PR title)
@@ -595,7 +592,7 @@ export class SchemaScmProvider {
   private async refreshCodeOnly(): Promise<void> {
     if (!this.scm) { return; }
     const currentBranch = this.gitService.getCachedBranch() || await this.gitService.getCurrentBranch();
-    const isMain = currentBranch === 'main' || currentBranch === 'master';
+    const isMain = isMainBranch(currentBranch);
     if (isMain || !currentBranch) { return; }
 
     try {

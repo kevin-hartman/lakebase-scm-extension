@@ -14,7 +14,7 @@ export interface MigrationSchemaChange {
   type: 'created' | 'modified' | 'removed';
   tableName: string;
   columns: Array<{ name: string; dataType: string }>;
-  migration: MigrationFile;
+  migration?: MigrationFile;
 }
 
 export class FlywayService {
@@ -60,46 +60,54 @@ export class FlywayService {
   }
 
   /**
+   * Parse raw SQL to extract schema changes (CREATE TABLE, ALTER TABLE, DROP TABLE).
+   * Accepts a SQL string directly — no file I/O needed.
+   */
+  static parseSql(sql: string): MigrationSchemaChange[] {
+    const changes: MigrationSchemaChange[] = [];
+
+    const createRegex = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?(\w+)\s*\(([\s\S]*?)\);/gi;
+    let match;
+    while ((match = createRegex.exec(sql)) !== null) {
+      const tableName = match[1];
+      if (tableName === 'flyway_schema_history') { continue; }
+      const columns: Array<{ name: string; dataType: string }> = [];
+      for (const line of match[2].split('\n')) {
+        const colMatch = line.trim().match(/^(\w+)\s+(.+?)(?:,?\s*$)/);
+        if (colMatch && !colMatch[2].match(/^(CONSTRAINT|PRIMARY|FOREIGN|UNIQUE|CHECK)\b/i)) {
+          columns.push({ name: colMatch[1], dataType: colMatch[2].replace(/,\s*$/, '') });
+        }
+      }
+      changes.push({ type: 'created', tableName, columns });
+    }
+
+    const alterAddRegex = /ALTER\s+TABLE\s+(?:public\.)?(\w+)\s+ADD\s+(?:COLUMN\s+)?(\w+)\s+(.+?);/gi;
+    while ((match = alterAddRegex.exec(sql)) !== null) {
+      changes.push({
+        type: 'modified', tableName: match[1],
+        columns: [{ name: match[2], dataType: match[3] }],
+      });
+    }
+
+    const dropRegex = /DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:public\.)?(\w+)/gi;
+    while ((match = dropRegex.exec(sql)) !== null) {
+      changes.push({ type: 'removed', tableName: match[1], columns: [] });
+    }
+
+    return changes;
+  }
+
+  /**
    * Parse migration SQL files to extract schema changes (CREATE TABLE, ALTER TABLE, DROP TABLE).
    * Returns objects representing what the migrations will do when applied.
    */
   parseMigrationSchemaChanges(migrations: MigrationFile[]): MigrationSchemaChange[] {
     const changes: MigrationSchemaChange[] = [];
-
     for (const mig of migrations) {
       if (!fs.existsSync(mig.fullPath)) { continue; }
       const sql = fs.readFileSync(mig.fullPath, 'utf-8');
-
-      // CREATE TABLE
-      const createRegex = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?(\w+)\s*\(([\s\S]*?)\);/gi;
-      let match;
-      while ((match = createRegex.exec(sql)) !== null) {
-        const tableName = match[1];
-        if (tableName === 'flyway_schema_history') { continue; }
-        const columns: Array<{ name: string; dataType: string }> = [];
-        for (const line of match[2].split('\n')) {
-          const colMatch = line.trim().match(/^(\w+)\s+(.+?)(?:,?\s*$)/);
-          if (colMatch && !colMatch[2].match(/^(CONSTRAINT|PRIMARY|FOREIGN|UNIQUE|CHECK)\b/i)) {
-            columns.push({ name: colMatch[1], dataType: colMatch[2].replace(/,\s*$/, '') });
-          }
-        }
-        changes.push({ type: 'created', tableName, columns, migration: mig });
-      }
-
-      // ALTER TABLE ... ADD COLUMN
-      const alterAddRegex = /ALTER\s+TABLE\s+(?:public\.)?(\w+)\s+ADD\s+(?:COLUMN\s+)?(\w+)\s+(.+?);/gi;
-      while ((match = alterAddRegex.exec(sql)) !== null) {
-        changes.push({
-          type: 'modified', tableName: match[1],
-          columns: [{ name: match[2], dataType: match[3] }],
-          migration: mig,
-        });
-      }
-
-      // DROP TABLE
-      const dropRegex = /DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:public\.)?(\w+)/gi;
-      while ((match = dropRegex.exec(sql)) !== null) {
-        changes.push({ type: 'removed', tableName: match[1], columns: [], migration: mig });
+      for (const change of FlywayService.parseSql(sql)) {
+        changes.push({ ...change, migration: mig });
       }
     }
 

@@ -3,6 +3,7 @@ import { GitService, GitBranchInfo } from '../services/gitService';
 import { LakebaseService, LakebaseBranch } from '../services/lakebaseService';
 import { FlywayService } from '../services/flywayService';
 import { SchemaDiffService } from '../services/schemaDiffService';
+import { isMainBranch } from '../utils/theme';
 import { getConfig } from '../utils/config';
 
 type ItemType = 'project' | 'branch' | 'currentBranch' | 'detail' | 'sectionHeader'
@@ -97,17 +98,9 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
     let repoName = 'my-project';
     let repoUrl = '';
     try {
-      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      if (root) {
-        const cp = require('child_process');
-        const remoteRaw = cp.execSync('git remote get-url origin', { cwd: root, timeout: 5000 }).toString().trim();
-        repoUrl = remoteRaw
-          .replace(/\.git$/, '')
-          .replace(/^git@github\.com:/, 'https://github.com/')
-          .replace(/^ssh:\/\/git@github\.com\//, 'https://github.com/');
-        const match = repoUrl.match(/\/([^/]+)$/);
-        repoName = match ? match[1] : repoName;
-      }
+      repoUrl = await this.gitService.getGitHubUrl();
+      const match = repoUrl.match(/\/([^/]+)$/);
+      repoName = match ? match[1] : repoName;
     } catch { /* no remote */ }
 
     const projectItem = new BranchItem(
@@ -134,14 +127,8 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
 
     // GitHub repo — green icon if remote is available, clickable to open
     try {
-      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      if (root) {
-        const cp = require('child_process');
-        const remoteRaw = cp.execSync('git remote get-url origin', { cwd: root, timeout: 5000 }).toString().trim();
-        const repoUrl = remoteRaw
-          .replace(/\.git$/, '')
-          .replace(/^git@github\.com:/, 'https://github.com/')
-          .replace(/^ssh:\/\/git@github\.com\//, 'https://github.com/');
+      const repoUrl = await this.gitService.getGitHubUrl();
+      if (repoUrl) {
         const match = repoUrl.match(/github\.com\/(.+)/);
         const fullRepoName = match ? match[1] : repoUrl;
         const ghItem = new BranchItem(undefined, undefined, 'detail', fullRepoName);
@@ -223,7 +210,7 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
         // Lakebase-only branches (ci-pr-*, orphaned)
         const matchedNames = new Set(
           gitBranches.map(gb => {
-            const isMain = gb.name === 'main' || gb.name === 'master';
+            const isMain = isMainBranch(gb.name);
             return isMain
               ? lakebaseBranches.find(b => b.isDefault)?.name
               : lakebaseBranches.find(b =>
@@ -260,7 +247,7 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
     currentGitBranch: string | undefined,
     isCurrent: boolean
   ): BranchItem {
-    const isMain = gb.name === 'main' || gb.name === 'master';
+    const isMain = isMainBranch(gb.name);
     const sanitized = this.lakebaseService.sanitizeBranchName(gb.name);
 
     const lb = isMain
@@ -527,7 +514,7 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
   }
 
   private async getBranchFiles(branchName: string): Promise<BranchItem[]> {
-    const isMain = branchName === 'main' || branchName === 'master';
+    const isMain = isMainBranch(branchName);
     if (isMain) {
       const item = new BranchItem(undefined, undefined, 'detail', 'Default branch — no diff');
       item.iconPath = new vscode.ThemeIcon('info');

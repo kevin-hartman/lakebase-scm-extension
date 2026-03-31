@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import { getWorkspaceRoot } from '../utils/config';
+import { exec } from '../utils/exec';
 
 export interface PullRequestCheck {
   name: string;
@@ -56,17 +57,6 @@ export interface GitFileChange {
   oldPath?: string;
 }
 
-function exec(command: string, cwd?: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    cp.exec(command, { cwd, timeout: 60000 }, (err, stdout) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve(stdout.trim());
-    });
-  });
-}
 
 /** Safe execution using spawn with shell — arguments passed as array, not interpolated into command string */
 function execArgs(file: string, args: string[], cwd?: string): Promise<string> {

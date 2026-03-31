@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { GitService } from '../services/gitService';
 import { LakebaseService, LakebaseBranch } from '../services/lakebaseService';
 import { FlywayService } from '../services/flywayService';
+import { isMainBranch } from '../utils/theme';
 
 type SyncState = 'synced' | 'pending' | 'error' | 'loading' | 'unavailable' | 'auth_error';
 
@@ -50,7 +51,7 @@ export class StatusBarProvider {
     this.setState('loading', gitBranch);
 
     try {
-      const isMain = gitBranch === 'main' || gitBranch === 'master';
+      const isMain = isMainBranch(gitBranch);
       let lbBranch: LakebaseBranch | undefined;
 
       if (isMain) {

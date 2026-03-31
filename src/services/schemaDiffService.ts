@@ -3,6 +3,7 @@ import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getWorkspaceRoot, getEnvConfig, getConfig } from '../utils/config';
+import { exec } from '../utils/exec';
 import { LakebaseService } from './lakebaseService';
 
 export interface SchemaObject {
@@ -31,21 +32,6 @@ export interface SchemaDiffResult {
   rawDiff?: string;
 }
 
-function exec(command: string, cwd?: string, env?: Record<string, string>): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const options: cp.ExecOptions = { cwd, timeout: 60000 };
-    if (env) {
-      options.env = { ...process.env, ...env };
-    }
-    cp.exec(command, options, (err, stdout, stderr) => {
-      if (err) {
-        reject(new Error(String(stderr || err.message)));
-        return;
-      }
-      resolve(String(stdout).trim());
-    });
-  });
-}
 
 export interface BranchCacheEntry {
   result: SchemaDiffResult;
