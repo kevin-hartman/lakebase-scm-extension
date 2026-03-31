@@ -393,6 +393,27 @@ lakebase-scm-extension/
 6. **Dual interface** — Both the Lakebase sidebar (recommended) and SCM view provide full functionality. The sidebar offers richer exploration (expandable branch details, color-coded tables, migration files) while the SCM view provides the familiar Git workflow with a commit input box.
 7. **Graceful degradation** — Schema content provider falls back to migration file parsing when pg_dump cache is unavailable. Branch switch offers stash/commit options when working tree is dirty. Auth failures prompt reconnection.
 
+## Phase 6: Remaining Cleanup
+
+### Goals
+- Wire DiffService into callers
+- Surface command-palette-only commands in menus
+- Eliminate remaining raw execSync in GraphService
+
+### Deliverables
+55. **Wire DiffService into callers** — extension.ts `reviewBranch` and graphWebview.ts `reviewCommit`/`buildComparisonTuples` currently build tuples inline. Rewire to call `DiffService.reviewBranch()`, `DiffService.reviewCommitTwoPane()`, and `DiffService.compareRefs()`.
+56. **Add menu placements for orphaned commands** — 6 commands are registered but only accessible via Command Palette:
+    - `lakebaseSync.refreshCredentials` — Refresh Database Credentials
+    - `lakebaseSync.runMigrate` — Run Flyway Migrate
+    - `lakebaseSync.showMigrationHistory` — Show Migration History
+    - `lakebaseSync.showBranchStatus` — Show Branch Status
+    - `lakebaseSync.createBranch` — Create Lakebase Branch (db-only)
+    - `lakebaseSync.showCachedBranchDiff` — Branch Diff (Cached)
+    Add these to appropriate menus (Lakebase submenu, Project view context, or view title bars).
+57. **Eliminate remaining execSync in GraphService** — `GraphService.getCommits()` still uses `require('child_process').execSync` for the batch git log operation. Refactor to use `GitService.getLogRaw()` and `GitService.getLogShortstat()` (already exist). The `fetchAvatars()` method also uses `cp.execSync` for `gh api` — add a `GitService.ghApi()` method or accept this as an external tool call.
+
+---
+
 ## Summary
 
 | Phase | What | Status | Version |
@@ -402,6 +423,8 @@ lakebase-scm-extension/
 | 3 | Workflow Automation | ✅ Complete | — |
 | 3.5 | Lakebase Sidebar | ✅ Complete | v0.3.5 |
 | 4 | Unified Project Creation | Not started | — |
-| 5 | Advanced Features | Not started | — |
+| 5 | Advanced Features | Partially complete | v0.3.7 (Graph), v0.3.8 (Refactoring) |
+| 5.5 | R1-R8 Refactoring | ✅ Complete | v0.3.8 |
+| 6 | Remaining Cleanup | Not started | — |
 
-**Current state:** v0.3.5 — 299 tests, 16 suites, 60 files in vsix, full Git + Lakebase parity across both sidebar and SCM interfaces.
+**Current state:** v0.3.8 — 327 unit tests, 17 suites, 74 files in vsix. Full R1-R8 refactoring complete with service layer (GraphService, DiffService, shared exec, theme utilities). Integration test suite with 12 test files covering all refactoring phases against live GitHub + Lakebase APIs.
