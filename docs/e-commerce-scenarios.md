@@ -2,13 +2,7 @@
 
 ## Overview
 
-Build an e-commerce backend in Java/Spring/JPA with Flyway migrations, iterating through features using the Lakebase SCM workflow. Each scenario creates a git feature branch and a Lakebase database branch, develops the feature (migration SQL + Java code), and merges to main.
-
-This tests the full project creation and iterative development lifecycle end-to-end:
-- `ProjectCreationService` creates the project (GitHub repo + Lakebase DB + scaffold)
-- Each scenario uses the git + Lakebase branch workflow
-- Hooks fire at each step (post-checkout, prepare-commit-msg, pre-push)
-- Merge workflow runs Flyway on production + verifies schema
+Build an e-commerce backend in Java/Spring/JPA with Flyway migrations, iterating through features using the Lakebase SCM workflow. Each scenario simulates what a developer does day-to-day: create a branch, write code + migration, commit, push, open a PR, get it merged.
 
 ## Architecture
 
@@ -22,271 +16,361 @@ src/main/java/com/example/demo/
 
 src/main/resources/db/migration/
 ├── V1__init_placeholder.sql     # From scaffold
-├── V2__create_book_table.sql    # Scenario 1
-├── V3__create_product_table.sql # Scenario 2
-├── V4__create_customer_table.sql # Scenario 3
-├── V5__create_cart_and_cart_item_tables.sql # Scenario 4
-├── V6__create_orders_and_order_item_tables.sql # Scenario 5
-├── V7__create_wishlist_tables.sql # Scenario 6
-├── V8__add_product_rating_and_review_count.sql # Scenario 7
-└── V9__drop_book_table.sql      # Scenario 8
+├── V2-V9                        # One per scenario
 ```
 
 ---
 
 ## Scenario 1: Book Entity (Initial Feature)
 
+**Story:** Developer is tasked with adding a book catalog to the new e-commerce app.
+
 **Branch:** `feature/book`
-**Migration:** `V2__create_book_table.sql`
 
-```sql
-CREATE TABLE IF NOT EXISTS book (
-    id BIGSERIAL PRIMARY KEY,
-    title VARCHAR(255),
-    price DECIMAL(19, 2),
-    publish_date DATE
-);
-```
+### Developer Steps
 
-**Java files:**
-- `model/Book.java` — JPA entity (id, title, price, publishDate)
-- `repository/BookRepository.java` — Spring Data JPA
-- `service/BookService.java` — CRUD operations
-- `controller/BookController.java` — REST endpoints (GET /books, POST /books, etc.)
+1. **Create feature branch**
+   - Developer runs: `git checkout -b feature/book`
+   - post-checkout hook fires → creates Lakebase branch `feature-book`
+   - Developer's `.env` is updated with the branch database connection
 
-**What exercises:**
-- First feature branch creation (git + Lakebase)
-- post-checkout hook fires → creates Lakebase branch
-- Migration file detected in commit diff
-- prepare-commit-msg hook fires → schema diff appended
-- pre-push hook fires → secrets synced
-- PR creation
-- Merge to main → Flyway applies V2 → book table exists on production
+2. **Write the migration**
+   - Developer creates `V2__create_book_table.sql` in `src/main/resources/db/migration/`
+   - SQL: CREATE TABLE book (id, title, price, publish_date)
+
+3. **Write the Java code**
+   - Developer creates `model/Book.java` — JPA entity with @Entity, @Id, @GeneratedValue
+   - Developer creates `repository/BookRepository.java` — extends JpaRepository
+   - Developer creates `service/BookService.java` — findAll, findById, save, delete
+   - Developer creates `controller/BookController.java` — GET /books, POST /books, GET /books/{id}, DELETE /books/{id}
+
+4. **Commit changes**
+   - Developer runs: `git add -A && git commit -m "Add book entity with CRUD"`
+   - prepare-commit-msg hook fires → schema diff appended to commit message
+
+5. **Push to remote**
+   - Developer runs: `git push -u origin feature/book`
+   - pre-push hook fires → syncs GitHub secrets for CI
+
+6. **Create pull request**
+   - Developer runs: `gh pr create --title "Add book entity" --body "Book CRUD with V2 migration"`
+   - CI workflow (pr.yml) triggers: creates ci-pr-N Lakebase branch, runs Flyway, runs tests, posts schema diff comment
+
+7. **Merge pull request**
+   - Reviewer approves, developer merges
+   - Merge workflow (merge.yml) triggers: runs Flyway on production, verifies schema, cleans up ci-pr-N branch
+   - book table now exists on production
+
+### Verification Points
+- [ ] Feature branch exists in git
+- [ ] Lakebase branch `feature-book` exists
+- [ ] V2 migration file in commit diff
+- [ ] Push succeeds (pre-push hook)
+- [ ] PR created successfully
+- [ ] Merge succeeds
+- [ ] `book` table exists on production
+- [ ] V2 in flyway_schema_history with success=true
 
 ---
 
 ## Scenario 2: Product Catalog
 
+**Story:** The business needs a product catalog with inventory tracking.
+
 **Branch:** `feature/product-catalog`
-**Migration:** `V3__create_product_table.sql`
 
-```sql
-CREATE TABLE IF NOT EXISTS product (
-    id BIGSERIAL PRIMARY KEY,
-    title VARCHAR(255) NOT NULL,
-    description TEXT,
-    price DECIMAL(19, 2) NOT NULL,
-    stock INTEGER NOT NULL DEFAULT 0,
-    category VARCHAR(100),
-    image_url VARCHAR(512)
-);
-```
+### Developer Steps
 
-**Java files:**
-- `model/Product.java` — JPA entity (id, title, description, price, stock, category, imageUrl)
-- `repository/ProductRepository.java`
-- `service/ProductService.java` — CRUD + stock management
-- `controller/ProductController.java` — REST endpoints
+1. **Create feature branch**
+   - `git checkout -b feature/product-catalog` (from main, after Scenario 1 merged)
+   - post-checkout hook → Lakebase branch `feature-product-catalog`
 
-**What exercises:**
-- Second feature branch on same project
-- Independent entity (no FK dependencies)
-- NOT NULL constraints, DEFAULT values in migration
+2. **Write the migration**
+   - `V3__create_product_table.sql`
+   - SQL: CREATE TABLE product (id, title, description, price, stock, category, image_url)
+   - Uses NOT NULL, DEFAULT 0 for stock
+
+3. **Write the Java code**
+   - `model/Product.java` — @Entity with validation annotations
+   - `repository/ProductRepository.java` — findByCategory, findByTitleContaining
+   - `service/ProductService.java` — CRUD + updateStock
+   - `controller/ProductController.java` — full REST API
+
+4. **Commit:** `git add -A && git commit -m "Add product catalog with inventory"`
+
+5. **Push:** `git push -u origin feature/product-catalog`
+
+6. **Create PR:** `gh pr create --title "Add product catalog"`
+
+7. **Merge PR**
+   - Production now has: book + product tables
+
+### Verification Points
+- [ ] `product` table exists on production with all columns
+- [ ] V3 in flyway_schema_history
 
 ---
 
 ## Scenario 3: Customer Registration
 
+**Story:** Customers need to create accounts to shop.
+
 **Branch:** `feature/customer`
-**Migration:** `V4__create_customer_table.sql`
 
-```sql
-CREATE TABLE IF NOT EXISTS customer (
-    id BIGSERIAL PRIMARY KEY,
-    email VARCHAR(255) NOT NULL UNIQUE,
-    name VARCHAR(255) NOT NULL,
-    password_hash VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-```
+### Developer Steps
 
-**Java files:**
-- `model/Customer.java` — JPA entity (id, email, name, passwordHash, createdAt)
-- `repository/CustomerRepository.java` — findByEmail
-- `service/CustomerService.java` — register, authenticate
-- `controller/CustomerController.java` — REST endpoints
+1. **Create feature branch** from main (V2 + V3 on main)
+   - `git checkout -b feature/customer`
+   - Lakebase branch: `feature-customer`
 
-**What exercises:**
-- UNIQUE constraint in migration
-- Timestamp with timezone
-- Third sequential feature → V4 builds on V2 + V3 being on main
+2. **Write the migration**
+   - `V4__create_customer_table.sql`
+   - SQL: CREATE TABLE customer (id, email UNIQUE, name, password_hash, created_at)
+   - UNIQUE constraint on email, TIMESTAMP WITH TIME ZONE
+
+3. **Write the Java code**
+   - `model/Customer.java` — @Entity with @Column(unique=true) on email
+   - `repository/CustomerRepository.java` — findByEmail
+   - `service/CustomerService.java` — register (check duplicate email), findByEmail
+   - `controller/CustomerController.java` — POST /customers (register), GET /customers/{id}
+
+4. **Commit:** `"Add customer registration with email uniqueness"`
+
+5. **Push, Create PR, Merge**
+
+### Verification Points
+- [ ] `customer` table with UNIQUE on email
+- [ ] V4 applied
 
 ---
 
 ## Scenario 4: Shopping Cart
 
+**Story:** Customers need to add products to a shopping cart before checkout.
+
 **Branch:** `feature/cart`
-**Migration:** `V5__create_cart_and_cart_item_tables.sql`
 
-```sql
-CREATE TABLE IF NOT EXISTS cart (
-    id BIGSERIAL PRIMARY KEY,
-    customer_id BIGINT NOT NULL UNIQUE REFERENCES customer(id) ON DELETE CASCADE,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+### Developer Steps
 
-CREATE TABLE IF NOT EXISTS cart_item (
-    id BIGSERIAL PRIMARY KEY,
-    cart_id BIGINT NOT NULL REFERENCES cart(id) ON DELETE CASCADE,
-    product_id BIGINT NOT NULL REFERENCES product(id),
-    quantity INTEGER NOT NULL CHECK (quantity > 0)
-);
+1. **Create feature branch** from main (V2-V4 on main)
+   - `git checkout -b feature/cart`
+   - Lakebase branch: `feature-cart`
 
-CREATE INDEX IF NOT EXISTS idx_cart_item_cart_id ON cart_item(cart_id);
-CREATE INDEX IF NOT EXISTS idx_cart_item_product_id ON cart_item(product_id);
-```
+2. **Write the migration**
+   - `V5__create_cart_and_cart_item_tables.sql`
+   - Two tables: cart (FK → customer), cart_item (FK → cart, FK → product)
+   - CHECK constraint: quantity > 0
+   - Indexes on cart_item.cart_id and cart_item.product_id
 
-**Java files:**
-- `model/Cart.java` — JPA entity with @OneToOne to Customer
-- `model/CartItem.java` — JPA entity with @ManyToOne to Cart + Product
-- `repository/CartRepository.java`
-- `repository/CartItemRepository.java`
-- `service/CartService.java` — add/remove items, get cart, clear cart
-- `controller/CartController.java` — REST endpoints
+3. **Write the Java code**
+   - `model/Cart.java` — @OneToOne with Customer, @OneToMany with CartItem
+   - `model/CartItem.java` — @ManyToOne to Cart + Product
+   - `repository/CartRepository.java` — findByCustomerId
+   - `repository/CartItemRepository.java`
+   - `service/CartService.java` — getOrCreateCart, addItem, removeItem, updateQuantity, clearCart
+   - `controller/CartController.java` — GET /cart, POST /cart/items, DELETE /cart/items/{id}
 
-**What exercises:**
-- Foreign keys referencing tables from Scenarios 2 & 3 (product + customer)
-- Multiple tables in one migration
-- Index creation
-- CHECK constraint
-- CASCADE delete
+4. **Commit:** `"Add shopping cart with customer and product references"`
+
+5. **Push, Create PR, Merge**
+
+### Verification Points
+- [ ] `cart` table with FK to customer
+- [ ] `cart_item` table with FK to cart + product, CHECK constraint
+- [ ] Indexes exist
+- [ ] V5 applied
 
 ---
 
 ## Scenario 5: Order Processing
 
+**Story:** Customers check out their cart to place orders. Stock must be validated.
+
 **Branch:** `feature/orders`
-**Migration:** `V6__create_orders_and_order_item_tables.sql`
 
-```sql
-CREATE TABLE IF NOT EXISTS orders (
-    id BIGSERIAL PRIMARY KEY,
-    customer_id BIGINT NOT NULL REFERENCES customer(id) ON DELETE CASCADE,
-    status VARCHAR(32) NOT NULL,
-    total_amount NUMERIC(12,2) NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+### Developer Steps
 
-CREATE TABLE IF NOT EXISTS order_item (
-    id BIGSERIAL PRIMARY KEY,
-    order_id BIGINT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-    product_id BIGINT NOT NULL REFERENCES product(id),
-    quantity INTEGER NOT NULL CHECK (quantity > 0),
-    price_at_order NUMERIC(12,2) NOT NULL
-);
+1. **Create feature branch** from main (V2-V5 on main)
+   - `git checkout -b feature/orders`
+   - Lakebase branch: `feature-orders`
 
-CREATE INDEX IF NOT EXISTS idx_orders_customer_id ON orders(customer_id);
-CREATE INDEX IF NOT EXISTS idx_order_item_order_id ON order_item(order_id);
-```
+2. **Write the migration**
+   - `V6__create_orders_and_order_item_tables.sql`
+   - orders table: FK → customer, status VARCHAR(32), total_amount NUMERIC
+   - order_item table: FK → orders, FK → product, quantity CHECK > 0, price_at_order
+   - Indexes on orders.customer_id and order_item.order_id
 
-**Java files:**
-- `model/Order.java` — JPA entity with status, FK to Customer
-- `model/OrderItem.java` — FK to Order + Product, price snapshot
-- `model/OrderStatus.java` — enum (PENDING, CONFIRMED, SHIPPED, DELIVERED, CANCELLED)
-- `repository/OrderRepository.java`
-- `repository/OrderItemRepository.java`
-- `service/OrderService.java` — placeOrder (from cart), updateStatus, cancel
-- `service/InsufficientStockException.java`
-- `controller/OrderController.java` — REST endpoints
+3. **Write the Java code**
+   - `model/Order.java` — @Enumerated for status
+   - `model/OrderItem.java` — price snapshot at time of order
+   - `model/OrderStatus.java` — enum: PENDING, CONFIRMED, SHIPPED, DELIVERED, CANCELLED
+   - `repository/OrderRepository.java` — findByCustomerId
+   - `repository/OrderItemRepository.java`
+   - `service/OrderService.java` — placeOrder (validate stock, decrement, convert cart), updateStatus, cancel
+   - `service/InsufficientStockException.java` — thrown when stock < quantity
+   - `controller/OrderController.java` — POST /orders (from cart), GET /orders/{id}, PATCH /orders/{id}/status
 
-**What exercises:**
-- Complex migration with CHECK constraints
-- Service with business logic (stock validation, cart-to-order conversion)
-- Enum type in Java mapped to VARCHAR in SQL
-- Multiple new files (8+) in one commit
+4. **Commit:** `"Add order processing with stock validation"`
+   - 8+ files in one commit
+
+5. **Push, Create PR, Merge**
+
+### Verification Points
+- [ ] `orders` and `order_item` tables with all constraints
+- [ ] V6 applied
+- [ ] This is the largest commit — many files in diff
 
 ---
 
 ## Scenario 6: Wishlist
 
+**Story:** Customers can save products for later and move them to cart.
+
 **Branch:** `feature/wishlist`
-**Migration:** `V7__create_wishlist_tables.sql`
 
-```sql
-CREATE TABLE IF NOT EXISTS wishlist (
-    id BIGSERIAL PRIMARY KEY,
-    customer_id BIGINT NOT NULL UNIQUE REFERENCES customer(id) ON DELETE CASCADE,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+### Developer Steps
 
-CREATE TABLE IF NOT EXISTS wishlist_item (
-    id BIGSERIAL PRIMARY KEY,
-    wishlist_id BIGINT NOT NULL REFERENCES wishlist(id) ON DELETE CASCADE,
-    product_id BIGINT NOT NULL REFERENCES product(id) ON DELETE CASCADE,
-    added_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(wishlist_id, product_id)
-);
+1. **Create feature branch** from main (V2-V6 on main)
+   - `git checkout -b feature/wishlist`
+   - Lakebase branch: `feature-wishlist`
 
-CREATE INDEX IF NOT EXISTS idx_wishlist_item_wishlist_id ON wishlist_item(wishlist_id);
-```
+2. **Write the migration**
+   - `V7__create_wishlist_tables.sql`
+   - wishlist: @OneToOne with customer (UNIQUE FK)
+   - wishlist_item: FK → wishlist + product, compound UNIQUE(wishlist_id, product_id)
+   - ON DELETE CASCADE on both FKs
 
-**Java files:**
-- `model/Wishlist.java` — @OneToOne with Customer
-- `model/WishlistItem.java` — compound UNIQUE (wishlist + product)
-- `repository/WishlistRepository.java`
-- `repository/WishlistItemRepository.java`
-- `service/WishlistService.java` — add/remove items, move to cart
-- `controller/WishlistController.java` — REST endpoints
+3. **Write the Java code**
+   - `model/Wishlist.java` — @OneToOne Customer
+   - `model/WishlistItem.java` — @Table(uniqueConstraints)
+   - `repository/WishlistRepository.java` — findByCustomerId
+   - `repository/WishlistItemRepository.java`
+   - `service/WishlistService.java` — add, remove, moveToCart (calls CartService)
+   - `controller/WishlistController.java` — GET /wishlist, POST /wishlist/items, POST /wishlist/items/{id}/move-to-cart
 
-**What exercises:**
-- Compound UNIQUE constraint in migration
-- Cross-service interaction (WishlistService calls CartService for move-to-cart)
-- ON DELETE CASCADE on FK
+4. **Commit:** `"Add wishlist with move-to-cart functionality"`
+
+5. **Push, Create PR, Merge**
+
+### Verification Points
+- [ ] `wishlist` and `wishlist_item` tables
+- [ ] Compound UNIQUE constraint exists
+- [ ] V7 applied
 
 ---
 
 ## Scenario 7: Schema Evolution — ALTER TABLE
 
+**Story:** Product reviews feature needs rating columns on the product table.
+
 **Branch:** `feature/product-reviews`
-**Migration:** `V8__add_product_rating_and_review_count.sql`
 
-```sql
-ALTER TABLE product ADD COLUMN average_rating DECIMAL(3, 2) DEFAULT 0.00;
-ALTER TABLE product ADD COLUMN review_count INTEGER DEFAULT 0;
-```
+### Developer Steps
 
-**Java update:** Modify `model/Product.java` to add `averageRating` and `reviewCount` fields.
+1. **Create feature branch** from main (V2-V7 on main)
+   - `git checkout -b feature/product-reviews`
+   - Lakebase branch: `feature-product-reviews`
 
-**What exercises:**
-- ALTER TABLE migration (no CREATE)
-- Modifying an existing JPA entity (not creating new)
-- Schema diff shows MODIFIED table vs CREATED
-- DEFAULT values on new columns (backward compatible)
-- Fewer files changed than previous scenarios (migration + 1 Java file)
+2. **Write the migration**
+   - `V8__add_product_rating_and_review_count.sql`
+   - ALTER TABLE product ADD COLUMN average_rating DECIMAL(3,2) DEFAULT 0.00
+   - ALTER TABLE product ADD COLUMN review_count INTEGER DEFAULT 0
+   - No new table — modifying existing
+
+3. **Update existing Java code**
+   - Modify `model/Product.java` — add `averageRating` and `reviewCount` fields with @Column
+   - No new files — only modifying one existing file
+
+4. **Commit:** `"Add product rating and review count columns"`
+   - Only 2 files changed (migration + Product.java)
+
+5. **Push, Create PR, Merge**
+
+### Verification Points
+- [ ] `average_rating` column exists on product table
+- [ ] `review_count` column exists on product table
+- [ ] V8 applied
+- [ ] Schema diff shows MODIFIED (not CREATED)
+- [ ] Fewer files in diff than previous scenarios
 
 ---
 
 ## Scenario 8: Schema Evolution — DROP TABLE (Remove Book)
 
-**Branch:** `feature/remove-book`
-**Migration:** `V9__drop_book_table.sql`
+**Story:** Business pivot — books are discontinued. Remove the book entity entirely.
 
-```sql
-DROP TABLE IF EXISTS book;
+**Branch:** `feature/remove-book`
+
+### Developer Steps
+
+1. **Create feature branch** from main (V2-V8 on main)
+   - `git checkout -b feature/remove-book`
+   - Lakebase branch: `feature-remove-book`
+
+2. **Write the migration**
+   - `V9__drop_book_table.sql`
+   - DROP TABLE IF EXISTS book
+
+3. **Delete the Java code**
+   - Delete `model/Book.java`
+   - Delete `repository/BookRepository.java`
+   - Delete `service/BookService.java`
+   - Delete `controller/BookController.java`
+
+4. **Commit:** `"Remove book entity — discontinued product line"`
+   - Git diff shows: 1 file added (migration), 4 files deleted (Java)
+   - Status codes: A (migration), D D D D (Java files)
+
+5. **Push, Create PR, Merge**
+
+### Verification Points
+- [ ] `book` table does NOT exist on production
+- [ ] V9 applied
+- [ ] Book Java files absent from repo
+- [ ] All other tables still exist (no collateral damage)
+
+---
+
+## Test File Structure
+
+```
+test/integration/ecommerce/
+├── helpers.ts                    # Shared helper functions (no tests)
+├── ecommerceScenarios.test.ts    # Top-level orchestrator (setup → 8 scenarios → teardown)
+├── scenario1Book.ts              # Scenario 1 test points
+├── scenario2Product.ts           # Scenario 2 test points
+├── scenario3Customer.ts          # Scenario 3 test points
+├── scenario4Cart.ts              # Scenario 4 test points
+├── scenario5Orders.ts            # Scenario 5 test points
+├── scenario6Wishlist.ts          # Scenario 6 test points
+├── scenario7AlterProduct.ts      # Scenario 7 test points
+└── scenario8DropBook.ts          # Scenario 8 test points
 ```
 
-**Java deletions:**
-- Delete `model/Book.java`
-- Delete `repository/BookRepository.java`
-- Delete `service/BookService.java`
-- Delete `controller/BookController.java`
+### Orchestrator Flow
 
-**What exercises:**
-- DROP TABLE migration
-- Deleted files in git diff (status = D)
-- Removing a full entity stack (model + repo + service + controller)
-- Schema diff shows REMOVED table
-- Verifying the table no longer exists on production after merge
+```
+before()
+  → ProjectCreationService.createProject()
+  → GitHub repo + Lakebase DB + scaffold + hooks + .env + initial commit
+
+Scenario 1: Book        → feature/book → V2 → merge → verify book table
+Scenario 2: Product     → feature/product-catalog → V3 → merge → verify product table
+Scenario 3: Customer    → feature/customer → V4 → merge → verify customer table
+Scenario 4: Cart        → feature/cart → V5 → merge → verify cart + cart_item
+Scenario 5: Orders      → feature/orders → V6 → merge → verify orders + order_item
+Scenario 6: Wishlist    → feature/wishlist → V7 → merge → verify wishlist + wishlist_item
+Scenario 7: ALTER       → feature/product-reviews → V8 → merge → verify columns added
+Scenario 8: DROP        → feature/remove-book → V9 → merge → verify book table gone
+
+Final Verification
+  → 8 migrations in flyway_schema_history
+  → 8 tables exist (book dropped)
+  → All Java files present except Book stack
+
+after()
+  → cleanupProject()
+```
 
 ---
 
@@ -300,28 +384,28 @@ DROP TABLE IF EXISTS book;
 | post-checkout hook fired | Lakebase branch exists after checkout |
 | prepare-commit-msg hook fired | Commit message or schema diff appended |
 | pre-push hook fired | Push succeeds, secrets synced |
-| PR can be created | `gh pr create` succeeds |
-| Merge to main | `gh pr merge` succeeds |
+| PR created | `gh pr create` succeeds |
+| Merge succeeds | `gh pr merge` succeeds |
 | Flyway applied migration | `flyway_schema_history` shows version + success |
-| Tables exist/modified/dropped | `\dt` or `SELECT` confirms schema state |
-| Lakebase CI branch cleaned up | CI branch deleted after merge |
+| Tables exist/modified/dropped | `psql \dt` or SELECT confirms schema state |
+| CI branch cleaned up | CI branch deleted after merge |
 
 ---
 
 ## Final State After All 8 Scenarios
 
 ### Tables on production (8 migrations applied, V2-V9):
-- ~~book~~ (dropped in V9)
-- product (with average_rating + review_count from V8)
-- customer
-- cart, cart_item
-- orders, order_item
-- wishlist, wishlist_item
+- ~~book~~ (created in V2, dropped in V9)
+- product (V3, altered in V8: +average_rating, +review_count)
+- customer (V4)
+- cart (V5), cart_item (V5)
+- orders (V6), order_item (V6)
+- wishlist (V7), wishlist_item (V7)
 
 ### Java files (book stack removed in Scenario 8):
-- **Models (5):** Product, Customer, Cart, CartItem, Order, OrderItem, OrderStatus, Wishlist, WishlistItem
-- **Repositories (7):** Product, Customer, Cart, CartItem, Order, OrderItem, Wishlist, WishlistItem
-- **Services (5):** Product, Customer, Cart, Order (+ InsufficientStockException), Wishlist
+- **Models (9):** Product, Customer, Cart, CartItem, Order, OrderItem, OrderStatus, Wishlist, WishlistItem
+- **Repositories (8):** Product, Customer, Cart, CartItem, Order, OrderItem, Wishlist, WishlistItem
+- **Services (5+):** Product, Customer, Cart, Order (+InsufficientStockException), Wishlist
 - **Controllers (5):** Product, Customer, Cart, Order, Wishlist
 
 ### Git history:
