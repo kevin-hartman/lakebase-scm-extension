@@ -233,13 +233,14 @@ export class GitService {
     }
   }
 
-  async checkoutBranch(branchName: string, create: boolean = false): Promise<void> {
+  async checkoutBranch(branchName: string, create: boolean = false, startPoint?: string): Promise<void> {
     const root = getWorkspaceRoot();
     if (!root) {
       throw new Error('No workspace root');
     }
     const flag = create ? '-b ' : '';
-    await exec(`git checkout ${flag}"${branchName}"`, root);
+    const sp = startPoint ? ` "${startPoint}"` : '';
+    await exec(`git checkout ${flag}"${branchName}"${sp}`, root);
   }
 
   /** Get files changed between current branch and main/master */
@@ -572,11 +573,12 @@ export class GitService {
     await exec(`git merge "${branchName}"`, root);
   }
 
-  async createTag(name: string, message?: string): Promise<void> {
+  async createTag(name: string, message?: string, sha?: string): Promise<void> {
     const root = getWorkspaceRoot();
     if (!root) { throw new Error('No workspace root'); }
     const msg = message ? ` -m "${message.replace(/"/g, '\\"')}"` : '';
-    await exec(`git tag${msg ? ' -a' : ''} "${name}"${msg}`, root);
+    const target = sha ? ` "${sha}"` : '';
+    await exec(`git tag${msg ? ' -a' : ''} "${name}"${msg}${target}`, root);
   }
 
   async deleteTag(name: string): Promise<void> {
@@ -738,6 +740,144 @@ export class GitService {
     const root = getWorkspaceRoot();
     if (!root) { throw new Error('No workspace root'); }
     await exec('git fetch --all', root);
+  }
+
+  async revert(sha: string): Promise<void> {
+    const root = getWorkspaceRoot();
+    if (!root) { throw new Error('No workspace root'); }
+    // Detect merge commits and automatically use -m 1 (revert relative to first parent)
+    const parents = (await exec(`git rev-parse "${sha}^@"`, root)).trim().split('\n').filter(Boolean);
+    const mFlag = parents.length > 1 ? ' -m 1' : '';
+    await exec(`git revert --no-edit${mFlag} "${sha}"`, root);
+  }
+
+  async cherryPick(sha: string): Promise<void> {
+    const root = getWorkspaceRoot();
+    if (!root) { throw new Error('No workspace root'); }
+    await exec(`git cherry-pick "${sha}"`, root);
+  }
+
+  async checkoutDetached(sha: string): Promise<void> {
+    const root = getWorkspaceRoot();
+    if (!root) { throw new Error('No workspace root'); }
+    await exec(`git checkout --detach "${sha}"`, root);
+  }
+
+  async getBranchesAtCommit(sha: string): Promise<string[]> {
+    const root = getWorkspaceRoot();
+    if (!root) { return []; }
+    try {
+      const raw = await exec(`git branch -a --points-at "${sha}" --format="%(refname:short)"`, root);
+      return raw.trim().split('\n').filter(Boolean).filter(b => !b.includes('HEAD') && b !== 'origin');
+    } catch { return []; }
+  }
+
+  async getCommitFiles(sha: string): Promise<Array<{ status: string; path: string }>> {
+    const root = getWorkspaceRoot();
+    if (!root) { return []; }
+    let raw = await exec(`git diff-tree --no-commit-id --name-status -r "${sha}"`, root);
+    // Merge commits: diff-tree returns empty, diff against first parent
+    if (!raw.trim()) {
+      try { raw = await exec(`git diff --name-status "${sha}^1" "${sha}"`, root); } catch { return []; }
+    }
+    return raw.split('\n').filter(Boolean).map(line => {
+      const parts = line.split('\t');
+      return { status: parts[0][0], path: parts[parts.length - 1] };
+    });
+  }
+
+  /**
+   * Get diff files between two refs, or between a ref and the working tree.
+   * @param fromRef - The base ref (e.g. a commit SHA)
+   * @param toRef - The target ref (e.g. "HEAD"), or null for working tree
+   */
+  async getDiffFiles(fromRef: string, toRef: string | null): Promise<Array<{ status: string; path: string }>> {
+    const root = getWorkspaceRoot();
+    if (!root) { return []; }
+    try {
+      const cmd = toRef
+        ? `git diff --name-status "${fromRef}" "${toRef}"`
+        : `git diff --name-status "${fromRef}"`;
+      const raw = await exec(cmd, root);
+      return raw.split('\n').filter(Boolean).map(line => {
+        const parts = line.split('\t');
+        return { status: parts[0][0], path: parts[parts.length - 1] };
+      });
+    } catch { return []; }
+  }
+
+  /**
+   * Get the normalized GitHub HTTPS URL for the origin remote.
+   * Handles HTTPS, git@, and ssh:// formats. Returns empty string if not GitHub.
+   */
+  async getGitHubUrl(): Promise<string> {
+    const root = getWorkspaceRoot();
+    if (!root) { return ''; }
+    try {
+      const url = (await exec('git remote get-url origin', root)).trim();
+      return url
+        .replace(/\.git$/, '')
+        .replace(/^git@github\.com:/, 'https://github.com/')
+        .replace(/^ssh:\/\/git@github\.com\//, 'https://github.com/');
+    } catch { return ''; }
+  }
+
+  /**
+   * Get commit log with custom format. Returns raw output string.
+   */
+  async getLogRaw(format: string, limit: number, refArgs: string): Promise<string> {
+    const root = getWorkspaceRoot();
+    if (!root) { return ''; }
+    try {
+      return await exec(`git log --date-order --format="${format}" -${limit}${refArgs}`, root);
+    } catch { return ''; }
+  }
+
+  /**
+   * Get shortstat log. Returns raw output string.
+   */
+  async getLogShortstat(format: string, limit: number, refArgs: string): Promise<string> {
+    const root = getWorkspaceRoot();
+    if (!root) { return ''; }
+    try {
+      return await exec(`git log --date-order --format="${format}" --shortstat -${limit}${refArgs}`, root);
+    } catch { return ''; }
+  }
+
+  /**
+   * Get outgoing commits (local commits not on upstream).
+   */
+  async getOutgoingCommits(): Promise<string[]> {
+    const root = getWorkspaceRoot();
+    if (!root) { return []; }
+    try {
+      const raw = await exec('git log --oneline @{u}..HEAD', root);
+      return raw.split('\n').filter(Boolean).map(l => l.split(' ')[0]);
+    } catch { return []; }
+  }
+
+  /**
+   * Get incoming commits (upstream commits not yet pulled).
+   */
+  async getIncomingCommits(): Promise<string[]> {
+    const root = getWorkspaceRoot();
+    if (!root) { return []; }
+    try {
+      const raw = await exec('git log --oneline HEAD..@{u}', root);
+      return raw.split('\n').filter(Boolean).map(l => l.split(' ')[0]);
+    } catch { return []; }
+  }
+
+  async getRecentMerges(limit = 5): Promise<Array<{ sha: string; message: string }>> {
+    const root = getWorkspaceRoot();
+    if (!root) { return []; }
+    try {
+      const raw = await exec(`git log --merges --oneline -${limit}`, root);
+      return raw.split('\n').filter(Boolean).map(line => {
+        const sp = line.indexOf(' ');
+        return { sha: line.substring(0, sp), message: line.substring(sp + 1) };
+      });
+    } catch { return []; }
   }
 
   async pullRebase(): Promise<void> {
@@ -912,6 +1052,53 @@ export class GitService {
     const deleteFlag = deleteRemoteBranch ? ' --delete-branch' : '';
     const result = await exec(`gh pr merge --${method}${deleteFlag}`, root);
     return result.trim();
+  }
+
+  /**
+   * Create a new GitHub repository via gh CLI.
+   * @param name - Repo name (e.g. "my-app") or "owner/my-app"
+   * @param opts - Options: private (default true), clone (default false), description
+   * @returns The created repo URL
+   */
+  async createRepo(name: string, opts?: { private?: boolean; clone?: boolean; description?: string; parentDir?: string }): Promise<string> {
+    const visibility = opts?.private !== false ? '--private' : '--public';
+    const cloneFlag = opts?.clone ? ' --clone' : '';
+    const descFlag = opts?.description ? ` --description "${opts.description.replace(/"/g, '\\"')}"` : '';
+    const cwd = opts?.parentDir || getWorkspaceRoot() || undefined;
+    const result = await exec(`gh repo create "${name}" ${visibility}${cloneFlag}${descFlag}`, cwd);
+    return result.trim();
+  }
+
+  /**
+   * Delete a GitHub repository via gh CLI. Requires delete_repo scope.
+   * @param name - Full repo name (e.g. "owner/my-app")
+   */
+  async deleteRepo(name: string): Promise<void> {
+    await exec(`gh repo delete "${name}" --yes`);
+  }
+
+  /**
+   * Set a GitHub Actions secret on a repository.
+   * @param repoName - Full repo name (e.g. "owner/my-app")
+   * @param secretName - Secret name (e.g. "DATABRICKS_TOKEN")
+   * @param secretValue - Secret value
+   */
+  async setRepoSecret(repoName: string, secretName: string, secretValue: string): Promise<void> {
+    const root = getWorkspaceRoot() || undefined;
+    await exec(`echo "${secretValue.replace(/"/g, '\\"')}" | gh secret set "${secretName}" --repo "${repoName}"`, root);
+  }
+
+  /**
+   * Check if a GitHub repository exists.
+   * @param name - Full repo name (e.g. "owner/my-app")
+   */
+  async repoExists(name: string): Promise<boolean> {
+    try {
+      await exec(`gh repo view "${name}" --json name`);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   getCachedBranch(): string {

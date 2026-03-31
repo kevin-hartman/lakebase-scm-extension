@@ -411,6 +411,32 @@ export class LakebaseService {
     return enriched;
   }
 
+  /**
+   * Create a new Lakebase project. Long-running — waits for completion by default.
+   * @param projectId - Project ID (1-63 chars, lowercase, letters/numbers/hyphens, starts with letter)
+   * @returns The created project metadata
+   */
+  async createProject(projectId: string): Promise<{ uid: string; name: string; state: string }> {
+    const raw = await this.dbcli(`postgres create-project "${projectId}" -o json`);
+    const parsed = JSON.parse(raw);
+    // The CLI returns the operation result; extract project info
+    const result = parsed.response || parsed.result || parsed;
+    return {
+      uid: result.uid || projectId,
+      name: result.name || `projects/${projectId}`,
+      state: result.status?.current_state || result.state || 'READY',
+    };
+  }
+
+  /**
+   * Delete a Lakebase project. Long-running — waits for completion by default.
+   * @param projectId - Project ID (e.g. "my-app")
+   */
+  async deleteProject(projectId: string): Promise<void> {
+    const name = projectId.startsWith('projects/') ? projectId : `projects/${projectId}`;
+    await this.dbcli(`postgres delete-project "${name}" -o json`);
+  }
+
   sanitizeBranchName(name: string): string {
     return sanitizeBranchName(name);
   }

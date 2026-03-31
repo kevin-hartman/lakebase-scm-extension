@@ -2,7 +2,7 @@
   "name": "lakebase-scm-extension",
   "displayName": "Lakebase SCM Extension",
   "description": "Unified visibility into code and database branch changes for Databricks Lakebase",
-  "version": "0.3.7",
+  "version": "0.3.7-1",
   "publisher": "databricks-field-eng",
   "icon": "resources/icons/extension-icon.png",
   "repository": {
@@ -1042,7 +1042,8 @@
     "compile": "webpack --mode production",
     "watch": "webpack --mode development --watch",
     "lint": "eslint src --ext ts",
-    "test": "TS_NODE_TRANSPILE_ONLY=1 mocha --require test/setup.js --require ts-node/register 'test/suite/**/*.test.ts' --timeout 10000"
+    "test": "TS_NODE_TRANSPILE_ONLY=1 mocha --require test/setup.js --require ts-node/register 'test/suite/**/*.test.ts' --timeout 10000",
+    "test:integration": "TS_NODE_TRANSPILE_ONLY=1 mocha --require test/setup.js --require ts-node/register 'test/integration/**/*.test.ts' --timeout 120000"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.0",

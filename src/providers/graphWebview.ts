@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import { getWorkspaceRoot } from '../utils/config';
 import { LakebaseService, LakebaseBranch } from '../services/lakebaseService';
+import { GitService } from '../services/gitService';
+import { GraphService } from '../services/graphService';
 
 interface Commit {
   sha: string;
@@ -46,14 +48,18 @@ function rot(i: number): number { return ((i % LANE_COLORS.length) + LANE_COLORS
 export class GraphWebviewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private lakebaseService: LakebaseService;
+  private gitService: GitService;
+  private graphService: GraphService;
   showAllRefs = false;
   graphFilterRefs: string[] | null = null;
   private searchFilter = '';
   private pageSize = 50;
   private loadedCount = 50;
 
-  constructor(private extensionUri: vscode.Uri, lakebaseService: LakebaseService) {
+  constructor(private extensionUri: vscode.Uri, lakebaseService: LakebaseService, gitService: GitService) {
     this.lakebaseService = lakebaseService;
+    this.gitService = gitService;
+    this.graphService = new GraphService(gitService);
   }
 
   resolveWebviewView(v: vscode.WebviewView): void {
@@ -74,93 +80,83 @@ export class GraphWebviewProvider implements vscode.WebviewViewProvider {
           await this.reviewCommit(msg.sha, msg.msg);
           break;
         case 'getBranches':
-          if (!root) break;
           try {
-            const branchList = cp.execSync(`git branch -a --points-at "${msg.sha}" --format="%(refname:short)"`, { cwd: root, timeout: 5000 })
-              .toString().trim().split('\n').filter(Boolean).filter((b: string) => !b.includes('HEAD') && b !== 'origin');
+            const branchList = await this.gitService.getBranchesAtCommit(msg.sha);
             if (this.view) { this.view.webview.postMessage({ type: 'branchesData', branches: branchList }); }
           } catch {
             if (this.view) { this.view.webview.postMessage({ type: 'branchesData', branches: [] }); }
           }
           break;
         case 'checkoutBranch':
-          if (!root || !msg.branch) break;
+          if (!msg.branch) break;
           try {
             const branch = msg.branch.replace(/^origin\//, '');
-            cp.execSync(`git checkout "${branch}"`, { cwd: root, timeout: 15000 });
+            await this.gitService.checkoutBranch(branch);
             vscode.window.showInformationMessage(`Checked out ${branch}`);
             this.refresh();
           } catch (err: any) { vscode.window.showErrorMessage(`Checkout failed: ${err.message}`); }
           break;
         case 'deleteBranchName':
-          if (!root || !msg.branch) break;
+          if (!msg.branch) break;
           try {
             const confirmDel = await vscode.window.showWarningMessage(`Delete branch "${msg.branch}"?`, { modal: true }, 'Delete');
             if (confirmDel === 'Delete') {
-              cp.execSync(`git branch -d "${msg.branch}"`, { cwd: root, timeout: 10000 });
+              await this.gitService.deleteBranch(msg.branch);
               vscode.window.showInformationMessage(`Deleted branch ${msg.branch}`);
               this.refresh();
             }
           } catch (err: any) { vscode.window.showErrorMessage(`Delete failed: ${err.message}`); }
           break;
         case 'checkout':
-          // Fallback: no submenu, just checkout detached
-          if (!root) break;
           try {
-            cp.execSync(`git checkout "${msg.sha}"`, { cwd: root, timeout: 15000 });
+            await this.gitService.checkoutBranch(msg.sha);
             vscode.window.showInformationMessage(`Checked out ${msg.sha}`);
             this.refresh();
           } catch (err: any) { vscode.window.showErrorMessage(`Checkout failed: ${err.message}`); }
           break;
         case 'checkoutDetached':
-          if (!root) break;
           try {
-            cp.execSync(`git checkout --detach "${msg.sha}"`, { cwd: root, timeout: 15000 });
+            await this.gitService.checkoutDetached(msg.sha);
             vscode.window.showInformationMessage(`Detached HEAD at ${msg.sha}`);
             this.refresh();
           } catch (err: any) { vscode.window.showErrorMessage(`Checkout failed: ${err.message}`); }
           break;
         case 'openBlame':
           if (!root) break;
-          // Open the git blame view for the first changed file in this commit
           try {
-            const firstFile = cp.execSync(`git diff-tree --no-commit-id --name-only -r "${msg.sha}"`, { cwd: root, timeout: 5000 }).toString().trim().split('\n')[0];
-            if (firstFile) {
-              const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(`${root}/${firstFile}`));
+            const commitFiles = await this.gitService.getCommitFiles(msg.sha);
+            if (commitFiles.length > 0) {
+              const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(`${root}/${commitFiles[0].path}`));
               await vscode.window.showTextDocument(doc);
               await vscode.commands.executeCommand('gitlens.toggleFileBlame');
             }
           } catch { /* blame not available */ }
           break;
         case 'openGithubCommit':
-          if (!root) break;
           try {
-            const remoteUrl = cp.execSync('git remote get-url origin', { cwd: root, timeout: 5000 }).toString().trim();
-            const ghUrl = remoteUrl.replace(/\.git$/, '').replace(/^git@github\.com:/, 'https://github.com/');
-            await vscode.env.openExternal(vscode.Uri.parse(`${ghUrl}/commit/${msg.sha}`));
+            const ghUrlCommit = await this.graphService.getGitHubUrl();
+            if (ghUrlCommit) { await vscode.env.openExternal(vscode.Uri.parse(`${ghUrlCommit}/commit/${msg.sha}`)); }
           } catch { /* no remote */ }
           break;
         case 'revert':
-          if (!root) break;
           try {
-            cp.execSync(`git revert --no-edit "${msg.sha}"`, { cwd: root, timeout: 30000 });
+            await this.gitService.revert(msg.sha);
             vscode.window.showInformationMessage(`Reverted ${msg.sha}`);
             this.refresh();
           } catch (err: any) { vscode.window.showErrorMessage(`Revert failed: ${err.message}`); }
           break;
         case 'cherryPick':
-          if (!root) break;
           try {
-            cp.execSync(`git cherry-pick "${msg.sha}"`, { cwd: root, timeout: 30000 });
+            await this.gitService.cherryPick(msg.sha);
             vscode.window.showInformationMessage(`Cherry-picked ${msg.sha}`);
             this.refresh();
           } catch (err: any) { vscode.window.showErrorMessage(`Cherry-pick failed: ${err.message}`); }
           break;
         case 'createBranch': {
           const name = await vscode.window.showInputBox({ prompt: `Create branch from ${msg.sha}`, placeHolder: 'branch-name' });
-          if (!name || !root) break;
+          if (!name) break;
           try {
-            cp.execSync(`git checkout -b "${name}" "${msg.sha}"`, { cwd: root, timeout: 15000 });
+            await this.gitService.checkoutBranch(name, true, msg.sha);
             vscode.window.showInformationMessage(`Created branch ${name}`);
             this.refresh();
           } catch (err: any) { vscode.window.showErrorMessage(`Create branch failed: ${err.message}`); }
@@ -168,9 +164,9 @@ export class GraphWebviewProvider implements vscode.WebviewViewProvider {
         }
         case 'createTag': {
           const tag = await vscode.window.showInputBox({ prompt: `Create tag at ${msg.sha}`, placeHolder: 'tag-name' });
-          if (!tag || !root) break;
+          if (!tag) break;
           try {
-            cp.execSync(`git tag "${tag}" "${msg.sha}"`, { cwd: root, timeout: 10000 });
+            await this.gitService.createTag(tag, undefined, msg.sha);
             vscode.window.showInformationMessage(`Created tag ${tag}`);
             this.refresh();
           } catch (err: any) { vscode.window.showErrorMessage(`Create tag failed: ${err.message}`); }
@@ -179,19 +175,17 @@ export class GraphWebviewProvider implements vscode.WebviewViewProvider {
         case 'compareWorking':
           if (!root) break;
           await vscode.commands.executeCommand('vscode.changes', `${msg.sha.substring(0, 7)} ↔ Working Tree`,
-            this.getComparisonFiles(root, msg.sha, null));
+            await this.buildComparisonTuples(root, msg.sha, null));
           break;
         case 'compareHead':
           if (!root) break;
           await vscode.commands.executeCommand('vscode.changes', `${msg.sha.substring(0, 7)} ↔ HEAD`,
-            this.getComparisonFiles(root, msg.sha, 'HEAD'));
+            await this.buildComparisonTuples(root, msg.sha, 'HEAD'));
           break;
         case 'openGithub':
-          if (!root) break;
           try {
-            const remoteUrl = cp.execSync('git remote get-url origin', { cwd: root, timeout: 5000 }).toString().trim();
-            const ghUrl = remoteUrl.replace(/\.git$/, '').replace(/^git@github\.com:/, 'https://github.com/');
-            await vscode.env.openExternal(vscode.Uri.parse(`${ghUrl}/commit/${msg.sha}`));
+            const ghUrlOpen = await this.graphService.getGitHubUrl();
+            if (ghUrlOpen) { await vscode.env.openExternal(vscode.Uri.parse(`${ghUrlOpen}/commit/${msg.sha}`)); }
           } catch { /* no remote */ }
           break;
         case 'mailto':
@@ -230,11 +224,8 @@ export class GraphWebviewProvider implements vscode.WebviewViewProvider {
 
             // 2. Fallback: parse migration SQL from the commit
             if (!found && msg.sha) {
-              let diffRaw = cp.execSync(`git diff-tree --no-commit-id --name-status -r "${msg.sha}"`, { cwd: root, timeout: 10000 }).toString();
-              if (!diffRaw.trim()) { try { diffRaw = cp.execSync(`git diff --name-status "${msg.sha}^1" "${msg.sha}"`, { cwd: root, timeout: 10000 }).toString(); } catch {} }
-              const migFiles = diffRaw.split('\n').filter(Boolean)
-                .map((l: string) => { const p = l.split('\t'); return { status: p[0][0], path: p[p.length - 1] }; })
-                .filter((f: any) => /V\d+.*\.sql$/i.test(f.path));
+              const allFiles = await this.gitService.getCommitFiles(msg.sha);
+              const migFiles = allFiles.filter((f: any) => /V\d+.*\.sql$/i.test(f.path));
 
               if (migFiles.length === 0) { noChanges = true; found = true; }
               else {
@@ -242,7 +233,7 @@ export class GraphWebviewProvider implements vscode.WebviewViewProvider {
                 const seen = new Set<string>();
                 for (const mf of migFiles) {
                   try {
-                    const sql = cp.execSync(`git show "${msg.sha}:${mf.path}"`, { cwd: root, timeout: 10000 }).toString();
+                    const sql = await this.gitService.getFileAtRef(msg.sha, mf.path);
                     // CREATE TABLE
                     const createRx = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?(\w+)\s*\(([\s\S]*?)\);/gi;
                     let cm: RegExpExecArray | null;
@@ -289,11 +280,10 @@ export class GraphWebviewProvider implements vscode.WebviewViewProvider {
           }
           break;
         case 'openPR':
-          if (!root || !msg.number) break;
+          if (!msg.number) break;
           try {
-            const remoteUrl = cp.execSync('git remote get-url origin', { cwd: root, timeout: 5000 }).toString().trim();
-            const ghUrl = remoteUrl.replace(/\.git$/, '').replace(/^git@github\.com:/, 'https://github.com/');
-            await vscode.env.openExternal(vscode.Uri.parse(`${ghUrl}/pull/${msg.number}`));
+            const ghUrlPR = await this.graphService.getGitHubUrl();
+            if (ghUrlPR) { await vscode.env.openExternal(vscode.Uri.parse(`${ghUrlPR}/pull/${msg.number}`)); }
           } catch { /* no remote */ }
           break;
         case 'jsError':
@@ -327,7 +317,13 @@ export class GraphWebviewProvider implements vscode.WebviewViewProvider {
 
   async refresh(): Promise<void> {
     if (!this.view) { return; }
-    let commits = this.getCommits(this.loadedCount);
+    let refArgs = '';
+    if (this.graphFilterRefs && this.graphFilterRefs.length > 0) {
+      refArgs = ' ' + this.graphFilterRefs.map(r => `"${r}"`).join(' ');
+    } else if (this.showAllRefs) {
+      refArgs = ' --all';
+    }
+    let commits = await this.graphService.getCommits(this.loadedCount, refArgs);
     if (this.searchFilter) {
       const q = this.searchFilter;
       commits = commits.filter(c =>
@@ -349,97 +345,6 @@ export class GraphWebviewProvider implements vscode.WebviewViewProvider {
     this.view.webview.html = this.html(viewModels, lakebaseBranchIds);
   }
 
-  private getCommits(limit = 50): Commit[] {
-    const root = getWorkspaceRoot();
-    if (!root) { return []; }
-    try {
-      let refArgs = '';
-      if (this.graphFilterRefs && this.graphFilterRefs.length > 0) {
-        refArgs = ' ' + this.graphFilterRefs.map(r => `"${r}"`).join(' ');
-      } else if (this.showAllRefs) {
-        refArgs = ' --all';
-      }
-      const REC = '\x1e'; // record separator between commits
-      const FLD = '\x1f'; // field separator within a commit
-      const fmt = `%h${FLD}%H${FLD}%p${FLD}%d${FLD}%s${FLD}%an${FLD}%ae${FLD}%ar${FLD}%aD${FLD}%B${REC}`;
-      const raw = cp.execSync(
-        `git log --date-order --format="${fmt}" -${limit}${refArgs}`,
-        { cwd: root, timeout: 10000 }
-      ).toString();
-
-      // Batch fetch shortstat for all commits in one call
-      const statRaw = cp.execSync(
-        `git log --date-order --format="${REC}%h" --shortstat -${limit}${refArgs}`,
-        { cwd: root, timeout: 10000 }
-      ).toString();
-      const statsMap = new Map<string, string>();
-      for (const block of statRaw.split(REC).filter(Boolean)) {
-        const lines = block.trim().split('\n');
-        const sha = lines[0]?.trim();
-        const stat = lines.find(l => l.includes('changed'));
-        if (sha && stat) { statsMap.set(sha, stat.trim()); }
-      }
-
-      // Detect outgoing (local only) and incoming (remote only) commits
-      let outgoing = new Set<string>();
-      let incoming = new Set<string>();
-      try {
-        const out = cp.execSync('git log --oneline @{u}..HEAD 2>/dev/null', { cwd: root, timeout: 5000 }).toString();
-        outgoing = new Set(out.split('\n').filter(Boolean).map(l => l.split(' ')[0]));
-      } catch { /* no upstream or error — no outgoing */ }
-      try {
-        const inc = cp.execSync('git log --oneline HEAD..@{u} 2>/dev/null', { cwd: root, timeout: 5000 }).toString();
-        incoming = new Set(inc.split('\n').filter(Boolean).map(l => l.split(' ')[0]));
-      } catch { /* no upstream or error — no incoming */ }
-
-      // Fetch GitHub avatar URLs via gh API (one call per unique email)
-      const avatarCache = new Map<string, string>();
-      try {
-        const ghRemote = cp.execSync('git remote get-url origin', { cwd: root, timeout: 5000 }).toString().trim();
-        const ghMatch = ghRemote.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
-        if (ghMatch) {
-          const [, owner, repo] = ghMatch;
-          const apiOut = cp.execSync(
-            `gh api repos/${owner}/${repo}/commits?per_page=${limit} --jq '.[] | "\\(.sha[:7]) \\(.author.avatar_url // "")"'`,
-            { cwd: root, timeout: 10000 }
-          ).toString();
-          for (const line of apiOut.split('\n').filter(Boolean)) {
-            const sp = line.indexOf(' ');
-            if (sp > 0) { avatarCache.set(line.substring(0, sp), line.substring(sp + 1)); }
-          }
-        }
-      } catch { /* gh CLI not available or API error — fall back to Gravatar */ }
-
-      return raw.split(REC).filter(s => s.trim()).map(record => {
-        const f = record.split(FLD);
-        const refs: string[] = [];
-        if (f[3]?.trim()) {
-          for (const r of f[3].trim().replace(/^\(/, '').replace(/\)$/, '').split(',')) {
-            if (r.trim()) refs.push(r.trim());
-          }
-        }
-        const sha = f[0]?.trim() || '';
-        const fullSha = f[1]?.trim() || '';
-        const parents = (f[2] || '').split(' ').filter(Boolean);
-        const subject = f[4] || '';
-        const fullMessage = (f[9] || '').trim();
-        const syncKind = outgoing.has(sha) ? 'outgoing' as const
-          : incoming.has(sha) ? 'incoming' as const : undefined;
-        return {
-          sha, fullSha, parents, refs,
-          message: subject,
-          fullMessage: fullMessage || subject,
-          author: f[5] || '', authorEmail: f[6] || '',
-          time: f[7] || '', date: f[8] || '',
-          stats: statsMap.get(sha) || '',
-          avatarUrl: avatarCache.get(sha) || `https://www.gravatar.com/avatar/${require('crypto').createHash('md5').update((f[6] || '').trim().toLowerCase()).digest('hex')}?s=40&d=identicon`,
-          isHead: refs.some(r => r.includes('HEAD')),
-          isMerge: parents.length > 1 || /^Merge (pull request|branch) /.test(subject),
-          syncKind,
-        };
-      });
-    } catch { return []; }
-  }
 
   /**
    * Build view models matching VS Code's toISCMHistoryItemViewModelArray logic.
@@ -890,30 +795,21 @@ ctx.querySelectorAll('.ctx-item').forEach(el=>{
     const root = getWorkspaceRoot();
     if (!root) return;
     try {
-      let raw = cp.execSync(`git diff-tree --no-commit-id --name-status -r "${sha}"`, { cwd: root, timeout: 10000 }).toString();
-      // Merge commits: diff-tree returns empty, diff against first parent instead
-      if (!raw.trim()) {
-        try { raw = cp.execSync(`git diff --name-status "${sha}^1" "${sha}"`, { cwd: root, timeout: 10000 }).toString(); } catch {}
-      }
-      if (!raw.trim()) { vscode.window.showInformationMessage('No file changes in this commit.'); return; }
+      const commitFiles = await this.gitService.getCommitFiles(sha);
+      if (!commitFiles.length) { vscode.window.showInformationMessage('No file changes in this commit.'); return; }
       const changes: [vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined][] = [];
-      for (const line of raw.split('\n').filter(Boolean)) {
-        const parts = line.split('\t');
-        const st = parts[0][0], fp = parts[parts.length - 1];
-        const orig = vscode.Uri.parse(`lakebase-commit://${sha}~1/${fp}`);
-        const mod = vscode.Uri.parse(`lakebase-commit://${sha}/${fp}`);
-        const label = vscode.Uri.file(`${root}/${fp}`);
-        // Always provide both sides so VS Code renders a proper diff with green/red highlighting
-        // For added files: orig returns empty (git show fails → ''), giving all-green diff
-        // For deleted files: mod returns empty, giving all-red diff
+      for (const f of commitFiles) {
+        const orig = vscode.Uri.parse(`lakebase-commit://${sha}~1/${f.path}`);
+        const mod = vscode.Uri.parse(`lakebase-commit://${sha}/${f.path}`);
+        const label = vscode.Uri.file(`${root}/${f.path}`);
         changes.push([label, orig, mod]);
       }
       if (!changes.length) { vscode.window.showInformationMessage('No file changes.'); return; }
 
       // Move migration SQL files to end, then append schema-content diffs
       // matching the branch review format (code first, schema DDL diffs at end)
-      const migPaths = new Set(raw.split('\n').filter(Boolean)
-        .map(line => line.split('\t').pop() || '')
+      const migPaths = new Set(commitFiles
+        .map(f => f.path)
         .filter(fp => /V\d+.*\.sql$/i.test(fp)));
       if (migPaths.size > 0) {
         const codeChanges: typeof changes = [];
@@ -935,7 +831,7 @@ ctx.querySelectorAll('.ctx-item').forEach(el=>{
         const seen = new Set<string>();
         for (const mf of [...migPaths]) {
           try {
-            const sql = cp.execSync(`git show "${sha}:${mf}"`, { cwd: root, timeout: 10000 }).toString();
+            const sql = await this.gitService.getFileAtRef(sha, mf);
             const tableRegex = /(?:CREATE|ALTER|DROP)\s+TABLE\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?(?:public\.)?(\w+)/gi;
             let tm: RegExpExecArray | null;
             while ((tm = tableRegex.exec(sql)) !== null) {
@@ -955,27 +851,18 @@ ctx.querySelectorAll('.ctx-item').forEach(el=>{
     } catch (err: any) { vscode.window.showErrorMessage(`Review failed: ${err.message}`); }
   }
 
-  private getComparisonFiles(root: string, fromSha: string, toRef: string | null): [vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined][] {
-    try {
-      const diffCmd = toRef
-        ? `git diff --name-status "${fromSha}" "${toRef}"`
-        : `git diff --name-status "${fromSha}"`;
-      const raw = cp.execSync(diffCmd, { cwd: root, timeout: 10000 }).toString();
-      const changes: [vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined][] = [];
-      for (const line of raw.split('\n').filter(Boolean)) {
-        const parts = line.split('\t');
-        const st = parts[0][0], fp = parts[parts.length - 1];
-        const left = vscode.Uri.parse(`lakebase-commit://${fromSha}/${fp}`);
-        const right = toRef
-          ? vscode.Uri.parse(`lakebase-commit://${toRef}/${fp}`)
-          : vscode.Uri.file(`${root}/${fp}`);
-        const label = vscode.Uri.file(`${root}/${fp}`);
-        if (st === 'A') changes.push([label, undefined, right]);
-        else if (st === 'D') changes.push([label, left, undefined]);
-        else changes.push([label, left, right]);
-      }
-      return changes;
-    } catch { return []; }
+  private async buildComparisonTuples(root: string, fromSha: string, toRef: string | null): Promise<[vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined][]> {
+    const files = await this.graphService.getDiffFiles(fromSha, toRef);
+    return files.map(f => {
+      const left = vscode.Uri.parse(`lakebase-commit://${fromSha}/${f.path}`);
+      const right = toRef
+        ? vscode.Uri.parse(`lakebase-commit://${toRef}/${f.path}`)
+        : vscode.Uri.file(`${root}/${f.path}`);
+      const label = vscode.Uri.file(`${root}/${f.path}`);
+      if (f.status === 'A') return [label, undefined, right] as [vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined];
+      if (f.status === 'D') return [label, left, undefined] as [vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined];
+      return [label, left, right] as [vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined];
+    });
   }
 
   private e(t: string): string { return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/[\r\n]+/g, '\\n'); }

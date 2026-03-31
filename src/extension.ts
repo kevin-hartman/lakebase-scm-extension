@@ -154,7 +154,7 @@ export async function activate(context: vscode.ExtensionContext) {
   });
 
   // Graph webview
-  const graphWebviewProvider = new GraphWebviewProvider(context.extensionUri, lakebaseService);
+  const graphWebviewProvider = new GraphWebviewProvider(context.extensionUri, lakebaseService, gitService);
   const graphView = vscode.window.registerWebviewViewProvider('lakebaseGraph', graphWebviewProvider);
 
   // Badge count on the activity bar icon (uses the Changes view)
