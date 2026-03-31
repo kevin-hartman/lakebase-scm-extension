@@ -34,42 +34,100 @@ src/main/resources/db/migration/
    - post-checkout hook fires → creates Lakebase branch `feature-book`
    - Developer's `.env` is updated with the branch database connection
 
-2. **Write the migration**
-   - Developer creates `V2__create_book_table.sql` in `src/main/resources/db/migration/`
-   - SQL: CREATE TABLE book (id, title, price, publish_date)
-
-3. **Write the Java code**
+2. **Write the Java code**
    - Developer creates `model/Book.java` — JPA entity with @Entity, @Id, @GeneratedValue
    - Developer creates `repository/BookRepository.java` — extends JpaRepository
    - Developer creates `service/BookService.java` — findAll, findById, save, delete
    - Developer creates `controller/BookController.java` — GET /books, POST /books, GET /books/{id}, DELETE /books/{id}
 
-4. **Commit changes**
+3. **Write the migration SQL**
+   - Developer creates `V2__create_book_table.sql` in `src/main/resources/db/migration/`
+   - SQL: CREATE TABLE book (id, title, price, publish_date)
+
+4. **Run Flyway migrate on branch database**
+   - Developer runs: `./scripts/flyway-migrate.sh` (or `./mvnw flyway:migrate`)
+   - `FlywayService.migrate(projectDir)` applies V2 to the Lakebase branch database
+   - Developer can now run/test the app against their branch database with the new table
+
+5. **Commit changes**
    - Developer runs: `git add -A && git commit -m "Add book entity with CRUD"`
    - prepare-commit-msg hook fires → schema diff appended to commit message
 
-5. **Push to remote**
+6. **Push to remote**
    - Developer runs: `git push -u origin feature/book`
    - pre-push hook fires → syncs GitHub secrets for CI
 
-6. **Create pull request**
+7. **Create pull request**
    - Developer runs: `gh pr create --title "Add book entity" --body "Book CRUD with V2 migration"`
-   - CI workflow (pr.yml) triggers: creates ci-pr-N Lakebase branch, runs Flyway, runs tests, posts schema diff comment
+   - This triggers the PR workflow (pr.yml) on the self-hosted actions runner
 
-7. **Merge pull request**
+8. **CI/CD Pipeline executes (pr.yml on self-hosted runner)**
+   The following steps run automatically on the self-hosted GitHub Actions runner:
+
+   a. **Checkout code** — actions/checkout with full history (fetch-depth: 0)
+   b. **Set up JDK** — Temurin JDK 21/25 with Maven cache
+   c. **Install Databricks CLI** — if not already on runner PATH
+   d. **Create CI database branch** — creates `ci-pr-{N}` Lakebase branch from the default (production) branch
+      - Resolves default branch UID from `list-branches`
+      - Creates branch with `create-branch` (source = default branch)
+      - Waits for READY state (polls up to 2 min)
+      - Gets or creates primary endpoint, waits for ACTIVE
+      - Generates database credential + resolves user email
+      - Outputs JDBC URL, username, password for subsequent steps
+   e. **Configure datasource** — sets SPRING_DATASOURCE_URL/USERNAME/PASSWORD as env vars
+   f. **Install PostgreSQL client** — for Flyway repair and schema diff (psql, pg_dump)
+   g. **Repair flyway_schema_history** — removes bogus entries where migration version is recorded but table doesn't exist (handles Lakebase transaction edge cases)
+   h. **Run Flyway migrate (CI branch)** — `./mvnw flyway:migrate` against ci-pr-{N} database
+      - Lists migration files before
+      - Runs flyway:info, flyway:migrate, flyway:info
+      - This applies V2 (the new migration) to the CI branch database
+   i. **Run Flyway migrate (feature-named branch)** — also applies migrations to the `feature-book` Lakebase branch (keeps it in sync with CI)
+      - Creates the feature-named Lakebase branch from ci-pr-{N} if it doesn't exist
+      - Gets endpoint + credential for the feature branch
+      - Runs `./mvnw flyway:migrate` against the feature branch
+   j. **Run tests** — `./mvnw test` against the CI branch database
+      - Spring Boot starts, Flyway validates (migrations already applied in step h)
+      - Hibernate validates entities match schema (`ddl-auto=validate`)
+      - All @SpringBootTest and @DataJpaTest tests execute against the real branch DB
+   k. **Schema diff (CI vs production)** — generates a comparison:
+      - Runs `pg_dump --schema-only` on both CI branch and production
+      - Uses `format-schema-diff.sh` to produce a human-readable diff
+      - Shows CREATED/MODIFIED/REMOVED tables with column details
+      - Falls back to migration version comparison if pg_dump fails
+   l. **Post PR comment** — comments on the PR with:
+      - ✅ CI passed / ❌ CI failed
+      - Schema diff (tables created/modified/removed)
+      - Link to workflow run
+   m. **Notify tester queue** — optional webhook for QA notification
+
+9. **Merge pull request**
    - Reviewer approves, developer merges
-   - Merge workflow (merge.yml) triggers: runs Flyway on production, verifies schema, cleans up ci-pr-N branch
-   - book table now exists on production
+   - This triggers the merge workflow (merge.yml) on the self-hosted runner:
+     a. **Resolve production DB credentials** — same as CI step d, but for the default (production) branch
+     b. **Flyway migrate (production)** — applies pending migrations to production database
+     c. **Verify schema** — confirms all expected tables exist on production (prevents silent DDL failures)
+     d. **Cleanup Lakebase branches** — deletes `ci-pr-{N}` and the feature-named Lakebase branch
 
 ### Verification Points
 - [ ] Feature branch exists in git
 - [ ] Lakebase branch `feature-book` exists
-- [ ] V2 migration file in commit diff
-- [ ] Push succeeds (pre-push hook)
+- [ ] Java files written (4 files)
+- [ ] V2 migration file written
+- [ ] `./mvnw test` succeeds on branch database (Flyway applies V2, Hibernate validates, tests pass)
+- [ ] `book` table exists on branch database
+- [ ] Commit succeeds (prepare-commit-msg hook fires)
+- [ ] Push succeeds (pre-push hook fires)
 - [ ] PR created successfully
+- [ ] CI pipeline: `ci-pr-{N}` Lakebase branch created
+- [ ] CI pipeline: Flyway migrate succeeds on CI branch
+- [ ] CI pipeline: Flyway migrate succeeds on feature branch
+- [ ] CI pipeline: Tests pass against CI branch database
+- [ ] CI pipeline: Schema diff posted as PR comment (shows book table CREATED)
 - [ ] Merge succeeds
-- [ ] `book` table exists on production
-- [ ] V2 in flyway_schema_history with success=true
+- [ ] Merge pipeline: Flyway applies V2 to production
+- [ ] Merge pipeline: Schema verification passes (book table exists)
+- [ ] Merge pipeline: `ci-pr-{N}` and `feature-book` Lakebase branches cleaned up
+- [ ] V2 in production flyway_schema_history with success=true
 
 ---
 
