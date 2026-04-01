@@ -2112,32 +2112,51 @@ export async function activate(context: vscode.ExtensionContext) {
           return;
         }
 
-        // Check for commits ahead of main — PR requires at least one
+        // ── Pre-PR checks: uncommitted changes → commit → unpushed branch → push ──
+
+        // Step 1: Check for uncommitted changes
+        const uncommitted = (await gitService.getStagedChanges()).length + (await gitService.getUnstagedChanges()).length;
+        if (uncommitted > 0) {
+          const action = await vscode.window.showWarningMessage(
+            `You have ${uncommitted} uncommitted change${uncommitted !== 1 ? 's' : ''}. Commit before creating a PR?`,
+            'Commit & Continue', 'Cancel'
+          );
+          if (action !== 'Commit & Continue') { return; }
+          await vscode.commands.executeCommand('lakebaseSync.commit');
+        }
+
+        // Step 2: Check if branch has any commits vs main
         try {
-          const { ahead } = await gitService.getAheadBehind();
-          if (ahead === 0) {
-            const uncommitted = (await gitService.getStagedChanges()).length + (await gitService.getUnstagedChanges()).length;
-            if (uncommitted > 0) {
-              const action = await vscode.window.showWarningMessage(
-                `No commits on this branch yet. You have ${uncommitted} uncommitted change${uncommitted !== 1 ? 's' : ''} — commit them first.`,
-                'Commit Now', 'Cancel'
-              );
-              if (action !== 'Commit Now') { return; }
-              // Wait for the commit to complete, then continue to PR creation
-              await vscode.commands.executeCommand('lakebaseSync.commit');
-              // Re-check: did the commit succeed?
-              const { ahead: newAhead } = await gitService.getAheadBehind();
-              if (newAhead === 0) {
-                vscode.window.showWarningMessage('Commit did not produce a new commit. PR creation cancelled.');
-                return;
-              }
-              // Fall through to continue PR creation
-            } else {
-              vscode.window.showWarningMessage('No commits between main and this branch. Nothing to create a PR for.');
+          const changedFiles = await gitService.getChangedFiles();
+          if (changedFiles.length === 0) {
+            // No diff between merge-base and HEAD — nothing to PR
+            const uncommittedNow = (await gitService.getStagedChanges()).length + (await gitService.getUnstagedChanges()).length;
+            if (uncommittedNow === 0) {
+              vscode.window.showWarningMessage('No changes between main and this branch. Nothing to create a PR for.');
               return;
             }
           }
-        } catch { /* ignore — let gh pr create handle it */ }
+        } catch { /* ignore */ }
+
+        // Step 3: Check if branch is pushed — offer to push if not
+        const hasUpstream = await gitService.hasUpstream();
+        if (!hasUpstream) {
+          const action = await vscode.window.showInformationMessage(
+            `Branch "${currentBranch}" hasn't been pushed yet. Push to GitHub?`,
+            'Push & Continue', 'Cancel'
+          );
+          if (action !== 'Push & Continue') { return; }
+          await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: `Pushing ${currentBranch}...` },
+            async () => {
+              const root = getWorkspaceRoot();
+              if (root) {
+                const { exec: execUtil } = require('./utils/exec');
+                await execUtil(`git push -u origin "${currentBranch}"`, root);
+              }
+            }
+          );
+        }
 
         // Pre-flight: ensure GitHub secrets are set and fresh for CI
         const root = getWorkspaceRoot();
