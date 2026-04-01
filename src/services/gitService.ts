@@ -934,7 +934,9 @@ export class GitService {
       // Only return open PRs
       if (pr.state && pr.state !== 'OPEN') { return undefined; }
 
-      // Parse CI status and individual checks from statusCheckRollup
+      // Parse CI status and individual checks from statusCheckRollup.
+      // GitHub returns ALL check runs (including retries), so we must deduplicate
+      // by check name and only consider the LATEST run for each.
       let ciStatus: PullRequestInfo['ciStatus'] = 'unknown';
       const rawChecks = pr.statusCheckRollup || [];
       const parsedChecks: PullRequestCheck[] = rawChecks.map((c: any) => ({
@@ -947,7 +949,14 @@ export class GitService {
       if (rawChecks.length === 0) {
         ciStatus = 'pending';
       } else {
-        const states = rawChecks.map((c: any) => (c.conclusion || c.status || '').toUpperCase());
+        // Deduplicate: keep only the latest check per name (last in the array = most recent)
+        const latestByName = new Map<string, any>();
+        for (const c of rawChecks) {
+          const name = c.name || c.context || 'unknown';
+          latestByName.set(name, c);
+        }
+        const latestChecks = Array.from(latestByName.values());
+        const states = latestChecks.map((c: any) => (c.conclusion || c.status || '').toUpperCase());
         if (states.some((s: string) => s === 'FAILURE' || s === 'ERROR' || s === 'ACTION_REQUIRED')) {
           ciStatus = 'failure';
         } else if (states.every((s: string) => s === 'SUCCESS' || s === 'NEUTRAL' || s === 'SKIPPED')) {
