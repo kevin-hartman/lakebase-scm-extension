@@ -21,27 +21,27 @@ export function syncCiSecrets(root: string, comment: string, lifetimeSeconds: nu
   const projectId = getEnvVal('LAKEBASE_PROJECT_ID');
 
   if (host) {
-    cp.execSync(`gh secret set DATABRICKS_HOST --body "${host}"`, { cwd: root, timeout: 10000 });
+    cp.execSync(`gh secret set DATABRICKS_HOST --body "${host}"`, { cwd: root, timeout: 30000 });
   }
   if (projectId) {
-    cp.execSync(`gh secret set LAKEBASE_PROJECT_ID --body "${projectId}"`, { cwd: root, timeout: 10000 });
+    cp.execSync(`gh secret set LAKEBASE_PROJECT_ID --body "${projectId}"`, { cwd: root, timeout: 30000 });
   }
 
   // Generate a fresh Databricks token for CI
   try {
     const tokenRaw = cp.execSync(
       `databricks tokens create --comment "${comment}" --lifetime-seconds ${lifetimeSeconds} -o json`,
-      { cwd: root, timeout: 15000, env: { ...process.env, DATABRICKS_HOST: host } }
+      { cwd: root, timeout: 30000, env: { ...process.env, DATABRICKS_HOST: host } }
     ).toString();
     const token = JSON.parse(tokenRaw).token_value || JSON.parse(tokenRaw).token || '';
     if (token) {
-      cp.execSync(`gh secret set DATABRICKS_TOKEN --body "${token}"`, { cwd: root, timeout: 10000 });
+      cp.execSync(`gh secret set DATABRICKS_TOKEN --body "${token}"`, { cwd: root, timeout: 30000 });
     }
   } catch {
     // Token creation may fail — fall back to existing token from .env
     const existingToken = getEnvVal('DATABRICKS_TOKEN');
     if (existingToken) {
-      cp.execSync(`gh secret set DATABRICKS_TOKEN --body "${existingToken}"`, { cwd: root, timeout: 10000 });
+      cp.execSync(`gh secret set DATABRICKS_TOKEN --body "${existingToken}"`, { cwd: root, timeout: 30000 });
     }
   }
 }
