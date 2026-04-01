@@ -53,8 +53,13 @@ function sanitizeBranchName(gitBranch: string): string {
 export class LakebaseService {
   /** Runtime host override — set when user selects a workspace via the picker */
   private hostOverride: string | undefined;
+  /** Runtime project ID override — set for integration tests or when workspace .env is not available */
+  private projectIdOverride: string | undefined;
 
   private projectPath(): string {
+    if (this.projectIdOverride) {
+      return `projects/${this.projectIdOverride}`;
+    }
     const config = getConfig();
     return `projects/${config.lakebaseProjectId}`;
   }
@@ -71,6 +76,11 @@ export class LakebaseService {
   /** Set a runtime host override (persists for this session) */
   setHostOverride(host: string): void {
     this.hostOverride = host.replace(/\/+$/, '');
+  }
+
+  /** Set a runtime project ID override (for integration tests or non-workspace contexts) */
+  setProjectIdOverride(projectId: string): void {
+    this.projectIdOverride = projectId;
   }
 
   /** Build env vars to inject DATABRICKS_HOST so CLI targets the correct workspace */
@@ -405,6 +415,50 @@ export class LakebaseService {
   }
 
   /**
+   * Query the actual tables on a Lakebase branch database (names only).
+   * @param branchNameOrUid - Branch uid, branchId, or full resource name
+   * @returns Array of table names in the public schema, or empty if unavailable
+   */
+  async queryBranchTables(branchNameOrUid: string): Promise<string[]> {
+    const schema = await this.queryBranchSchema(branchNameOrUid);
+    return schema.map(t => t.name);
+  }
+
+  /**
+   * Query the actual tables and their columns on a Lakebase branch database.
+   * Connects via the branch endpoint and queries information_schema.
+   * @param branchNameOrUid - Branch uid, branchId, or full resource name
+   * @returns Array of { name, columns[] } for each table in the public schema
+   */
+  async queryBranchSchema(branchNameOrUid: string): Promise<Array<{ name: string; columns: Array<{ name: string; dataType: string }> }>> {
+    try {
+      const ep = await this.getEndpoint(branchNameOrUid);
+      if (!ep?.host) { return []; }
+      const cred = await this.getCredential(branchNameOrUid);
+      const connStr = `host=${ep.host} port=5432 dbname=databricks_postgres user=${cred.email} password=${cred.token} sslmode=require`;
+      const { execSync } = require('child_process');
+      // Query all columns for all public tables in one shot
+      // Format: tablename|column_name|data_type (pipe-separated, one row per column)
+      const raw: string = execSync(
+        `psql "${connStr}" -t -A -c "SELECT c.table_name, c.column_name, c.data_type FROM information_schema.columns c JOIN pg_tables t ON c.table_name = t.tablename WHERE c.table_schema='public' AND t.schemaname='public' ORDER BY c.table_name, c.ordinal_position;"`,
+        { timeout: 15000 }
+      ).toString().trim();
+      if (!raw) { return []; }
+
+      const tables = new Map<string, Array<{ name: string; dataType: string }>>();
+      for (const line of raw.split('\n').filter(Boolean)) {
+        const [tableName, colName, dataType] = line.split('|');
+        if (!tableName) { continue; }
+        if (!tables.has(tableName)) { tables.set(tableName, []); }
+        tables.get(tableName)!.push({ name: colName, dataType });
+      }
+      return Array.from(tables.entries()).map(([name, columns]) => ({ name, columns }));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * Create a new Lakebase project. Long-running — waits for completion by default.
    * @param projectId - Project ID (1-63 chars, lowercase, letters/numbers/hyphens, starts with letter)
    * @returns The created project metadata
@@ -434,16 +488,31 @@ export class LakebaseService {
     return sanitizeBranchName(name);
   }
 
-  /** Build the Databricks console URL for a Lakebase project or branch */
-  getConsoleUrl(branchUid?: string): string {
-    const host = this.getEffectiveHost().replace(/\/+$/, '');
-    const config = getConfig();
-    const projectId = config.lakebaseProjectId;
-    if (!host || !projectId) {
-      return '';
+  /** Resolve the project UUID from list-projects (the console URL uses UUID, not project name) */
+  async getProjectUid(): Promise<string | undefined> {
+    try {
+      const raw = await this.dbcli('postgres list-projects -o json');
+      const parsed = JSON.parse(raw);
+      const projects = Array.isArray(parsed) ? parsed : parsed.projects || [];
+      const projPath = this.projectPath();
+      const proj = projects.find((p: any) =>
+        p.uid === projPath.replace('projects/', '') ||
+        p.name === projPath ||
+        (p.name && p.name.endsWith(`/${projPath.replace('projects/', '')}`))
+      );
+      return proj?.uid;
+    } catch {
+      return undefined;
     }
-    // Databricks Lakebase console URL pattern
-    let url = `${host}/lakebase/projects/${projectId}`;
+  }
+
+  /** Build the Databricks console URL for a Lakebase project or branch */
+  async getConsoleUrl(branchUid?: string): Promise<string> {
+    const host = this.getEffectiveHost().replace(/\/+$/, '');
+    if (!host) { return ''; }
+    const projectUid = await this.getProjectUid();
+    if (!projectUid) { return ''; }
+    let url = `${host}/lakebase/projects/${projectUid}`;
     if (branchUid) {
       url += `/branches/${branchUid}`;
     }

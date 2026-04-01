@@ -83,7 +83,7 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
       return this.getMigrationFiles(element.branchName!);
     }
     if (element.itemType === 'tableList') {
-      return this.getTableList();
+      return this.getTableList(element.branchName, element.lakebaseBranch);
     }
     if (element.itemType === 'fileList') {
       return this.getBranchFiles(element.branchName!);
@@ -154,9 +154,14 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
       lbItem.tooltip = isConnected
         ? `Lakebase Project: ${label}${displayName ? `\nID: ${config.lakebaseProjectId}` : ''}${host ? `\nWorkspace: ${host}` : ''}\nConnected`
         : `Lakebase Project: ${config.lakebaseProjectId}${host ? `\nWorkspace: ${host}` : ''}\nNot connected — click to login`;
-      lbItem.command = isConnected && config.databricksHost
-        ? { command: 'vscode.open', title: 'Open Workspace', arguments: [vscode.Uri.parse(config.databricksHost)] }
-        : { command: 'lakebaseSync.connectWorkspace', title: 'Connect' };
+      if (isConnected) {
+        const consoleUrl = await this.lakebaseService.getConsoleUrl();
+        lbItem.command = consoleUrl
+          ? { command: 'vscode.open', title: 'Open Lakebase Project', arguments: [vscode.Uri.parse(consoleUrl)] }
+          : { command: 'lakebaseSync.openInConsole', title: 'Open Console' };
+      } else {
+        lbItem.command = { command: 'lakebaseSync.connectWorkspace', title: 'Connect' };
+      }
       items.push(lbItem);
     }
 
@@ -307,13 +312,16 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
 
     // Database — collapsible to show tables
     if (lb) {
-      const dbLabel = lb.isDefault ? `default (${lb.state})` : `${lb.branchId} (${lb.state})`;
-      const dbItem = new BranchItem(undefined, undefined, 'tableList',
+      const dbLabel = lb.isDefault ? `production (${lb.state})` : `${lb.branchId} (${lb.state})`;
+      const dbItem = new BranchItem(undefined, lb, 'tableList',
         dbLabel,
         vscode.TreeItemCollapsibleState.Collapsed
       );
       dbItem.iconPath = new vscode.ThemeIcon('database');
-      dbItem.tooltip = 'Click to expand and see tables in this Lakebase branch';
+      dbItem.branchName = gb?.name;
+      dbItem.tooltip = lb.isDefault
+        ? 'Click to expand and see tables on production'
+        : 'Click to expand and see tables in this Lakebase branch';
       details.push(dbItem);
 
       if (lb.endpointHost) {
@@ -374,17 +382,115 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
   private makeTableCommand(tableName: string, changeType: 'new' | 'modified' | 'removed' | 'unchanged'): vscode.Command {
     const branchUri = vscode.Uri.parse(`lakebase-schema-content://branch/${tableName}`);
     const prodUri = vscode.Uri.parse(`lakebase-schema-content://production/${tableName}`);
-    if (changeType === 'modified') {
-      return { command: 'vscode.diff', title: 'Schema Diff', arguments: [prodUri, branchUri, `${tableName} (production ↔ branch)`] };
+    if (changeType === 'unchanged') {
+      // No diff needed — just show the DDL
+      return { command: 'vscode.open', title: 'View Table', arguments: [branchUri] };
     }
-    if (changeType === 'removed') {
-      return { command: 'vscode.open', title: 'View Removed Table', arguments: [prodUri] };
-    }
-    // new or unchanged — open branch DDL
-    return { command: 'vscode.open', title: 'View Table', arguments: [branchUri] };
+    // new, modified, removed — always show diff (production ↔ branch)
+    // For new: production side is empty → entire DDL shows as green additions
+    // For removed: branch side is empty → entire DDL shows as red deletions
+    // For modified: shows red/green for changed columns
+    const labels: Record<string, string> = {
+      new: `${tableName} (new on branch)`,
+      modified: `${tableName} (production ↔ branch)`,
+      removed: `${tableName} (removed on branch)`,
+    };
+    return { command: 'vscode.diff', title: 'Schema Diff', arguments: [prodUri, branchUri, labels[changeType]] };
   }
 
-  private async getTableList(): Promise<BranchItem[]> {
+  private async getTableList(branchName?: string, lakebaseBranch?: LakebaseBranch): Promise<BranchItem[]> {
+    // Query actual tables + columns from the Lakebase branch database, diff against production
+    if (lakebaseBranch) {
+      const branchSchema = await this.lakebaseService.queryBranchSchema(lakebaseBranch.uid);
+      const filtered = branchSchema.filter(t => t.name !== 'flyway_schema_history');
+
+      if (filtered.length === 0 && lakebaseBranch.isDefault) {
+        const emptyItem = new BranchItem(undefined, undefined, 'detail', 'No tables');
+        emptyItem.iconPath = new vscode.ThemeIcon('info');
+        return [emptyItem];
+      }
+
+      // For non-default branches, query production schema for comparison
+      let prodSchema: Map<string, string[]> | undefined; // tableName → sorted column signatures
+      if (!lakebaseBranch.isDefault) {
+        try {
+          const defaultBranch = await this.lakebaseService.getDefaultBranch();
+          if (defaultBranch) {
+            const prodTables = await this.lakebaseService.queryBranchSchema(defaultBranch.uid);
+            prodSchema = new Map();
+            for (const t of prodTables) {
+              if (t.name === 'flyway_schema_history') { continue; }
+              prodSchema.set(t.name, t.columns.map(c => `${c.name}:${c.dataType}`).sort());
+            }
+          }
+        } catch { /* can't reach production — skip diff */ }
+      }
+
+      const items: BranchItem[] = filtered.map(table => {
+        const item = new BranchItem(undefined, undefined, 'detail', table.name);
+        const colCount = table.columns.length;
+        let status: 'new' | 'modified' | 'unchanged' = 'unchanged';
+
+        if (prodSchema !== undefined && !lakebaseBranch.isDefault) {
+          const prodCols = prodSchema.get(table.name);
+          if (!prodCols) {
+            // Table doesn't exist on production → new
+            status = 'new';
+          } else {
+            // Compare column signatures
+            const branchCols = table.columns.map(c => `${c.name}:${c.dataType}`).sort();
+            if (JSON.stringify(branchCols) !== JSON.stringify(prodCols)) {
+              status = 'modified';
+            }
+          }
+        }
+
+        // On feature branches, skip unchanged tables — only show diffs
+        // On main/production, show all tables in white
+        if (status === 'unchanged' && !lakebaseBranch.isDefault) { return null; }
+
+        if (status === 'new') {
+          item.iconPath = new vscode.ThemeIcon('diff-added', new vscode.ThemeColor('charts.green'));
+          item.description = `new · ${colCount} columns`;
+        } else if (status === 'modified') {
+          item.iconPath = new vscode.ThemeIcon('diff-modified', new vscode.ThemeColor('charts.yellow'));
+          item.description = `modified · ${colCount} columns`;
+        } else {
+          item.iconPath = new vscode.ThemeIcon('symbol-class', new vscode.ThemeColor('foreground'));
+          item.description = colCount > 0 ? `${colCount} columns` : '';
+        }
+
+        const colList = table.columns.map(c => `${c.name}: ${c.dataType}`).join('\n');
+        item.tooltip = new vscode.MarkdownString(
+          `**${table.name}**${status !== 'unchanged' ? ` (${status})` : ''}\n\n` +
+          (colList ? `\`\`\`\n${colList}\n\`\`\`` : 'No columns')
+        );
+        item.command = this.makeTableCommand(table.name, status === 'new' ? 'new' : status === 'modified' ? 'modified' : 'unchanged');
+        return item;
+      }).filter((item): item is BranchItem => item !== null);
+
+      // Tables removed on this branch (exist on production but not on branch)
+      if (prodSchema !== undefined && !lakebaseBranch.isDefault) {
+        const branchSet = new Set(filtered.map(t => t.name));
+        for (const [name] of prodSchema) {
+          if (!branchSet.has(name)) {
+            const item = new BranchItem(undefined, undefined, 'detail', name);
+            item.iconPath = new vscode.ThemeIcon('diff-removed', new vscode.ThemeColor('charts.red'));
+            item.description = 'removed';
+            item.command = this.makeTableCommand(name, 'removed');
+            items.push(item);
+          }
+        }
+      }
+
+      if (items.length === 0) {
+        const emptyItem = new BranchItem(undefined, undefined, 'detail', 'No tables');
+        emptyItem.iconPath = new vscode.ThemeIcon('info');
+        return [emptyItem];
+      }
+      return items;
+    }
+
     // Try cached schema diff first (has branchTables + diff status)
     if (this.schemaDiffService) {
       const cached = this.schemaDiffService.getCachedDiff();

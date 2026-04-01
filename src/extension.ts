@@ -16,6 +16,8 @@ import { GraphWebviewProvider } from './providers/graphWebview';
 import { getConfig, getWorkspaceRoot } from './utils/config';
 import { isMainBranch } from './utils/theme';
 import { buildDiffTuples, DiffTuple } from './utils/diffBuilder';
+import { ProjectCreationService, PROJECT_CREATION_PROMPTS } from './services/projectCreationService';
+import { ScaffoldService } from './services/scaffoldService';
 
 let gitService: GitService;
 let lakebaseService: LakebaseService;
@@ -436,6 +438,237 @@ export async function activate(context: vscode.ExtensionContext) {
       );
     }),
 
+    vscode.commands.registerCommand('lakebaseSync.createProject', async () => {
+      const cp = require('child_process');
+      const path = require('path');
+
+      // ── Step 1: Project name + location ──────────────────────────
+      const projectName = await vscode.window.showInputBox({
+        prompt: PROJECT_CREATION_PROMPTS.projectName.prompt,
+        placeHolder: PROJECT_CREATION_PROMPTS.projectName.placeHolder,
+        validateInput: PROJECT_CREATION_PROMPTS.projectName.validateInput,
+        title: 'Lakebase: Create New Project (1/7)',
+      });
+      if (!projectName) { return; }
+
+      const folderUri = await vscode.window.showOpenDialog({
+        title: PROJECT_CREATION_PROMPTS.parentDir.title,
+        openLabel: PROJECT_CREATION_PROMPTS.parentDir.openLabel,
+        canSelectFolders: true,
+        canSelectFiles: false,
+        canSelectMany: false,
+      });
+      if (!folderUri || folderUri.length === 0) { return; }
+      const parentDir = folderUri[0].fsPath;
+
+      // ── Step 2: GitHub auth + repo ───────────────────────────────
+      let ghUser: string | undefined;
+      try {
+        ghUser = cp.execSync('gh api user --jq ".login"', { timeout: 10000 }).toString().trim();
+      } catch { /* not authenticated */ }
+
+      if (ghUser) {
+        const authPick = await vscode.window.showQuickPick([
+          { label: `$(check) Authenticated as ${ghUser}`, description: 'Continue with this account', action: 'continue' },
+          { label: '$(sign-in) Switch GitHub account...', description: 'Sign in with a different account', action: 'login' },
+        ], { title: 'Lakebase: GitHub Authentication (2/7)', placeHolder: `GitHub: ${ghUser}` });
+        if (!authPick) { return; }
+        if (authPick.action === 'login') { ghUser = undefined; }
+      }
+
+      if (!ghUser) {
+        const loginPick = await vscode.window.showQuickPick([
+          { label: '$(sign-in) Sign in to GitHub', description: 'Opens browser for GitHub authentication' },
+        ], { title: 'Lakebase: GitHub Authentication (2/7)', placeHolder: 'GitHub authentication required' });
+        if (!loginPick) { return; }
+
+        const terminal = vscode.window.createTerminal('GitHub Login');
+        terminal.show();
+        terminal.sendText('gh auth login --web');
+
+        await new Promise<void>(resolve => {
+          const d = vscode.window.onDidCloseTerminal(t => { if (t === terminal) { d.dispose(); resolve(); } });
+        });
+
+        try {
+          ghUser = cp.execSync('gh api user --jq ".login"', { timeout: 10000 }).toString().trim();
+        } catch {
+          vscode.window.showErrorMessage('GitHub authentication failed. Please try again.');
+          return;
+        }
+      }
+
+      const repoName = await vscode.window.showInputBox({
+        prompt: 'GitHub repository name',
+        value: projectName,
+        placeHolder: projectName,
+        title: 'Lakebase: GitHub Repository (3/7)',
+        validateInput: (val) => {
+          if (!val.trim()) { return 'Repository name is required'; }
+          if (!/^[a-zA-Z0-9._-]+$/.test(val)) { return 'Invalid characters in repo name'; }
+          return undefined;
+        },
+      });
+      if (!repoName) { return; }
+
+      const visibilityPick = await vscode.window.showQuickPick([
+        { label: '$(lock) Private', description: 'Only you and collaborators can see this repository', value: true },
+        { label: '$(globe) Public', description: 'Anyone on the internet can see this repository', value: false },
+      ], { title: 'Lakebase: Repository Visibility (4/7)', placeHolder: 'Choose repository visibility' });
+      if (!visibilityPick) { return; }
+
+      // ── Step 3: Databricks / Lakebase auth ───────────────────────
+      let dbHost: string | undefined;
+      const authStatus = await lakebaseService.checkAuth();
+      if (authStatus.authenticated) {
+        dbHost = lakebaseService.getEffectiveHost();
+      }
+
+      if (dbHost) {
+        const dbPick = await vscode.window.showQuickPick([
+          { label: `$(check) Connected to ${dbHost.replace(/^https?:\/\//, '')}`, description: 'Use this workspace', action: 'continue' },
+          { label: '$(plug) Connect to a different workspace...', description: 'Choose another Databricks workspace', action: 'switch' },
+        ], { title: 'Lakebase: Databricks Workspace (5/7)', placeHolder: 'Databricks workspace' });
+        if (!dbPick) { return; }
+        if (dbPick.action === 'switch') { dbHost = undefined; }
+      }
+
+      if (!dbHost) {
+        // Reuse the workspace picker pattern from connectWorkspace
+        const profiles = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: 'Discovering Lakebase workspaces...' },
+          () => lakebaseService.listLakebaseProfiles()
+        );
+
+        interface WsPick extends vscode.QuickPickItem { host: string; valid: boolean; action?: string }
+        const wsItems: WsPick[] = [];
+        for (const p of profiles) {
+          const count = p.lakebaseProjects?.length || 0;
+          wsItems.push({
+            label: `$(database) ${p.name}`,
+            description: `${p.host} (${p.cloud})`,
+            detail: `${count} Lakebase project${count !== 1 ? 's' : ''}`,
+            host: p.host, valid: p.valid,
+          });
+        }
+        wsItems.push({ label: '', kind: vscode.QuickPickItemKind.Separator, host: '', valid: false });
+        wsItems.push({
+          label: '$(add) Connect to a new workspace...',
+          detail: 'Enter a workspace URL and authenticate',
+          host: '', valid: false, action: 'new',
+        });
+
+        const wsPick = await vscode.window.showQuickPick(wsItems, {
+          title: 'Lakebase: Select Workspace (5/7)',
+          placeHolder: 'Choose a Databricks workspace with Lakebase',
+        });
+        if (!wsPick) { return; }
+
+        if (wsPick.action === 'new') {
+          const hostInput = await vscode.window.showInputBox({
+            prompt: PROJECT_CREATION_PROMPTS.databricksHost.prompt,
+            placeHolder: PROJECT_CREATION_PROMPTS.databricksHost.placeHolder,
+            validateInput: PROJECT_CREATION_PROMPTS.databricksHost.validateInput,
+          });
+          if (!hostInput) { return; }
+          dbHost = hostInput.replace(/\/+$/, '');
+        } else {
+          dbHost = wsPick.host;
+        }
+
+        // Authenticate if needed
+        lakebaseService.setHostOverride(dbHost);
+        const newAuth = await lakebaseService.checkAuth();
+        if (!newAuth.authenticated) {
+          const loginCmd = lakebaseService.getLoginCommand(dbHost);
+          const terminal = vscode.window.createTerminal('Databricks Login');
+          terminal.show();
+          terminal.sendText(loginCmd);
+
+          await new Promise<void>(resolve => {
+            const d = vscode.window.onDidCloseTerminal(t => { if (t === terminal) { d.dispose(); resolve(); } });
+          });
+
+          const recheck = await lakebaseService.checkAuth();
+          if (!recheck.authenticated) {
+            vscode.window.showErrorMessage('Databricks authentication failed. Please try again.');
+            return;
+          }
+        }
+      }
+
+      const lakebaseProjectName = await vscode.window.showInputBox({
+        prompt: 'Lakebase project name',
+        value: repoName,
+        placeHolder: repoName,
+        title: 'Lakebase: Project Name (6/7)',
+        validateInput: PROJECT_CREATION_PROMPTS.projectName.validateInput,
+      });
+      if (!lakebaseProjectName) { return; }
+
+      // ── Step 4: Execute ──────────────────────────────────────────
+      const extensionPath = context.extensionPath;
+      const scaffoldSvc = new ScaffoldService(extensionPath);
+      const creationSvc = new ProjectCreationService(gitService, lakebaseService, scaffoldSvc);
+      lakebaseService.setHostOverride(dbHost!);
+      lakebaseService.setProjectIdOverride(lakebaseProjectName);
+
+      try {
+        const result = await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: 'Creating Lakebase project...',
+            cancellable: false,
+          },
+          async (progress) => {
+            return creationSvc.createProject(
+              {
+                projectName: lakebaseProjectName,
+                parentDir,
+                databricksHost: dbHost!,
+                githubOwner: ghUser!,
+                privateRepo: visibilityPick.value,
+              },
+              (step, detail) => {
+                progress.report({ message: `${step}${detail ? ' — ' + detail : ''}` });
+              }
+            );
+          }
+        );
+
+        const openAction = await vscode.window.showInformationMessage(
+          `Project "${lakebaseProjectName}" created successfully!\n` +
+          `GitHub: ${result.githubRepoUrl}\n` +
+          `Lakebase: ${result.lakebaseProjectId}`,
+          'Open Project', 'Open on GitHub'
+        );
+        if (openAction === 'Open Project') {
+          const projectUri = vscode.Uri.file(result.projectDir);
+          await vscode.commands.executeCommand('vscode.openFolder', projectUri, { forceNewWindow: false });
+        } else if (openAction === 'Open on GitHub') {
+          vscode.env.openExternal(vscode.Uri.parse(result.githubRepoUrl));
+        }
+      } catch (err: any) {
+        const action = await vscode.window.showErrorMessage(
+          `Project creation failed: ${err.message}`,
+          'Clean Up', 'Dismiss'
+        );
+        if (action === 'Clean Up') {
+          try {
+            await creationSvc.cleanupProject({
+              projectName: lakebaseProjectName,
+              parentDir,
+              databricksHost: dbHost!,
+              githubOwner: ghUser!,
+            });
+            vscode.window.showInformationMessage('Partial resources cleaned up.');
+          } catch (cleanErr: any) {
+            vscode.window.showErrorMessage(`Cleanup failed: ${cleanErr.message}`);
+          }
+        }
+      }
+    }),
+
     vscode.commands.registerCommand('lakebaseSync.createUnifiedBranch', async () => {
       const branchName = await vscode.window.showInputBox({
         prompt: 'New branch name',
@@ -751,8 +984,12 @@ export async function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand('lakebaseSync.showBranchDiff', async (item?: BranchItem) => {
       try {
+        // If invoked on main/production, there's nothing to diff
+        if (item?.lakebaseBranch?.isDefault || (item?.gitBranch && isMainBranch(item.gitBranch.name))) {
+          vscode.window.showInformationMessage('This is the production branch — no diff to show.');
+          return;
+        }
         const fileChanges = await gitService.getChangedFiles();
-        // If invoked from a tree item, diff that branch; otherwise diff current
         const branchId = item?.lakebaseBranch?.branchId;
         await schemaDiffProvider.showDiff(false, fileChanges, branchId);
       } catch (err: any) {
@@ -790,7 +1027,7 @@ export async function activate(context: vscode.ExtensionContext) {
           // Fall through — url will be project-level
         }
       }
-      const url = lakebaseService.getConsoleUrl(branchUid);
+      const url = await lakebaseService.getConsoleUrl(branchUid);
       if (!url) {
         vscode.window.showWarningMessage('Cannot build console URL. Check DATABRICKS_HOST and LAKEBASE_PROJECT_ID in .env.');
         return;

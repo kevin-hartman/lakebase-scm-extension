@@ -56,15 +56,19 @@ jobs:
           export DATABRICKS_HOST DATABRICKS_TOKEN
           PROJ_PATH="projects/${LAKEBASE_PROJECT_ID}"
           DB_NAME="databricks_postgres"
+          # Extract both full name and uid of the default branch.
+          # Use .name (full resource path) for API calls — uid may differ from branch name segment.
+          DEFAULT_NAME="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null | jq -r '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[] | select((.status.default == true) or (.is_default == true)) | .name' | head -1)"
           DEFAULT_UID="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null | jq -r '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[] | select((.status.default == true) or (.is_default == true)) | (.uid // .id // (if .name then (.name | split("/") | last) else empty end))' | head -1)"
           if [ -z "$DEFAULT_UID" ]; then
+            DEFAULT_NAME="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null | jq -r '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[0] | .name')"
             DEFAULT_UID="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null | jq -r '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[0] | (.uid // .id // (if .name then (.name | split("/") | last) else empty end))')"
           fi
           if [ -z "$DEFAULT_UID" ]; then
             echo "Could not find default Lakebase branch."
             exit 0
           fi
-          BRANCH_PATH="${PROJ_PATH}/branches/${DEFAULT_UID}"
+          BRANCH_PATH="${DEFAULT_NAME:-${PROJ_PATH}/branches/${DEFAULT_UID}}"
           HOST="$(databricks postgres list-endpoints "$BRANCH_PATH" -o json 2>/dev/null | jq -r '.[0].status.hosts.host // empty')"
           if [ -z "$HOST" ]; then
             databricks postgres create-endpoint "$BRANCH_PATH" "primary" --json '{"spec": {"endpoint_type": "ENDPOINT_TYPE_READ_WRITE", "autoscaling_limit_min_cu": 2, "autoscaling_limit_max_cu": 4}}' 2>/dev/null || true
@@ -109,6 +113,69 @@ jobs:
             echo "::error::Flyway migrate failed. Check: (1) Production DB reachable and credentials valid, (2) No migration version conflict, (3) Migration SQL is valid."
             exit 1
           fi
+
+      - name: Verify schema (post-migrate)
+        env:
+          SPRING_DATASOURCE_URL: ${{ env.SPRING_DATASOURCE_URL || secrets.SPRING_DATASOURCE_URL || '' }}
+          SPRING_DATASOURCE_USERNAME: ${{ env.SPRING_DATASOURCE_USERNAME || secrets.SPRING_DATASOURCE_USERNAME || '' }}
+          SPRING_DATASOURCE_PASSWORD: ${{ env.SPRING_DATASOURCE_PASSWORD || secrets.SPRING_DATASOURCE_PASSWORD || '' }}
+        run: |
+          if [ -z "$SPRING_DATASOURCE_URL" ]; then
+            echo "No datasource URL; skipping verification."
+            exit 0
+          fi
+          if ! command -v psql >/dev/null 2>&1; then
+            echo "::warning::psql not found; skipping schema verification. Install postgresql-client on the runner for post-migrate checks."
+            exit 0
+          fi
+
+          # Parse JDBC URL into psql connection params
+          # Format: jdbc:postgresql://host:port/dbname?sslmode=require
+          PG_HOST="$(echo "$SPRING_DATASOURCE_URL" | sed -n 's|.*://\([^:/]*\).*|\1|p')"
+          PG_PORT="$(echo "$SPRING_DATASOURCE_URL" | sed -n 's|.*:\([0-9]*\)/.*|\1|p')"
+          PG_DB="$(echo "$SPRING_DATASOURCE_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')"
+          [ -z "$PG_PORT" ] && PG_PORT="5432"
+
+          echo "Verifying schema on ${PG_HOST}:${PG_PORT}/${PG_DB}..."
+
+          # Extract expected tables from migration files (CREATE TABLE statements)
+          EXPECTED_TABLES="$(grep -rhi 'CREATE TABLE' src/main/resources/db/migration/*.sql 2>/dev/null \
+            | sed -n 's/.*CREATE TABLE[^[:alnum:]]*\(IF NOT EXISTS[[:space:]]*\)\{0,1\}\(public\.\)\{0,1\}\([a-zA-Z_][a-zA-Z0-9_]*\).*/\3/p' \
+            | sort -u)"
+
+          if [ -z "$EXPECTED_TABLES" ]; then
+            echo "No CREATE TABLE statements found in migrations; nothing to verify."
+            exit 0
+          fi
+
+          # Query actual tables from production
+          ACTUAL_TABLES="$(PGPASSWORD="$SPRING_DATASOURCE_PASSWORD" psql \
+            "host=$PG_HOST port=$PG_PORT dbname=$PG_DB user=$SPRING_DATASOURCE_USERNAME sslmode=require" \
+            -t -A -c "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;" 2>&1)"
+
+          MISSING=""
+          for table in $EXPECTED_TABLES; do
+            # Skip flyway_schema_history — it's managed by Flyway, not our migrations
+            [ "$table" = "flyway_schema_history" ] && continue
+            if ! echo "$ACTUAL_TABLES" | grep -qw "$table"; then
+              MISSING="${MISSING} ${table}"
+            fi
+          done
+
+          if [ -n "$MISSING" ]; then
+            echo "::error::Schema verification failed. Tables missing on production:${MISSING}"
+            echo ""
+            echo "Expected tables from migrations:"
+            echo "$EXPECTED_TABLES"
+            echo ""
+            echo "Actual tables on production:"
+            echo "$ACTUAL_TABLES"
+            echo ""
+            echo "To fix: manually run the missing migration SQL against production, or re-run the merge workflow."
+            exit 1
+          fi
+
+          echo "Schema verification passed. All $(echo "$EXPECTED_TABLES" | wc -l | tr -d ' ') expected tables exist on production."
 
   # Separate job so branch cleanup always runs on merge, even when merge-to-main (e.g. Flyway) fails.
   cleanup-lakebase-branches:
@@ -158,8 +225,8 @@ jobs:
             FIRST_LINE="$(echo "$COMMIT_MSG" | head -1)"
             PR_NUM="$(echo "$FIRST_LINE" | sed -n 's/.*[Mm]erge pull request #\([0-9]*\).*/\1/p')"
             [ -z "$PR_NUM" ] && PR_NUM="$(echo "$FIRST_LINE" | sed -n 's/.*(#\([0-9]*\)).*/\1/p')"
-            HEAD_REF="$(echo "$FIRST_LINE" | sed -n 's/.*[Ff]rom [^/]*\/\([^ \t)*]*\).*/\1/p')"
-            [ -z "$HEAD_REF" ] && HEAD_REF="$(echo "$FIRST_LINE" | sed -n 's/.*from [^/]*\/\([^ \t]*\).*/\1/p')"
+            HEAD_REF="$(echo "$FIRST_LINE" | sed -n 's/.*[Ff]rom [^/]*\/\([^ )*]*\).*/\1/p')"
+            [ -z "$HEAD_REF" ] && HEAD_REF="$(echo "$FIRST_LINE" | sed -n 's/.*from [^/]*\/\([^ ]*\).*/\1/p')"
           fi
           FEATURE_BRANCH=""
           [ -n "$HEAD_REF" ] && FEATURE_BRANCH="$(echo "$HEAD_REF" | sed 's/\//-/g' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-63)"

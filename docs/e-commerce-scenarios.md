@@ -381,46 +381,226 @@ DROP TABLE IF EXISTS book;
 
 ---
 
-## Test File Structure
+## Test Implementation
+
+### File Structure
 
 ```
 test/integration/ecommerce/
 ├── helpers.ts                    # Shared helper functions (no tests)
-├── ecommerceScenarios.test.ts    # Top-level orchestrator (setup → 8 scenarios → teardown)
-├── scenario1Book.ts              # Scenario 1 test points
-├── scenario2Product.ts           # Scenario 2 test points
-├── scenario3Customer.ts          # Scenario 3 test points
-├── scenario4Cart.ts              # Scenario 4 test points
-├── scenario5Orders.ts            # Scenario 5 test points
-├── scenario6Wishlist.ts          # Scenario 6 test points
-├── scenario7AlterProduct.ts      # Scenario 7 test points
-└── scenario8DropBook.ts          # Scenario 8 test points
+├── runner.ts                     # Ephemeral self-hosted GitHub Actions runner lifecycle
+├── mavenProject.ts               # Maven/Spring Boot project scaffolding
+├── ecommerceScenarios.test.ts    # Top-level Mocha orchestrator
+├── scenario1Book.ts              # Scenario 1: CREATE TABLE book
+├── scenario2Product.ts           # Scenario 2: CREATE TABLE product
+├── scenario3Customer.ts          # Scenario 3: CREATE TABLE customer (UNIQUE)
+├── scenario4Cart.ts              # Scenario 4: cart + cart_item (FKs, CHECK)
+├── scenario5Orders.ts            # Scenario 5: orders + order_item (enum, NUMERIC)
+├── scenario6Wishlist.ts          # Scenario 6: wishlist + wishlist_item (compound UNIQUE)
+├── scenario7AlterProduct.ts      # Scenario 7: ALTER TABLE product (ADD COLUMN)
+└── scenario8DropBook.ts          # Scenario 8: DROP TABLE book
 ```
 
-### Orchestrator Flow
+### How to Run
+
+All tests run through the existing Mocha integration test harness defined in `package.json`:
+
+```bash
+# Run all 8 e-commerce scenarios (full suite)
+npm run test:integration -- --grep "E-Commerce"
+
+# Run a single scenario (e.g., Scenario 1 only — still requires setup/teardown)
+npm run test:integration -- --grep "Scenario 1: Book"
+
+# Run with verbose output
+npm run test:integration -- --grep "E-Commerce" --reporter spec
+```
+
+The underlying npm script is:
+```
+TS_NODE_TRANSPILE_ONLY=1 mocha \
+  --require test/setup.js \
+  --require ts-node/register \
+  'test/integration/**/*.test.ts' \
+  --timeout 120000
+```
+
+Key flags:
+- `TS_NODE_TRANSPILE_ONLY=1` — avoids Node 22 ESM resolution conflicts with the `vscode` mock
+- `test/setup.js` — sets up the `vscode` module mock before any imports
+- `--timeout 120000` — 2 min default per test (individual tests override with `this.timeout()`)
+
+### Prerequisites
+
+Before running, ensure:
+1. **GitHub CLI** authenticated: `gh auth status`
+2. **Databricks CLI** authenticated: `databricks auth login --host <host>`
+3. **psql** installed: `psql --version` (used for production database queries in Phase D)
+4. **Java 21+** installed: `java -version` (the self-hosted runner needs JDK for Maven/Flyway)
+5. **DATABRICKS_HOST** set in env or defaults to the stable FEVM host
+6. **gh delete_repo scope**: `gh auth refresh -s delete_repo` (needed for teardown)
+7. **Internet access** for downloading: GitHub Actions runner binary (~100MB, cached in `~/.cache/github-actions-runner/`), Maven wrapper + dependencies (first run)
+
+### Architecture
+
+#### runner.ts — Ephemeral Self-Hosted Runner
+
+Manages the lifecycle of a GitHub Actions runner that executes pr.yml and merge.yml workflows:
+
+- `ensureRunnerBinary()` — Downloads the runner archive to `~/.cache/github-actions-runner/` (cached across runs), extracts to a unique temp dir.
+- `startRunner(ctx, runnerDir)` — Gets a registration token via `gh api`, configures the runner (non-ephemeral, since we need it for 16+ jobs), starts `./run.sh` in background, polls until the runner appears online.
+- Returns `RunnerHandle` with `cleanup(ctx)` — kills process, deregisters runner via API, removes temp dir.
+
+Runner binary: `actions-runner-osx-arm64-{version}.tar.gz` (auto-detects platform).
+
+#### mavenProject.ts — Maven/Spring Boot Scaffolding
+
+`scaffoldMavenProject(projectDir)` writes a minimal but real Maven project so `./mvnw flyway:migrate` and `./mvnw test` work in the CI workflows:
+
+- **pom.xml** — Spring Boot 3.5.5, JPA, Flyway 10.22.0, PostgreSQL driver, Flyway Maven plugin with `baselineOnMigrate`
+- **mvnw** — Downloaded from Apache Maven Wrapper repo
+- **.mvn/wrapper/maven-wrapper.properties** — Maven 3.9.9
+- **DemoApplication.java** — `@SpringBootApplication` main class
+- **application.properties** — datasource from env vars, `ddl-auto=validate`, flyway enabled
+- **DemoApplicationTests.java** — minimal `contextLoads()` test
+
+#### helpers.ts — Shared Functions
+
+No test code. Exports functions consumed by all 8 scenario files:
+
+| Category | Functions | Purpose |
+|----------|-----------|---------|
+| **Shell** | `git(ctx, cmd)`, `shell(ctx, cmd)`, `dbcli(ctx, args)` | Run git/shell/databricks commands |
+| **Phase A** | `createFeatureBranch`, `writeJavaFile`, `deleteJavaFile`, `writeMigration`, `commitAndPush` | Developer local workflow |
+| **Phase B/C** | `createPR`, `mergePR`, `pullMain`, `cleanupBranch` | PR lifecycle via `gh` CLI |
+| **Workflow** | `waitForWorkflowRun`, `getLatestRunId`, `getWorkflowLogs` | Poll `gh run list` until workflow completes; fetch logs on failure |
+| **Phase D** | `queryProduction`, `verifyTableExists`, `verifyTableNotExists`, `verifyColumnExists`, `verifyMigrationApplied` | SQL queries against production via `psql` (using `databricks` CLI for credentials) |
+| **GitHub** | `verifyFileOnGitHub`, `verifyFileNotOnGitHub` | Check file presence via `gh api` |
+| **Schema** | `parseMigrationSql` | Delegates to `FlywayService.parseSql()` |
+| **Cleanup** | `deleteLakebaseBranch` | Non-fatal branch deletion via `databricks` CLI |
+
+All functions take a `ScenarioContext` as first argument — a shared object containing project name, directory, GitHub user, Lakebase host, and service instances.
+
+#### scenarioN*.ts — Scenario Files
+
+Each scenario file exports a single function:
+```typescript
+export function runScenario(ctx: ScenarioContext): void
+```
+
+This function registers Mocha `describe`/`it` blocks. Each scenario follows the Master Execution Outline with 4 describe blocks:
 
 ```
-before()
-  → ProjectCreationService.createProject()
-  → GitHub repo + Lakebase DB + scaffold + hooks + .env + initial commit
+describe('Phase A: Developer')
+  it('A1: creates feature branch')
+  it('A2: writes Java files')
+  it('A3: writes migration SQL')
+  it('A3-verify: parseSql extracts expected changes')
+  it('A5+A6: commits and pushes')
 
-Scenario 1: Book        → Phases A-D → verify book table on production
-Scenario 2: Product     → Phases A-D → verify product table
-Scenario 3: Customer    → Phases A-D → verify customer table
-Scenario 4: Cart        → Phases A-D → verify cart + cart_item
-Scenario 5: Orders      → Phases A-D → verify orders + order_item
-Scenario 6: Wishlist    → Phases A-D → verify wishlist + wishlist_item
-Scenario 7: ALTER       → Phases A-D → verify columns added to product
-Scenario 8: DROP        → Phases A-D → verify book table gone
+describe('Phase B: PR workflow')
+  it('B1: creates PR')
+  it('B2: pr.yml succeeds (Flyway + tests on branch DB)')
+       → waitForWorkflowRun('pr.yml', { branch, event: 'pull_request' })
 
-Final Verification
-  → 8 migrations in flyway_schema_history (V2-V9)
-  → 8 tables exist on production (book dropped)
-  → All Java files present except Book stack
+describe('Phase C: Merge workflow')
+  it('C1: records latest merge.yml run ID')
+  it('C2: merges PR')
+  it('C3: merge.yml succeeds (Flyway on production)')
+       → waitForWorkflowRun('merge.yml', { branch: 'main', event: 'push', afterRunId })
+  it('C4: pulls main')
 
-after()
-  → cleanupProject()
+describe('Phase D: Verification')
+  it('D1: migration version in flyway_schema_history')
+  it('D2: table(s) exist on production')
+  it('D3: files visible on GitHub')
+  it('D4: cleanup feature branch + Lakebase branch')
 ```
+
+The runner handles all Flyway/Lakebase operations via the actual CI workflows. Tests just wait for workflows to complete and verify the result.
+
+#### ecommerceScenarios.test.ts — Orchestrator
+
+The single `.test.ts` file that Mocha discovers. Structure:
+
+```
+describe('E-Commerce Backend — 8 Iterative Scenarios')
+  before()
+    → ProjectCreationService.createProject()
+    → scaffoldMavenProject()   ← pom.xml, mvnw, DemoApplication.java
+    → git commit + push Maven files
+    → ensureRunnerBinary()     ← download/cache runner binary
+    → startRunner()            ← configure + start self-hosted runner
+
+  describe('Scenario 1: Book Entity')        → scenario1(ctx)
+  ...
+  describe('Scenario 8: DROP TABLE')          → scenario8(ctx)
+
+  describe('Final Verification')
+    it('8 migrations applied (V2-V9)')
+    it('book table does NOT exist')
+    it('all 8 remaining tables exist')
+    it('flyway_schema_history has 9 entries')
+    it('8 merge commits on main')
+    it('Book Java files absent')
+    it('all other Java files present')
+
+  describe('Teardown')
+    → runner.cleanup()         ← stop + deregister runner
+    → cleanupProject()         ← delete GitHub repo + Lakebase project + local dir
+  after()                      → safety-net cleanup
+```
+
+**Sequencing:** Scenarios run in order (1→8) because each builds on the previous. Scenario 4 (Cart) references customer and product tables from Scenarios 2-3. Scenario 8 (DROP) removes the table created in Scenario 1.
+
+**Timeouts:** 2 hours overall, 10 min per scenario, 7 min for workflow wait, 1 min for verification.
+
+**Skip logic:** If `before()` fails (project creation or runner setup), all scenarios are skipped via `if (!created) { this.skip(); }`. Teardown still runs via the `after()` safety net.
+
+### Test Count
+
+| Section | Tests |
+|---------|-------|
+| Scenario 1 (Book) | 12 |
+| Scenario 2 (Product) | 10 |
+| Scenario 3 (Customer) | 10 |
+| Scenario 4 (Cart) | 11 |
+| Scenario 5 (Orders) | 11 |
+| Scenario 6 (Wishlist) | 11 |
+| Scenario 7 (ALTER) | 10 |
+| Scenario 8 (DROP) | 11 |
+| Final Verification | 7 |
+| Teardown | 1 |
+| **Total** | **~94** |
+
+### What Each Test Exercises
+
+| Test Point | What Happens |
+|------------|-------------|
+| A3-verify (parseSql) | `FlywayService.parseSql()` — static SQL parser |
+| B1 (create PR) | `gh pr create` via helpers |
+| B2 (pr.yml succeeds) | Self-hosted runner executes pr.yml: Lakebase branch creation, Flyway migrate on branch, `./mvnw test`, schema diff, PR comment |
+| C2 (merge PR) | `gh pr merge --admin` via helpers |
+| C3 (merge.yml succeeds) | Self-hosted runner executes merge.yml: Flyway migrate on production, schema verification, Lakebase branch cleanup |
+| D1 (migration applied) | `psql` query against `flyway_schema_history` on production |
+| D2 (table exists) | `psql` query against `pg_tables` / `information_schema.columns` on production |
+| D3 (files on GitHub) | `gh api repos/.../contents/...` |
+| Setup | `ProjectCreationService.createProject()` + `scaffoldMavenProject()` + `startRunner()` |
+| Teardown | `runner.cleanup()` + `ProjectCreationService.cleanupProject()` |
+
+### Resources Created and Destroyed
+
+Each test run creates and tears down:
+- **1 GitHub repo** (private): `{user}/ecom-{timestamp}`
+- **1 Lakebase project**: `ecom-{timestamp}`
+- **1 self-hosted runner**: registered to the repo, running on local machine
+- **8 Lakebase CI branches** (created by pr.yml, deleted by merge.yml)
+- **8 Lakebase feature branches** (created by pr.yml, deleted by merge.yml)
+- **8 GitHub PRs** (created and merged per scenario)
+- **1 local directory** in `$TMPDIR`
+- **1 runner directory** in `$TMPDIR`
+
+All resources are cleaned up in teardown, with a safety-net `after()` hook that runs even if tests fail. The runner binary is cached in `~/.cache/github-actions-runner/` and reused across runs.
 
 ---
 

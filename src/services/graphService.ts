@@ -58,8 +58,6 @@ export class GraphService {
       // Fetch GitHub avatar URLs
       const avatarCache = await this.fetchAvatars(limit);
 
-      const crypto = require('crypto');
-
       return raw.split(REC).filter((s: string) => s.trim()).map((record: string) => {
         const f = record.split(FLD);
         const refs: string[] = [];
@@ -76,8 +74,7 @@ export class GraphService {
         const authorEmail = (f[6] || '').trim();
         const syncKind = outgoing.has(sha) ? 'outgoing' as const
           : incoming.has(sha) ? 'incoming' as const : undefined;
-        const avatarUrl = avatarCache.get(sha)
-          || `https://www.gravatar.com/avatar/${crypto.createHash('md5').update(authorEmail.toLowerCase()).digest('hex')}?s=40&d=identicon`;
+        const avatarUrl = avatarCache.get(sha) || '';
 
         return {
           sha, fullSha, parents, refs,
@@ -125,8 +122,11 @@ export class GraphService {
       const { getWorkspaceRoot } = require('../utils/config');
       const root = getWorkspaceRoot();
       if (!root) { return cache; }
+      // Query current branch commits (not just default branch) so feature branch avatars resolve
+      const currentBranch = cp.execSync('git rev-parse --abbrev-ref HEAD', { cwd: root, timeout: 5000 }).toString().trim();
+      const sha = currentBranch || 'HEAD';
       const apiOut: string = cp.execSync(
-        `gh api "repos/${owner}/${repo}/commits?per_page=${limit}" --jq '.[] | "\\(.sha[:7]) \\(.author.avatar_url // "")"'`,
+        `gh api "repos/${owner}/${repo}/commits?sha=${sha}&per_page=${limit}" --jq '.[] | "\\(.sha[:7]) \\(.author.avatar_url // "")"'`,
         { cwd: root, timeout: 10000 }
       ).toString();
       for (const line of apiOut.split('\n').filter(Boolean)) {

@@ -8,6 +8,10 @@ on:
   pull_request:
     types: [opened, synchronize]
 
+permissions:
+  contents: read
+  pull-requests: write
+
 env:
   JAVA_VERSION: '25'
 
@@ -106,9 +110,14 @@ jobs:
           BRANCHES_JSON="$(echo "$LIST_BRANCHES_RAW" | jq -c 'if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end' 2>/dev/null)" || BRANCHES_JSON="[]"
           echo "Lakebase: branch names from list: $(echo "$BRANCHES_JSON" | jq -r '.[] | (.name // .uid // .id // .metadata.name // "?")' 2>/dev/null | head -5 | tr '\n' ' ')"
 
-          # Find default (main) Lakebase branch: .status.default or .is_default; uid from .uid, .id, or last segment of .name
+          # Find default (main) Lakebase branch: .status.default or .is_default
+          # Extract the full resource name (.name) for use as source_branch in create-branch.
+          # Also extract uid for endpoint/credential lookups later.
+          # Note: .uid may differ from the branch segment in .name (e.g. uid=br-xxx but name=.../branches/production).
+          DEFAULT_NAME="$(echo "$BRANCHES_JSON" | jq -r '.[] | select((.status.default == true) or (.is_default == true)) | .name' 2>/dev/null | head -1)"
           DEFAULT_UID="$(echo "$BRANCHES_JSON" | jq -r '.[] | select((.status.default == true) or (.is_default == true)) | (.uid // .id // (if .name then (.name | split("/") | last) else empty end))' 2>/dev/null | head -1)"
           if [ -z "$DEFAULT_UID" ] && [ "$(echo "$BRANCHES_JSON" | jq -r 'length' 2>/dev/null)" = "1" ]; then
+            DEFAULT_NAME="$(echo "$BRANCHES_JSON" | jq -r '.[0] | .name' 2>/dev/null)"
             DEFAULT_UID="$(echo "$BRANCHES_JSON" | jq -r '.[0] | (.uid // .id // (if .name then (.name | split("/") | last) else empty end))' 2>/dev/null)"
           fi
           if [ -z "$DEFAULT_UID" ]; then
@@ -118,11 +127,12 @@ jobs:
             write_skip "**Reason:** Could not find default Lakebase branch. **Fix:** Check LAKEBASE_PROJECT_ID and that the token can list branches (\`databricks postgres list-branches projects/<id>\`). Check workflow log for 'list-branches response type', 'branch names from list', and 'DEBUG first branch keys'."
             exit 0
           fi
-          echo "Lakebase: default branch uid=$DEFAULT_UID"
+          echo "Lakebase: default branch uid=$DEFAULT_UID name=$DEFAULT_NAME"
 
-          # Create CI branch from default (idempotent: create-branch may succeed or branch may already exist)
+          # Create CI branch from default (use full resource name as source_branch)
+          SOURCE_BRANCH="${DEFAULT_NAME:-${PROJ_PATH}/branches/${DEFAULT_UID}}"
           CREATE_OUT="$(databricks postgres create-branch "$PROJ_PATH" "$BRANCH_NAME" \
-            --json "{\"spec\": {\"source_branch\": \"${PROJ_PATH}/branches/${DEFAULT_UID}\", \"no_expiry\": true}}" 2>&1)" || true
+            --json "{\"spec\": {\"source_branch\": \"${SOURCE_BRANCH}\", \"no_expiry\": true}}" 2>&1)" || true
           echo "Lakebase: create-branch output: $CREATE_OUT"
           sleep 5
 
@@ -426,9 +436,10 @@ jobs:
           if [ -n "$LAKEBASE_PROJECT_ID" ] && [ -n "$DATABRICKS_HOST" ] && [ -n "$DATABRICKS_TOKEN" ]; then
             PROJ_PATH="projects/${LAKEBASE_PROJECT_ID}"
             DB_NAME="databricks_postgres"
+            DEFAULT_NAME="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null | jq -r '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[] | select((.status.default == true) or (.is_default == true)) | .name' | head -1)"
             DEFAULT_UID="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null | jq -r '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[] | select((.status.default == true) or (.is_default == true)) | (.uid // .id // (if .name then (.name | split("/") | last) else empty end))' | head -1)"
             if [ -n "$DEFAULT_UID" ]; then
-              BRANCH_PATH="${PROJ_PATH}/branches/${DEFAULT_UID}"
+              BRANCH_PATH="${DEFAULT_NAME:-${PROJ_PATH}/branches/${DEFAULT_UID}}"
               PROD_HOST="$(databricks postgres list-endpoints "$BRANCH_PATH" -o json 2>/dev/null | jq -r '.[0].status.hosts.host // empty')"
               if [ -z "$PROD_HOST" ]; then
                 databricks postgres create-endpoint "$BRANCH_PATH" "primary" \

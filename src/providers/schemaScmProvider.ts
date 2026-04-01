@@ -264,7 +264,7 @@ export class SchemaScmProvider {
       if (this.lakebaseService) {
         const defaultBranch = await this.lakebaseService.getDefaultBranch();
         if (defaultBranch) {
-          const consoleUrl = this.lakebaseService.getConsoleUrl(defaultBranch.uid);
+          const consoleUrl = await this.lakebaseService.getConsoleUrl(defaultBranch.uid);
           lakebaseItems.push({
             resourceUri: vscode.Uri.parse(`lakebase-prod://status/production`),
             decorations: {
@@ -523,7 +523,7 @@ export class SchemaScmProvider {
         const ciBranch = await this.lakebaseService.getBranchByName(ciBranchName);
         if (ciBranch) {
           ciBranchFound = true;
-          const consoleUrl = this.lakebaseService.getConsoleUrl(ciBranch.uid);
+          const consoleUrl = await this.lakebaseService.getConsoleUrl(ciBranch.uid);
           if (consoleUrl) {
             ciBranchCommand = { command: 'vscode.open', title: 'Open CI Branch', arguments: [vscode.Uri.parse(consoleUrl)] };
           }

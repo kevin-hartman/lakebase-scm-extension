@@ -291,10 +291,15 @@ export class SchemaDiffService {
     let prodPass: string | undefined;
 
     try {
-      // Current branch credentials
-      const branchEp = await this.lakebaseService.getEndpoint(branchId);
+      // Current branch credentials — retry once if endpoint not found (may still be provisioning)
+      let branchEp = await this.lakebaseService.getEndpoint(branchId);
       if (!branchEp?.host) {
-        return this.emptyResult('No endpoint for current branch');
+        // Wait and retry — endpoint may still be provisioning after branch creation
+        await new Promise(r => setTimeout(r, 5000));
+        branchEp = await this.lakebaseService.getEndpoint(branchId);
+      }
+      if (!branchEp?.host) {
+        return this.emptyResult(`No endpoint for branch "${branchId}". The branch may still be provisioning — try again in a few seconds.`);
       }
       branchHost = branchEp.host;
       const branchCred = await this.lakebaseService.getCredential(branchId);
@@ -306,7 +311,11 @@ export class SchemaDiffService {
       if (!defaultBranch) {
         return this.emptyResult('No default Lakebase branch found');
       }
-      const prodEp = await this.lakebaseService.getEndpoint(defaultBranch.branchId);
+      let prodEp = await this.lakebaseService.getEndpoint(defaultBranch.branchId);
+      if (!prodEp?.host) {
+        await new Promise(r => setTimeout(r, 5000));
+        prodEp = await this.lakebaseService.getEndpoint(defaultBranch.branchId);
+      }
       if (!prodEp?.host) {
         return this.emptyResult('No endpoint for default branch');
       }

@@ -2,7 +2,7 @@
   "name": "lakebase-scm-extension",
   "displayName": "Lakebase SCM Extension",
   "description": "Unified visibility into code and database branch changes for Databricks Lakebase",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "publisher": "databricks-field-eng",
   "icon": "resources/icons/extension-icon.png",
   "repository": {
@@ -299,6 +299,11 @@
       {
         "command": "lakebaseSync.commitAllSignedOff",
         "title": "Commit All (Signed Off)"
+      },
+      {
+        "command": "lakebaseSync.createProject",
+        "title": "Lakebase: Create New Project",
+        "icon": "$(add)"
       },
       {
         "command": "lakebaseSync.createTag",

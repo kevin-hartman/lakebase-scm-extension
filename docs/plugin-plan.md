@@ -272,17 +272,17 @@ Available from Command Palette and Project view title bar.
 | 13 | Run health check | Auto-run `lakebaseSync.healthCheck` to verify all components are in place (workflows, secrets, CLI auth, hooks, migration dir) |
 
 ### Deliverables
-42. **Project scaffold template** — Embedded in extension under `templates/project/`; stripped of demo-specific code; placeholder substitution at creation time
-43. **Lakebase project creation via REST API** — `POST /api/2.0/lakebase/projects` with OAuth token from CLI config
-44. **GitHub repo creation** — `gh repo create` with secrets setup
-45. **Create Project command** — Full wizard with progress notification; each step logged; graceful failure (partial creation preserved)
-46. **`.vscodeignore` update** — Include `templates/` in packaged extension
-47. **Disable built-in Git SCM in workspace** — Scaffold includes `.vscode/settings.json` with `"git.enabled": false` so the built-in Git SCM is hidden and the Unified Repo is the only SCM view for the project
+42. **Project scaffold template** ✅ — 21 files in `templates/project/` (16 scripts, 2 workflows, .env.example, .gitignore, .vscode/settings.json, V1 migration placeholder). Deployed by `ScaffoldService`.
+43. **Lakebase project creation** ✅ — `LakebaseService.createProject()` via `databricks postgres create-project` CLI (not REST API — CLI supports it now). Includes `setProjectIdOverride()` for test contexts.
+44. **GitHub repo creation** ✅ — `GitService.createRepo()` via `gh repo create` with visibility, description. `syncCiSecrets()` sets DATABRICKS_HOST, LAKEBASE_PROJECT_ID, DATABRICKS_TOKEN.
+45. **Create Project command** ✅ — `lakebaseSync.createProject` wizard with 7-step UI flow: project name → parent dir → GitHub auth gate (web login) → repo name (defaults from project name) → visibility → Databricks workspace picker + auth gate → Lakebase project name (defaults from repo name) → execute with progress → offer to open folder. Cleanup on failure.
+46. **`.vscodeignore` update** ✅ — `templates/` included in packaged extension (82 files, ~216KB).
+47. **Disable built-in Git SCM in workspace** ✅ — `.vscode/settings.json` with `"git.enabled": false` deployed by `ScaffoldService.deployVscodeSettings()`.
 
-### Open Questions
-- Verify exact Databricks REST API endpoint for Lakebase project creation
-- Auth token reuse from `~/.databrickscfg` for REST calls
-- Default project settings (region, size, etc.)
+### Resolved Questions
+- Lakebase project creation uses `databricks postgres create-project` CLI (not REST API)
+- Auth reuses existing `databricks auth login` session from `~/.databrickscfg`
+- Default project settings handled by Lakebase backend (auto-provisions default branch + endpoint)
 
 ---
 
@@ -422,9 +422,16 @@ lakebase-scm-extension/
 | 2 | Diff & Visibility | ✅ Complete | — |
 | 3 | Workflow Automation | ✅ Complete | — |
 | 3.5 | Lakebase Sidebar | ✅ Complete | v0.3.5 |
-| 4 | Unified Project Creation | Not started | — |
+| 4 | Unified Project Creation | ✅ Complete | v0.3.9 |
 | 5 | Advanced Features | Partially complete | v0.3.7 (Graph), v0.3.8 (Refactoring) |
 | 5.5 | R1-R8 Refactoring | ✅ Complete | v0.3.8 |
 | 6 | Remaining Cleanup | Not started | — |
 
-**Current state:** v0.3.8 — 327 unit tests, 17 suites, 74 files in vsix. Full R1-R8 refactoring complete with service layer (GraphService, DiffService, shared exec, theme utilities). Integration test suite with 12 test files covering all refactoring phases against live GitHub + Lakebase APIs.
+**Current state:** v0.3.9 — Phase 4 complete. New features in v0.3.9:
+- **Create New Project command** — 7-step wizard (project name → parent dir → GitHub auth gate with web login → repo name → visibility → Databricks workspace picker + auth gate → Lakebase project name) with cascading defaults, progress notification, and cleanup on failure
+- **Live branch table queries** — Sidebar tree queries actual Lakebase database tables via `queryBranchSchema()` with diff indicators (green +new, yellow ~modified, red -removed) compared against production
+- **Lakebase console URL fix** — Uses project UUID instead of project name for correct `https://{host}/lakebase/projects/{uuid}` URLs
+- **Branch tree improvements** — Production branch shows all tables in white; feature branches show only diffs; clicking tables opens proper diff view (production ↔ branch)
+- **GitHub avatar fix** — Queries current branch commits (not just default branch) so feature branch avatars resolve; removed Gravatar fallback
+- **Template fixes** — pr.yml/merge.yml branch name resolution (uses .name instead of .uid for source_branch), merge.yml sed `\t` bug fix, pr.yml permissions block for PR comments
+- **E-commerce integration test suite** — 8 scenarios with ephemeral self-hosted GitHub Actions runner executing actual pr.yml/merge.yml workflows, given/when/then Java tests against live Lakebase branch databases
