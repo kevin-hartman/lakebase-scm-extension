@@ -333,9 +333,14 @@ jobs:
             (.[]? | select((.name | type == "string" and (endswith("/branches/" + $w) or (split("/") | last == $w))) or (.uid == $w) or (.id == $w))) | .name
           ' 2>/dev/null | head -1)"
           if [ -z "$EXISTS" ] || [ "$EXISTS" = "null" ]; then
-            echo "Creating Lakebase branch $FEATURE_BRANCH from $CI_BRANCH (so it gets the same schema including new migrations)..."
+            # Create from production (default branch), NOT from ci-pr-N.
+            # Creating from CI branch makes it a child — preventing CI branch deletion on cleanup.
+            # Flyway migrate below will apply the new migrations to bring it in sync.
+            DEFAULT_NAME="$(echo "$BRANCHES" | jq -r '.[] | select((.status.default == true) or (.is_default == true)) | .name' 2>/dev/null | head -1)"
+            SOURCE="${DEFAULT_NAME:-${PROJ_PATH}/branches/production}"
+            echo "Creating Lakebase branch $FEATURE_BRANCH from production (${SOURCE})..."
             databricks postgres create-branch "$PROJ_PATH" "$FEATURE_BRANCH" \
-              --json "{\"spec\": {\"source_branch\": \"${PROJ_PATH}/branches/${CI_BRANCH}\", \"no_expiry\": true}}" 2>&1 || true
+              --json "{\"spec\": {\"source_branch\": \"${SOURCE}\", \"no_expiry\": true}}" 2>&1 || true
             sleep 5
             for _ in $(seq 1 24); do
               STATE="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null | jq -r --arg w "$FEATURE_BRANCH" '

@@ -86,7 +86,18 @@ if [ $# -eq 0 ]; then
   fi
 fi
 
+# Delete feature branches first (children), then ci-pr-* branches (parents).
+# Lakebase won't delete a branch that has children, so order matters.
+CI_BRANCHES=""
+FEATURE_BRANCHES=""
 for name in "$@"; do
+  case "$name" in
+    ci-pr-*) CI_BRANCHES="${CI_BRANCHES:+$CI_BRANCHES }$name" ;;
+    *)       FEATURE_BRANCHES="${FEATURE_BRANCHES:+$FEATURE_BRANCHES }$name" ;;
+  esac
+done
+
+for name in $FEATURE_BRANCHES $CI_BRANCHES; do
   DELETE_PATH="$(resolve_delete_path "$name")"
   if [ -z "$DELETE_PATH" ]; then
     echo "No Lakebase branch found for: $name (skipping)."
