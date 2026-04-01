@@ -76,6 +76,13 @@ export class RunnerService {
       cp.execSync(`tar xzf "${archive}" -C "${dir}"`, { timeout: 60000 });
     }
 
+    // Clear stale diagnostics (prevents "file already exists" errors after crashes)
+    const diagPages = path.join(dir, '_diag', 'pages');
+    if (fs.existsSync(diagPages)) {
+      fs.rmSync(diagPages, { recursive: true, force: true });
+      fs.mkdirSync(diagPages, { recursive: true });
+    }
+
     // Get registration token
     report('Registering runner with GitHub...');
     const regToken = cp.execSync(
@@ -131,7 +138,7 @@ export class RunnerService {
     return { name: runnerName, dir, pid: child.pid, online: true };
   }
 
-  /** Stop the runner for a project (kill process, don't deregister) */
+  /** Stop the runner for a project (kill process, clear stale state, don't deregister) */
   stopRunner(projectName: string): void {
     const dir = this.runnerDir(projectName);
     const pidFile = path.join(dir, '.pid');
@@ -139,6 +146,12 @@ export class RunnerService {
       const pid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim(), 10);
       try { process.kill(pid, 'SIGKILL'); } catch {}
       try { fs.unlinkSync(pidFile); } catch {}
+    }
+    // Clear stale diagnostics pages to prevent "file already exists" on restart
+    const diagPages = path.join(dir, '_diag', 'pages');
+    if (fs.existsSync(diagPages)) {
+      try { fs.rmSync(diagPages, { recursive: true, force: true }); } catch {}
+      try { fs.mkdirSync(diagPages, { recursive: true }); } catch {}
     }
   }
 
