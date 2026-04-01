@@ -2122,13 +2122,20 @@ export async function activate(context: vscode.ExtensionContext) {
                 `No commits on this branch yet. You have ${uncommitted} uncommitted change${uncommitted !== 1 ? 's' : ''} — commit them first.`,
                 'Commit Now', 'Cancel'
               );
-              if (action === 'Commit Now') {
-                vscode.commands.executeCommand('lakebaseSync.commit');
+              if (action !== 'Commit Now') { return; }
+              // Wait for the commit to complete, then continue to PR creation
+              await vscode.commands.executeCommand('lakebaseSync.commit');
+              // Re-check: did the commit succeed?
+              const { ahead: newAhead } = await gitService.getAheadBehind();
+              if (newAhead === 0) {
+                vscode.window.showWarningMessage('Commit did not produce a new commit. PR creation cancelled.');
+                return;
               }
+              // Fall through to continue PR creation
+            } else {
+              vscode.window.showWarningMessage('No commits between main and this branch. Nothing to create a PR for.');
               return;
             }
-            vscode.window.showWarningMessage('No commits between main and this branch. Nothing to create a PR for.');
-            return;
           }
         } catch { /* ignore — let gh pr create handle it */ }
 
