@@ -138,13 +138,16 @@ export class ProjectCreationService {
     report('Writing .env configuration...');
     this.writeEnvFile(projectDir, host, lakebaseProjectId);
 
-    // Step 7: Deploy .gitignore (ensure .env is ignored)
-    await this.scaffoldService.deployGitignore(projectDir);
+    // Step 7: Deploy .gitignore (ensure .env is ignored, merged with language-specific ignores)
+    const language = input.language || 'java';
+    await this.scaffoldService.deployGitignore(projectDir, language);
 
-    // Step 8: Initial commit
+    // Step 8: Initial commit + push
+    const langLabels: Record<string, string> = { java: 'Java/Spring Boot', python: 'Python/FastAPI', nodejs: 'Node.js/Express' };
+    const langLabel = langLabels[language] || language;
     report('Creating initial commit...');
     await exec('git add -A', { cwd: projectDir });
-    await exec('git commit -m "Initial project scaffold with Lakebase integration"', { cwd: projectDir, timeout: 30000 });
+    await exec(`git commit -m "Initial project scaffold (${langLabel} + Lakebase)"`, { cwd: projectDir, timeout: 30000 });
     await exec('git push -u origin main', { cwd: projectDir, timeout: 30000 });
 
     // Step 9: Set GitHub secrets
