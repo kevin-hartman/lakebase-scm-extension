@@ -400,9 +400,15 @@ export function scaffoldMavenProject(projectDir: string): void {
   // .mvn/wrapper/maven-wrapper.properties
   writeFile(projectDir, '.mvn/wrapper/maven-wrapper.properties', MAVEN_WRAPPER_PROPERTIES);
 
-  // mvnw — embedded constant, no external download needed
+  // mvnw — copy from the extension's template directory (not embedded, avoids escape issues)
   const mvnwPath = path.join(projectDir, 'mvnw');
-  fs.writeFileSync(mvnwPath, MVNW_SCRIPT);
+  const templateMvnw = path.join(__dirname, '../../../templates/project/java/mvnw');
+  if (fs.existsSync(templateMvnw)) {
+    fs.copyFileSync(templateMvnw, mvnwPath);
+  } else {
+    // Fallback: use embedded constant (for environments without template dir)
+    fs.writeFileSync(mvnwPath, MVNW_SCRIPT);
+  }
   fs.chmodSync(mvnwPath, 0o755);
 
   // application.properties
