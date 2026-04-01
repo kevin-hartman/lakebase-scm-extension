@@ -20,6 +20,8 @@ export interface ProjectCreationInput {
   githubOwner: string;
   /** Whether to make the GitHub repo private (default: true) */
   privateRepo?: boolean;
+  /** Project language stack (default: 'java') */
+  language?: 'java' | 'python' | 'nodejs';
 }
 
 /**
@@ -129,6 +131,7 @@ export class ProjectCreationService {
     await this.scaffoldService.scaffoldAll(projectDir, {
       databricksHost: host,
       lakebaseProjectId,
+      language: input.language || 'java',
     });
 
     // Step 6: Write .env with real connection values

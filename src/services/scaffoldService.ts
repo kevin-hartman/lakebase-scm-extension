@@ -2,9 +2,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { exec } from '../utils/exec';
 
+export type ProjectLanguage = 'java' | 'python' | 'nodejs';
+
 /**
  * Service for scaffolding new Lakebase projects.
- * Deploys templates (scripts, workflows, hooks, config) to a project directory.
+ * Deploys common files (scripts, workflows, hooks, config) plus language-specific
+ * project files (Java/Maven, Python/FastAPI, Node.js/Express).
  */
 export class ScaffoldService {
   private templateDir: string;
@@ -13,29 +16,26 @@ export class ScaffoldService {
     this.templateDir = path.join(extensionPath, 'templates', 'project');
   }
 
-  /**
-   * Deploy all scripts from templates/project/scripts/ to the target directory.
-   * Sets executable permissions on all .sh files.
-   */
+  private commonDir(): string { return path.join(this.templateDir, 'common'); }
+  private langDir(language: ProjectLanguage): string { return path.join(this.templateDir, language); }
+
+  // ── Common file deployment ──────────────────────────────────────
+
+  /** Deploy all scripts from common/scripts/ */
   async deployScripts(targetDir: string): Promise<string[]> {
-    const srcDir = path.join(this.templateDir, 'scripts');
+    const srcDir = path.join(this.commonDir(), 'scripts');
     const destDir = path.join(targetDir, 'scripts');
     return this.copyDir(srcDir, destDir, true);
   }
 
-  /**
-   * Deploy GitHub Actions workflows from templates/project/.github/workflows/
-   */
+  /** Deploy GitHub Actions workflows from common/.github/workflows/ */
   async deployWorkflows(targetDir: string): Promise<string[]> {
-    const srcDir = path.join(this.templateDir, '.github', 'workflows');
+    const srcDir = path.join(this.commonDir(), '.github', 'workflows');
     const destDir = path.join(targetDir, '.github', 'workflows');
     return this.copyDir(srcDir, destDir, false);
   }
 
-  /**
-   * Install git hooks by running scripts/install-hook.sh in the target directory.
-   * Installs: post-checkout, prepare-commit-msg, pre-push
-   */
+  /** Install git hooks by running scripts/install-hook.sh */
   async installHooks(targetDir: string): Promise<string> {
     const hookScript = path.join(targetDir, 'scripts', 'install-hook.sh');
     if (!fs.existsSync(hookScript)) {
@@ -44,12 +44,9 @@ export class ScaffoldService {
     return exec(`bash "${hookScript}"`, { cwd: targetDir });
   }
 
-  /**
-   * Deploy .env.example with placeholder values.
-   * Optionally substitute real values for DATABRICKS_HOST and LAKEBASE_PROJECT_ID.
-   */
+  /** Deploy .env.example with optional value substitution */
   async deployEnvExample(targetDir: string, values?: { databricksHost?: string; lakebaseProjectId?: string }): Promise<void> {
-    const src = path.join(this.templateDir, '.env.example');
+    const src = path.join(this.commonDir(), '.env.example');
     const dest = path.join(targetDir, '.env.example');
     let content = fs.readFileSync(src, 'utf-8');
     if (values?.databricksHost) {
@@ -61,55 +58,78 @@ export class ScaffoldService {
     fs.writeFileSync(dest, content);
   }
 
-  /**
-   * Deploy .vscode/settings.json (disables built-in Git SCM).
-   */
+  /** Deploy .vscode/settings.json (disables built-in Git SCM) */
   async deployVscodeSettings(targetDir: string): Promise<void> {
-    const src = path.join(this.templateDir, '.vscode', 'settings.json');
+    const src = path.join(this.commonDir(), '.vscode', 'settings.json');
     const destDir = path.join(targetDir, '.vscode');
     fs.mkdirSync(destDir, { recursive: true });
     fs.copyFileSync(src, path.join(destDir, 'settings.json'));
   }
 
-  /**
-   * Deploy placeholder migration file.
-   */
-  async deployMigrationPlaceholder(targetDir: string): Promise<void> {
-    const src = path.join(this.templateDir, 'src', 'main', 'resources', 'db', 'migration', 'V1__init_placeholder.sql');
-    const destDir = path.join(targetDir, 'src', 'main', 'resources', 'db', 'migration');
-    fs.mkdirSync(destDir, { recursive: true });
-    fs.copyFileSync(src, path.join(destDir, 'V1__init_placeholder.sql'));
+  /** Deploy .gitignore: merge common base + language-specific extras */
+  async deployGitignore(targetDir: string, language: ProjectLanguage = 'java'): Promise<void> {
+    const base = fs.readFileSync(path.join(this.commonDir(), '.gitignore.base'), 'utf-8');
+    const extraPath = path.join(this.langDir(language), '.gitignore.extra');
+    const extra = fs.existsSync(extraPath) ? fs.readFileSync(extraPath, 'utf-8') : '';
+    fs.writeFileSync(path.join(targetDir, '.gitignore'), base + '\n' + extra);
   }
 
-  /**
-   * Deploy .gitignore from template.
-   */
-  async deployGitignore(targetDir: string): Promise<void> {
-    const src = path.join(this.templateDir, '.gitignore');
-    fs.copyFileSync(src, path.join(targetDir, '.gitignore'));
-  }
+  // ── Language-specific deployment ────────────────────────────────
 
   /**
-   * Full scaffold: deploy everything to a target directory.
+   * Deploy language-specific project files.
+   * Copies the entire language template directory and performs placeholder substitution.
+   * Skips .gitignore.extra (handled by deployGitignore).
    */
-  async scaffoldAll(targetDir: string, values?: { databricksHost?: string; lakebaseProjectId?: string }): Promise<{
+  async deployLanguageProject(targetDir: string, language: ProjectLanguage, projectName?: string): Promise<void> {
+    const langSrc = this.langDir(language);
+    if (!fs.existsSync(langSrc)) {
+      throw new Error(`No template found for language: ${language}`);
+    }
+
+    // Copy all files from the language template
+    this.copyDirWithSubstitution(langSrc, targetDir, projectName);
+
+    // Set executable permissions where needed
+    if (language === 'java') {
+      const mvnw = path.join(targetDir, 'mvnw');
+      if (fs.existsSync(mvnw)) { fs.chmodSync(mvnw, 0o755); }
+    }
+  }
+
+  // ── Full scaffold ──────────────────────────────────────────────
+
+  /**
+   * Full scaffold: deploy common + language-specific files to a target directory.
+   */
+  async scaffoldAll(targetDir: string, values?: {
+    databricksHost?: string;
+    lakebaseProjectId?: string;
+    language?: ProjectLanguage;
+  }): Promise<{
     scripts: string[];
     workflows: string[];
     hooks: string;
   }> {
-    await this.deployGitignore(targetDir);
+    const language = values?.language || 'java';
+
+    // Common files
+    await this.deployGitignore(targetDir, language);
     await this.deployEnvExample(targetDir, values);
     await this.deployVscodeSettings(targetDir);
-    await this.deployMigrationPlaceholder(targetDir);
+
+    // Language-specific project files
+    await this.deployLanguageProject(targetDir, language, values?.lakebaseProjectId);
+
+    // Scripts, workflows, hooks (common across all languages)
     const scripts = await this.deployScripts(targetDir);
     const workflows = await this.deployWorkflows(targetDir);
     const hooks = await this.installHooks(targetDir);
     return { scripts, workflows, hooks };
   }
 
-  /**
-   * Verify that all expected hooks are installed in .git/hooks/
-   */
+  // ── Verification ───────────────────────────────────────────────
+
   verifyHooks(targetDir: string): { postCheckout: boolean; prepareCommitMsg: boolean; prePush: boolean } {
     const hooksDir = path.join(targetDir, '.git', 'hooks');
     return {
@@ -119,9 +139,6 @@ export class ScaffoldService {
     };
   }
 
-  /**
-   * Verify that all expected workflow files exist.
-   */
   verifyWorkflows(targetDir: string): { pr: boolean; merge: boolean } {
     const wfDir = path.join(targetDir, '.github', 'workflows');
     return {
@@ -130,7 +147,7 @@ export class ScaffoldService {
     };
   }
 
-  // ── Private ──────────────────────────────────────────────────────
+  // ── Private ────────────────────────────────────────────────────
 
   private copyDir(srcDir: string, destDir: string, makeExecutable: boolean): string[] {
     if (!fs.existsSync(srcDir)) { throw new Error(`Source directory not found: ${srcDir}`); }
@@ -149,5 +166,24 @@ export class ScaffoldService {
       }
     }
     return files;
+  }
+
+  /** Copy directory with {{PROJECT_NAME}} placeholder substitution. Skips .gitignore.extra. */
+  private copyDirWithSubstitution(srcDir: string, destDir: string, projectName?: string): void {
+    fs.mkdirSync(destDir, { recursive: true });
+    for (const file of fs.readdirSync(srcDir)) {
+      if (file === '.gitignore.extra') { continue; }
+      const srcPath = path.join(srcDir, file);
+      const destPath = path.join(destDir, file);
+      if (fs.statSync(srcPath).isDirectory()) {
+        this.copyDirWithSubstitution(srcPath, destPath, projectName);
+      } else {
+        let content = fs.readFileSync(srcPath, 'utf-8');
+        if (projectName) {
+          content = content.replace(/\{\{PROJECT_NAME\}\}/g, projectName);
+        }
+        fs.writeFileSync(destPath, content);
+      }
+    }
   }
 }
