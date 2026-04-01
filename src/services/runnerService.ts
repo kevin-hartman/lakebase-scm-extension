@@ -192,4 +192,49 @@ export class RunnerService {
       online: this.isRunning(projectName),
     };
   }
+
+  /** Get the runner's latest log file path */
+  getLatestLogFile(projectName: string): string | undefined {
+    const dir = this.runnerDir(projectName);
+    const diagDir = path.join(dir, '_diag');
+    if (!fs.existsSync(diagDir)) { return undefined; }
+    const logs = fs.readdirSync(diagDir)
+      .filter(f => f.startsWith('Runner_') && f.endsWith('.log'))
+      .sort()
+      .reverse();
+    return logs.length > 0 ? path.join(diagDir, logs[0]) : undefined;
+  }
+
+  /** Get the runner's worker log file path (active job output) */
+  getLatestWorkerLog(projectName: string): string | undefined {
+    const dir = this.runnerDir(projectName);
+    const diagDir = path.join(dir, '_diag');
+    if (!fs.existsSync(diagDir)) { return undefined; }
+    const logs = fs.readdirSync(diagDir)
+      .filter(f => f.startsWith('Worker_') && f.endsWith('.log'))
+      .sort()
+      .reverse();
+    return logs.length > 0 ? path.join(diagDir, logs[0]) : undefined;
+  }
+
+  /** List recent workflow runs from GitHub for the repo */
+  getRecentWorkflowRuns(fullRepoName: string, limit = 5): Array<{ id: number; name: string; status: string; conclusion: string; branch: string; event: string }> {
+    try {
+      const raw = cp.execSync(
+        `gh run list --repo "${fullRepoName}" --limit ${limit} --json databaseId,name,status,conclusion,headBranch,event`,
+        { timeout: 15000 }
+      ).toString().trim();
+      const runs = JSON.parse(raw || '[]');
+      return runs.map((r: any) => ({
+        id: r.databaseId,
+        name: r.name,
+        status: r.status,
+        conclusion: r.conclusion || '',
+        branch: r.headBranch || '',
+        event: r.event || '',
+      }));
+    } catch {
+      return [];
+    }
+  }
 }

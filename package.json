@@ -310,6 +310,10 @@
         "title": "Lakebase: Start CI Runner"
       },
       {
+        "command": "lakebaseSync.stopRunner",
+        "title": "Lakebase: Stop CI Runner"
+      },
+      {
         "command": "lakebaseSync.createTag",
         "title": "Create Tag"
       },

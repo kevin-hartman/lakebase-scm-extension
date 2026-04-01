@@ -852,6 +852,20 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
+    vscode.commands.registerCommand('lakebaseSync.stopRunner', async () => {
+      const config = getConfig();
+      if (!config.lakebaseProjectId) { return; }
+      try {
+        const { RunnerService } = require('./services/runnerService');
+        const runnerService = new RunnerService();
+        runnerService.stopRunner(config.lakebaseProjectId);
+        vscode.window.showInformationMessage(`Runner stopped for ${config.lakebaseProjectId}`);
+        branchTreeProvider.refresh();
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Failed to stop runner: ${err.message}`);
+      }
+    }),
+
     vscode.commands.registerCommand('lakebaseSync.connectWorkspace', async () => {
       const effectiveHost = lakebaseService.getEffectiveHost().replace(/\/+$/, '');
 
