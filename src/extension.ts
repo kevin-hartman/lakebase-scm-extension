@@ -2127,16 +2127,19 @@ export async function activate(context: vscode.ExtensionContext) {
 
         // Step 2: Check if branch has any commits vs main
         try {
-          const changedFiles = await gitService.getChangedFiles();
-          if (changedFiles.length === 0) {
-            // No diff between merge-base and HEAD — nothing to PR
-            const uncommittedNow = (await gitService.getStagedChanges()).length + (await gitService.getUnstagedChanges()).length;
-            if (uncommittedNow === 0) {
-              vscode.window.showWarningMessage('No changes between main and this branch. Nothing to create a PR for.');
-              return;
+          const mergeBase = await gitService.getMergeBase();
+          if (mergeBase) {
+            const root = getWorkspaceRoot();
+            if (root) {
+              const { exec: execUtil } = require('./utils/exec');
+              const count = (await execUtil(`git rev-list --count ${mergeBase}..HEAD`, root)).trim();
+              if (parseInt(count, 10) === 0) {
+                vscode.window.showWarningMessage('No commits between main and this branch. Nothing to create a PR for.');
+                return;
+              }
             }
           }
-        } catch { /* ignore */ }
+        } catch { /* ignore — branch may not have diverged from main yet */ }
 
         // Step 3: Check if branch is pushed — offer to push if not
         const hasUpstream = await gitService.hasUpstream();
