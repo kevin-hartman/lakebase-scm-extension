@@ -147,12 +147,14 @@ export class RunnerService {
       try { process.kill(pid, 'SIGKILL'); } catch {}
       try { fs.unlinkSync(pidFile); } catch {}
     }
-    // Clear stale diagnostics pages to prevent "file already exists" on restart
-    const diagPages = path.join(dir, '_diag', 'pages');
-    if (fs.existsSync(diagPages)) {
-      try { fs.rmSync(diagPages, { recursive: true, force: true }); } catch {}
-      try { fs.mkdirSync(diagPages, { recursive: true }); } catch {}
+    // Clear all stale state that causes errors on restart
+    for (const staleDir of ['_diag/pages', '_work/_temp', '_work/_actions']) {
+      const fullPath = path.join(dir, staleDir);
+      if (fs.existsSync(fullPath)) {
+        try { fs.rmSync(fullPath, { recursive: true, force: true }); } catch {}
+      }
     }
+    try { fs.mkdirSync(path.join(dir, '_diag', 'pages'), { recursive: true }); } catch {}
   }
 
   /** Remove the runner entirely (stop, deregister from GitHub, delete directory) */
