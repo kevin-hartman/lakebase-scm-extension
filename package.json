@@ -306,6 +306,10 @@
         "icon": "$(add)"
       },
       {
+        "command": "lakebaseSync.startRunner",
+        "title": "Lakebase: Start CI Runner"
+      },
+      {
         "command": "lakebaseSync.createTag",
         "title": "Create Tag"
       },

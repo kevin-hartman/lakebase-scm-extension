@@ -818,6 +818,40 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
+    vscode.commands.registerCommand('lakebaseSync.startRunner', async () => {
+      const config = getConfig();
+      if (!config.lakebaseProjectId) {
+        vscode.window.showWarningMessage('No LAKEBASE_PROJECT_ID configured. Set it in .env first.');
+        return;
+      }
+      try {
+        const { RunnerService } = require('./services/runnerService');
+        const runnerService = new RunnerService();
+
+        // Get GitHub repo name
+        const repoUrl = await gitService.getGitHubUrl();
+        const match = repoUrl.match(/github\.com\/(.+)/);
+        if (!match) {
+          vscode.window.showErrorMessage('Could not determine GitHub repo from remote.');
+          return;
+        }
+        const fullRepoName = match[1];
+
+        await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: 'Starting CI runner...' },
+          async (progress) => {
+            await runnerService.setupRunner(fullRepoName, config.lakebaseProjectId, (msg: string) => {
+              progress.report({ message: msg });
+            });
+          }
+        );
+        vscode.window.showInformationMessage(`Runner started for ${config.lakebaseProjectId}`);
+        branchTreeProvider.refresh();
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Failed to start runner: ${err.message}`);
+      }
+    }),
+
     vscode.commands.registerCommand('lakebaseSync.connectWorkspace', async () => {
       const effectiveHost = lakebaseService.getEffectiveHost().replace(/\/+$/, '');
 

@@ -3,11 +3,12 @@ import { GitService, GitBranchInfo } from '../services/gitService';
 import { LakebaseService, LakebaseBranch } from '../services/lakebaseService';
 import { FlywayService } from '../services/flywayService';
 import { SchemaDiffService } from '../services/schemaDiffService';
+import { RunnerService } from '../services/runnerService';
 import { isMainBranch } from '../utils/theme';
 import { getConfig } from '../utils/config';
 
 type ItemType = 'project' | 'branch' | 'currentBranch' | 'detail' | 'sectionHeader'
-  | 'migrationList' | 'tableList' | 'fileList';
+  | 'migrationList' | 'tableList' | 'fileList' | 'runnerSection';
 
 export class BranchItem extends vscode.TreeItem {
   /** Branch name carried from parent so children can look up data */
@@ -88,6 +89,9 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
     if (element.itemType === 'fileList') {
       return this.getBranchFiles(element.branchName!);
     }
+    if (element.itemType === 'runnerSection') {
+      return this.getRunnerDetails();
+    }
     return [];
   }
 
@@ -163,6 +167,22 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
         lbItem.command = { command: 'lakebaseSync.connectWorkspace', title: 'Connect' };
       }
       items.push(lbItem);
+    }
+
+    // CI Runner section
+    if (config.lakebaseProjectId) {
+      const runnerHeader = new BranchItem(undefined, undefined, 'runnerSection',
+        'CI Runner',
+        vscode.TreeItemCollapsibleState.Collapsed
+      );
+      const runnerService = new RunnerService();
+      const running = runnerService.isRunning(config.lakebaseProjectId);
+      runnerHeader.iconPath = new vscode.ThemeIcon(
+        running ? 'vm-running' : 'vm-outline',
+        new vscode.ThemeColor(running ? 'charts.green' : 'disabledForeground')
+      );
+      runnerHeader.description = running ? 'online' : 'offline';
+      items.push(runnerHeader);
     }
 
     // Current Branch section
@@ -671,6 +691,52 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
       item.iconPath = new vscode.ThemeIcon('warning');
       return [item];
     }
+  }
+
+  private getRunnerDetails(): BranchItem[] {
+    const config = getConfig();
+    if (!config.lakebaseProjectId) { return []; }
+
+    const runnerService = new RunnerService();
+    const info = runnerService.getRunnerInfo(config.lakebaseProjectId);
+    const items: BranchItem[] = [];
+
+    if (!info) {
+      const noRunner = new BranchItem(undefined, undefined, 'detail', 'No runner configured');
+      noRunner.iconPath = new vscode.ThemeIcon('info');
+      noRunner.tooltip = 'Run "Lakebase: Create New Project" to set up a runner, or configure one manually';
+      items.push(noRunner);
+      return items;
+    }
+
+    // Status
+    const statusItem = new BranchItem(undefined, undefined, 'detail', info.online ? 'Running' : 'Stopped');
+    statusItem.iconPath = new vscode.ThemeIcon(
+      info.online ? 'pass-filled' : 'circle-slash',
+      new vscode.ThemeColor(info.online ? 'charts.green' : 'charts.red')
+    );
+    statusItem.description = info.online && info.pid ? `PID ${info.pid}` : '';
+    statusItem.tooltip = info.online
+      ? `Runner "${info.name}" is online and listening for workflow jobs`
+      : `Runner "${info.name}" is stopped. Click to start.`;
+    if (!info.online) {
+      statusItem.command = { command: 'lakebaseSync.startRunner', title: 'Start Runner' };
+    }
+    items.push(statusItem);
+
+    // Runner name
+    const nameItem = new BranchItem(undefined, undefined, 'detail', info.name);
+    nameItem.iconPath = new vscode.ThemeIcon('server');
+    nameItem.description = 'self-hosted';
+    items.push(nameItem);
+
+    // Runner directory
+    const dirItem = new BranchItem(undefined, undefined, 'detail', info.dir.replace(/^.*\/\.lakebase\/runners\//, '~/.lakebase/runners/'));
+    dirItem.iconPath = new vscode.ThemeIcon('folder');
+    dirItem.tooltip = info.dir;
+    items.push(dirItem);
+
+    return items;
   }
 
   private getStateThemeIcon(lb: LakebaseBranch | undefined): vscode.ThemeIcon {

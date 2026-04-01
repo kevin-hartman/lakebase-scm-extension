@@ -3,6 +3,7 @@ import * as path from 'path';
 import { GitService } from './gitService';
 import { LakebaseService } from './lakebaseService';
 import { ScaffoldService } from './scaffoldService';
+import { RunnerService } from './runnerService';
 import { exec } from '../utils/exec';
 import { syncCiSecrets } from '../utils/ciSecrets';
 
@@ -142,15 +143,7 @@ export class ProjectCreationService {
     const language = input.language || 'java';
     await this.scaffoldService.deployGitignore(projectDir, language);
 
-    // Step 8: Initial commit + push
-    const langLabels: Record<string, string> = { java: 'Java/Spring Boot', python: 'Python/FastAPI', nodejs: 'Node.js/Express' };
-    const langLabel = langLabels[language] || language;
-    report('Creating initial commit...');
-    await exec('git add -A', { cwd: projectDir });
-    await exec(`git commit -m "Initial project scaffold (${langLabel} + Lakebase)"`, { cwd: projectDir, timeout: 30000 });
-    await exec('git push -u origin main', { cwd: projectDir, timeout: 30000 });
-
-    // Step 9: Set GitHub secrets
+    // Step 8: Set GitHub secrets (before push so merge.yml has them on first run)
     report('Syncing CI secrets...');
     try {
       syncCiSecrets(projectDir, 'GitHub Actions CI', 86400);
@@ -158,7 +151,24 @@ export class ProjectCreationService {
       // Non-fatal — user can run set-repo-secrets.sh manually
     }
 
-    // Step 10: Run health check (verify everything is in place)
+    // Step 9: Deploy self-hosted runner (before push so merge.yml has a runner)
+    report('Setting up self-hosted runner...');
+    const runnerService = new RunnerService();
+    try {
+      await runnerService.setupRunner(fullRepoName, lakebaseProjectId, (msg) => report(msg));
+    } catch (err: any) {
+      report(`Warning: runner setup failed (${err.message}). CI workflows will queue until a runner is available.`);
+    }
+
+    // Step 10: Initial commit + push (triggers merge.yml → runner picks it up)
+    const langLabels: Record<string, string> = { java: 'Java/Spring Boot', python: 'Python/FastAPI', nodejs: 'Node.js/Express' };
+    const langLabel = langLabels[language] || language;
+    report('Creating initial commit...');
+    await exec('git add -A', { cwd: projectDir });
+    await exec(`git commit -m "Initial project scaffold (${langLabel} + Lakebase)"`, { cwd: projectDir, timeout: 30000 });
+    await exec('git push -u origin main', { cwd: projectDir, timeout: 30000 });
+
+    // Step 11: Run health check (verify everything is in place)
     report('Verifying project...');
     const hooks = this.scaffoldService.verifyHooks(projectDir);
     const workflows = this.scaffoldService.verifyWorkflows(projectDir);
@@ -187,6 +197,7 @@ export class ProjectCreationService {
 
     try { await this.gitService.deleteRepo(fullRepoName); } catch {}
     try { await this.lakebaseService.deleteProject(input.projectName); } catch {}
+    try { await new RunnerService().removeRunner(fullRepoName, input.projectName); } catch {}
     try { if (fs.existsSync(projectDir)) { fs.rmSync(projectDir, { recursive: true, force: true }); } } catch {}
   }
 
