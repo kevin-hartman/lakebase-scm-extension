@@ -138,15 +138,28 @@ export class RunnerService {
     return { name: runnerName, dir, pid: child.pid, online: true };
   }
 
-  /** Stop the runner for a project (kill process, clear stale state, don't deregister) */
+  /** Stop the runner for a project (kill all processes, clear stale state, don't deregister) */
   stopRunner(projectName: string): void {
     const dir = this.runnerDir(projectName);
+
+    // Kill the run.sh wrapper process
     const pidFile = path.join(dir, '.pid');
     if (fs.existsSync(pidFile)) {
       const pid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim(), 10);
       try { process.kill(pid, 'SIGKILL'); } catch {}
       try { fs.unlinkSync(pidFile); } catch {}
     }
+
+    // Kill ALL child Runner.Listener and Runner.Worker processes for this runner dir
+    // (run.sh spawns Runner.Listener which spawns Runner.Worker — kill -9 on run.sh
+    //  does NOT kill the .NET child processes)
+    try {
+      cp.execSync(`pkill -9 -f "${dir.replace(/\//g, '\\/')}.*Runner" 2>/dev/null || true`, { timeout: 5000 });
+    } catch {}
+
+    // Wait for processes to die
+    try { cp.execSync('sleep 1'); } catch {}
+
     // Clear all stale state that causes errors on restart
     for (const staleDir of ['_diag/pages', '_work/_temp', '_work/_actions']) {
       const fullPath = path.join(dir, staleDir);
