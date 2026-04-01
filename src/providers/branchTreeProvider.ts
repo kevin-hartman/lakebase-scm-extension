@@ -8,7 +8,7 @@ import { isMainBranch } from '../utils/theme';
 import { getConfig } from '../utils/config';
 
 type ItemType = 'project' | 'branch' | 'currentBranch' | 'detail' | 'sectionHeader'
-  | 'migrationList' | 'tableList' | 'fileList' | 'runnerSection';
+  | 'migrationList' | 'tableList' | 'fileList' | 'runnerSection' | 'workflowRuns';
 
 export class BranchItem extends vscode.TreeItem {
   /** Branch name carried from parent so children can look up data */
@@ -90,7 +90,16 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
       return this.getBranchFiles(element.branchName!);
     }
     if (element.itemType === 'runnerSection') {
-      return this.getRunnerDetails();
+      try {
+        return await this.getRunnerDetails();
+      } catch (err: any) {
+        const errItem = new BranchItem(undefined, undefined, 'detail', `Error: ${err.message}`);
+        errItem.iconPath = new vscode.ThemeIcon('warning');
+        return [errItem];
+      }
+    }
+    if (element.itemType === 'workflowRuns') {
+      return this.getWorkflowRunItems();
     }
     return [];
   }
@@ -757,52 +766,14 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
       items.push(workerItem);
     }
 
-    // ── Recent Workflow Runs ──────────────────────────────────────
+    // ── Recent Workflow Runs (collapsible) ──────────────────────
 
-    let fullRepoName = '';
-    try {
-      const repoUrl = await this.gitService.getGitHubUrl();
-      const m = repoUrl.match(/github\.com\/(.+)/);
-      if (m) { fullRepoName = m[1]; }
-    } catch {}
-
-    if (fullRepoName) {
-      const runs = runnerService.getRecentWorkflowRuns(fullRepoName, 5);
-      if (runs.length > 0) {
-        const runsHeader = new BranchItem(undefined, undefined, 'detail', 'Recent Runs');
-        runsHeader.iconPath = new vscode.ThemeIcon('history');
-        runsHeader.description = `${runs.length}`;
-        items.push(runsHeader);
-
-        for (const run of runs) {
-          const statusIcons: Record<string, string> = {
-            completed: run.conclusion === 'success' ? 'pass' : run.conclusion === 'failure' ? 'error' : 'warning',
-            in_progress: 'loading~spin',
-            queued: 'clock',
-          };
-          const statusColors: Record<string, string> = {
-            success: 'charts.green',
-            failure: 'charts.red',
-            cancelled: 'charts.yellow',
-          };
-          const icon = statusIcons[run.status] || 'circle-outline';
-          const color = statusColors[run.conclusion] || 'foreground';
-
-          const runItem = new BranchItem(undefined, undefined, 'detail',
-            `${run.name} #${run.id.toString().slice(-4)}`
-          );
-          runItem.iconPath = new vscode.ThemeIcon(icon, new vscode.ThemeColor(color));
-          runItem.description = `${run.branch} · ${run.conclusion || run.status}`;
-          runItem.tooltip = `${run.name}\nBranch: ${run.branch}\nEvent: ${run.event}\nStatus: ${run.status}\nConclusion: ${run.conclusion || 'pending'}`;
-          runItem.command = {
-            command: 'vscode.open',
-            title: 'View Run',
-            arguments: [vscode.Uri.parse(`https://github.com/${fullRepoName}/actions/runs/${run.id}`)],
-          };
-          items.push(runItem);
-        }
-      }
-    }
+    const runsHeader = new BranchItem(undefined, undefined, 'workflowRuns',
+      'Recent Runs',
+      vscode.TreeItemCollapsibleState.Collapsed
+    );
+    runsHeader.iconPath = new vscode.ThemeIcon('history');
+    items.push(runsHeader);
 
     // ── Runner Info ───────────────────────────────────────────────
 
@@ -812,6 +783,57 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
     items.push(nameItem);
 
     return items;
+  }
+
+  private async getWorkflowRunItems(): Promise<BranchItem[]> {
+    let fullRepoName = '';
+    try {
+      const repoUrl = await this.gitService.getGitHubUrl();
+      const m = repoUrl.match(/github\.com\/(.+)/);
+      if (m) { fullRepoName = m[1]; }
+    } catch {}
+
+    if (!fullRepoName) {
+      const item = new BranchItem(undefined, undefined, 'detail', 'No GitHub remote');
+      item.iconPath = new vscode.ThemeIcon('info');
+      return [item];
+    }
+
+    const runnerService = new RunnerService();
+    const runs = runnerService.getRecentWorkflowRuns(fullRepoName, 5);
+    if (runs.length === 0) {
+      const item = new BranchItem(undefined, undefined, 'detail', 'No workflow runs yet');
+      item.iconPath = new vscode.ThemeIcon('info');
+      return [item];
+    }
+
+    return runs.map(run => {
+      const statusIcons: Record<string, string> = {
+        completed: run.conclusion === 'success' ? 'pass' : run.conclusion === 'failure' ? 'error' : 'warning',
+        in_progress: 'loading~spin',
+        queued: 'clock',
+      };
+      const statusColors: Record<string, string> = {
+        success: 'charts.green',
+        failure: 'charts.red',
+        cancelled: 'charts.yellow',
+      };
+      const icon = statusIcons[run.status] || 'circle-outline';
+      const color = statusColors[run.conclusion] || 'foreground';
+
+      const runItem = new BranchItem(undefined, undefined, 'detail',
+        `${run.name} #${run.id.toString().slice(-4)}`
+      );
+      runItem.iconPath = new vscode.ThemeIcon(icon, new vscode.ThemeColor(color));
+      runItem.description = `${run.branch} · ${run.conclusion || run.status}`;
+      runItem.tooltip = `${run.name}\nBranch: ${run.branch}\nEvent: ${run.event}\nStatus: ${run.status}\nConclusion: ${run.conclusion || 'pending'}`;
+      runItem.command = {
+        command: 'vscode.open',
+        title: 'View Run',
+        arguments: [vscode.Uri.parse(`https://github.com/${fullRepoName}/actions/runs/${run.id}`)],
+      };
+      return runItem;
+    });
   }
 
   private getStateThemeIcon(lb: LakebaseBranch | undefined): vscode.ThemeIcon {
