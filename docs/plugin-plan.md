@@ -422,16 +422,37 @@ lakebase-scm-extension/
 | 2 | Diff & Visibility | ✅ Complete | — |
 | 3 | Workflow Automation | ✅ Complete | — |
 | 3.5 | Lakebase Sidebar | ✅ Complete | v0.3.5 |
-| 4 | Unified Project Creation | ✅ Complete | v0.3.9 |
+| 4 | Unified Project Creation | ✅ Complete | v0.4.0 |
 | 5 | Advanced Features | Partially complete | v0.3.7 (Graph), v0.3.8 (Refactoring) |
 | 5.5 | R1-R8 Refactoring | ✅ Complete | v0.3.8 |
 | 6 | Remaining Cleanup | Not started | — |
 
-**Current state:** v0.3.9 — Phase 4 complete. New features in v0.3.9:
-- **Create New Project command** — 7-step wizard (project name → parent dir → GitHub auth gate with web login → repo name → visibility → Databricks workspace picker + auth gate → Lakebase project name) with cascading defaults, progress notification, and cleanup on failure
-- **Live branch table queries** — Sidebar tree queries actual Lakebase database tables via `queryBranchSchema()` with diff indicators (green +new, yellow ~modified, red -removed) compared against production
-- **Lakebase console URL fix** — Uses project UUID instead of project name for correct `https://{host}/lakebase/projects/{uuid}` URLs
-- **Branch tree improvements** — Production branch shows all tables in white; feature branches show only diffs; clicking tables opens proper diff view (production ↔ branch)
-- **GitHub avatar fix** — Queries current branch commits (not just default branch) so feature branch avatars resolve; removed Gravatar fallback
-- **Template fixes** — pr.yml/merge.yml branch name resolution (uses .name instead of .uid for source_branch), merge.yml sed `\t` bug fix, pr.yml permissions block for PR comments
-- **E-commerce integration test suite** — 8 scenarios with ephemeral self-hosted GitHub Actions runner executing actual pr.yml/merge.yml workflows, given/when/then Java tests against live Lakebase branch databases
+**Current state:** v0.4.0
+
+### v0.4.0 changelog:
+- **Create New Project command** — 9-step wizard: project name → parent dir → GitHub auth gate (web login) → repo name → visibility → language picker (Java/Python/Node.js) → Databricks workspace picker + auth gate → Lakebase project name → execute with progress. Cascading defaults, cleanup on failure, opens project folder on success.
+- **Multi-language templates** — Templates restructured into `common/` + `java/` + `python/` + `nodejs/`. Java: Maven/Spring Boot/Flyway/JPA. Python: FastAPI/Alembic/SQLAlchemy/pytest. Node.js: Express/Knex/pg/Jest. Smart `flyway-migrate.sh` and `run-tests.sh` detect language via marker files.
+- **Self-hosted CI Runner** — `RunnerService` manages persistent local runners at `~/.lakebase/runners/{project}/`. Auto-deployed during project creation (before initial commit so merge.yml has a runner). Binary cached at `~/.cache/github-actions-runner/`.
+- **CI Runner sidebar view** — Top-level view (peer to Project, Changes, Graph). Shows: status (running/stopped), start/stop actions, runner log, job log, collapsible Recent Runs with workflow history (green/red/spinning icons, click opens GitHub), runner name.
+- **Live branch table queries** — Sidebar tree queries actual Lakebase database tables via `queryBranchSchema()` with diff indicators (green +new, yellow ~modified, red -removed vs production). Production shows all tables in white. Feature branches show only diffs. Clicking tables opens diff view (production ↔ branch DDL).
+- **PR flow fix** — Complete pipeline: detect uncommitted changes → commit → detect unpushed branch → push → create PR. Previously dropped user after commit. PR status now deduplicates check runs by name (latest wins), so retried checks show correct green/red.
+- **Lakebase console URL fix** — Uses project UUID instead of project name.
+- **GitHub avatar fix** — Queries current branch commits (not just default branch). Removed Gravatar fallback.
+- **Template fixes:**
+  - pr.yml/merge.yml: use `.name` (full resource path) for source_branch, not `.uid`
+  - merge.yml: fix sed `\t` bug in branch name extraction
+  - pr.yml: add `permissions: pull-requests: write` for PR comments
+  - pr.yml: removed redundant Flyway migrate on feature branch (developer already did this locally)
+  - pr.yml: feature Lakebase branch no longer created from ci-pr-N (was causing parent-child relationship that blocked cleanup)
+  - delete-lakebase-branches.sh: delete feature branches before CI branches
+  - flyway-migrate.sh / run-tests.sh: detect language (pom.xml/requirements.txt/package.json)
+- **Runner reliability:**
+  - `stopRunner` kills child `.NET Runner.Listener`/`.Worker` processes via `pkill -f` (not just the bash wrapper)
+  - Clears `_diag/pages`, `_work/_temp`, `_work/_actions` on stop/restart to prevent stale file errors
+  - CI secrets sync timeouts increased from 10-15s to 30s
+- **E-commerce integration test suite** — 8 scenarios with ephemeral self-hosted runner, given/when/then Java tests against live Lakebase branch DBs, pause gate for step-by-step debugging
+
+### Known issues / tech debt:
+- `actions/setup-java@v4` in common workflow templates hangs on self-hosted runners when Maven Central is unreachable. The `mavenProject.ts` test helper patches this to use local JDK, but existing projects need manual workflow update.
+- Runner zombie processes can still occur if the extension crashes mid-operation. The `stopRunner` pkill fix handles most cases but edge cases remain.
+- E-commerce integration test scenarios 7-8 need a clean full run with all template fixes applied.
