@@ -53,6 +53,10 @@
           "when": "lakebaseSync.hasPR"
         },
         {
+          "id": "lakebaseRunner",
+          "name": "CI Runner"
+        },
+        {
           "id": "lakebaseMerges",
           "name": "Recent Merges",
           "when": "!lakebaseSync.onFeatureBranch"

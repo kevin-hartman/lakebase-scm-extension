@@ -3,12 +3,11 @@ import { GitService, GitBranchInfo } from '../services/gitService';
 import { LakebaseService, LakebaseBranch } from '../services/lakebaseService';
 import { FlywayService } from '../services/flywayService';
 import { SchemaDiffService } from '../services/schemaDiffService';
-import { RunnerService } from '../services/runnerService';
 import { isMainBranch } from '../utils/theme';
 import { getConfig } from '../utils/config';
 
 type ItemType = 'project' | 'branch' | 'currentBranch' | 'detail' | 'sectionHeader'
-  | 'migrationList' | 'tableList' | 'fileList' | 'runnerSection' | 'workflowRuns';
+  | 'migrationList' | 'tableList' | 'fileList';
 
 export class BranchItem extends vscode.TreeItem {
   /** Branch name carried from parent so children can look up data */
@@ -89,18 +88,6 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
     if (element.itemType === 'fileList') {
       return this.getBranchFiles(element.branchName!);
     }
-    if (element.itemType === 'runnerSection') {
-      try {
-        return await this.getRunnerDetails();
-      } catch (err: any) {
-        const errItem = new BranchItem(undefined, undefined, 'detail', `Error: ${err.message}`);
-        errItem.iconPath = new vscode.ThemeIcon('warning');
-        return [errItem];
-      }
-    }
-    if (element.itemType === 'workflowRuns') {
-      return this.getWorkflowRunItems();
-    }
     return [];
   }
 
@@ -124,23 +111,6 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
     projectItem.iconPath = new vscode.ThemeIcon('repo', new vscode.ThemeColor('charts.blue'));
     projectItem.description = 'Git + Lakebase';
     items.push(projectItem);
-
-    // CI Runner — top-level collapsible section
-    const config = getConfig();
-    if (config.lakebaseProjectId) {
-      const runnerService = new RunnerService();
-      const running = runnerService.isRunning(config.lakebaseProjectId);
-      const runnerItem = new BranchItem(undefined, undefined, 'runnerSection',
-        'CI Runner',
-        vscode.TreeItemCollapsibleState.Collapsed
-      );
-      runnerItem.iconPath = new vscode.ThemeIcon(
-        running ? 'vm-running' : 'vm-outline',
-        new vscode.ThemeColor(running ? 'charts.green' : 'disabledForeground')
-      );
-      runnerItem.description = running ? 'online' : 'offline';
-      items.push(runnerItem);
-    }
 
     return items;
   }
@@ -701,139 +671,6 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
       item.iconPath = new vscode.ThemeIcon('warning');
       return [item];
     }
-  }
-
-  private async getRunnerDetails(): Promise<BranchItem[]> {
-    const config = getConfig();
-    if (!config.lakebaseProjectId) { return []; }
-
-    const runnerService = new RunnerService();
-    const info = runnerService.getRunnerInfo(config.lakebaseProjectId);
-    const items: BranchItem[] = [];
-
-    if (!info) {
-      const noRunner = new BranchItem(undefined, undefined, 'detail', 'No runner configured');
-      noRunner.iconPath = new vscode.ThemeIcon('info');
-      noRunner.tooltip = 'Run "Lakebase: Start CI Runner" to set up a runner';
-      noRunner.command = { command: 'lakebaseSync.startRunner', title: 'Start Runner' };
-      items.push(noRunner);
-      return items;
-    }
-
-    // ── Status + Actions ──────────────────────────────────────────
-
-    const statusItem = new BranchItem(undefined, undefined, 'detail', info.online ? 'Running' : 'Stopped');
-    statusItem.iconPath = new vscode.ThemeIcon(
-      info.online ? 'pass-filled' : 'circle-slash',
-      new vscode.ThemeColor(info.online ? 'charts.green' : 'charts.red')
-    );
-    statusItem.description = info.online && info.pid ? `PID ${info.pid}` : '';
-    statusItem.tooltip = info.online
-      ? `Runner "${info.name}" is online and listening for workflow jobs`
-      : `Runner "${info.name}" is stopped`;
-    items.push(statusItem);
-
-    // Action: Start / Stop
-    if (info.online) {
-      const stopItem = new BranchItem(undefined, undefined, 'detail', 'Stop Runner');
-      stopItem.iconPath = new vscode.ThemeIcon('debug-stop', new vscode.ThemeColor('charts.red'));
-      stopItem.command = { command: 'lakebaseSync.stopRunner', title: 'Stop Runner' };
-      items.push(stopItem);
-    } else {
-      const startItem = new BranchItem(undefined, undefined, 'detail', 'Start Runner');
-      startItem.iconPath = new vscode.ThemeIcon('play', new vscode.ThemeColor('charts.green'));
-      startItem.command = { command: 'lakebaseSync.startRunner', title: 'Start Runner' };
-      items.push(startItem);
-    }
-
-    // Action: View runner log
-    const logFile = runnerService.getLatestLogFile(config.lakebaseProjectId);
-    if (logFile) {
-      const logItem = new BranchItem(undefined, undefined, 'detail', 'Runner Log');
-      logItem.iconPath = new vscode.ThemeIcon('output');
-      logItem.tooltip = logFile;
-      logItem.command = { command: 'vscode.open', title: 'Open Log', arguments: [vscode.Uri.file(logFile)] };
-      items.push(logItem);
-    }
-
-    // Action: View worker log (active job output)
-    const workerLog = runnerService.getLatestWorkerLog(config.lakebaseProjectId);
-    if (workerLog) {
-      const workerItem = new BranchItem(undefined, undefined, 'detail', 'Job Log');
-      workerItem.iconPath = new vscode.ThemeIcon('terminal');
-      workerItem.tooltip = workerLog;
-      workerItem.command = { command: 'vscode.open', title: 'Open Worker Log', arguments: [vscode.Uri.file(workerLog)] };
-      items.push(workerItem);
-    }
-
-    // ── Recent Workflow Runs (collapsible) ──────────────────────
-
-    const runsHeader = new BranchItem(undefined, undefined, 'workflowRuns',
-      'Recent Runs',
-      vscode.TreeItemCollapsibleState.Collapsed
-    );
-    runsHeader.iconPath = new vscode.ThemeIcon('history');
-    items.push(runsHeader);
-
-    // ── Runner Info ───────────────────────────────────────────────
-
-    const nameItem = new BranchItem(undefined, undefined, 'detail', info.name);
-    nameItem.iconPath = new vscode.ThemeIcon('server');
-    nameItem.description = 'self-hosted';
-    items.push(nameItem);
-
-    return items;
-  }
-
-  private async getWorkflowRunItems(): Promise<BranchItem[]> {
-    let fullRepoName = '';
-    try {
-      const repoUrl = await this.gitService.getGitHubUrl();
-      const m = repoUrl.match(/github\.com\/(.+)/);
-      if (m) { fullRepoName = m[1]; }
-    } catch {}
-
-    if (!fullRepoName) {
-      const item = new BranchItem(undefined, undefined, 'detail', 'No GitHub remote');
-      item.iconPath = new vscode.ThemeIcon('info');
-      return [item];
-    }
-
-    const runnerService = new RunnerService();
-    const runs = runnerService.getRecentWorkflowRuns(fullRepoName, 5);
-    if (runs.length === 0) {
-      const item = new BranchItem(undefined, undefined, 'detail', 'No workflow runs yet');
-      item.iconPath = new vscode.ThemeIcon('info');
-      return [item];
-    }
-
-    return runs.map(run => {
-      const statusIcons: Record<string, string> = {
-        completed: run.conclusion === 'success' ? 'pass' : run.conclusion === 'failure' ? 'error' : 'warning',
-        in_progress: 'loading~spin',
-        queued: 'clock',
-      };
-      const statusColors: Record<string, string> = {
-        success: 'charts.green',
-        failure: 'charts.red',
-        cancelled: 'charts.yellow',
-      };
-      const icon = statusIcons[run.status] || 'circle-outline';
-      const color = statusColors[run.conclusion] || 'foreground';
-
-      const runItem = new BranchItem(undefined, undefined, 'detail',
-        `${run.name} #${run.id.toString().slice(-4)}`
-      );
-      runItem.iconPath = new vscode.ThemeIcon(icon, new vscode.ThemeColor(color));
-      runItem.description = `${run.branch} · ${run.conclusion || run.status}`;
-      runItem.tooltip = `${run.name}\nBranch: ${run.branch}\nEvent: ${run.event}\nStatus: ${run.status}\nConclusion: ${run.conclusion || 'pending'}`;
-      runItem.command = {
-        command: 'vscode.open',
-        title: 'View Run',
-        arguments: [vscode.Uri.parse(`https://github.com/${fullRepoName}/actions/runs/${run.id}`)],
-      };
-      return runItem;
-    });
   }
 
   private getStateThemeIcon(lb: LakebaseBranch | undefined): vscode.ThemeIcon {

@@ -18,6 +18,7 @@ import { isMainBranch } from './utils/theme';
 import { buildDiffTuples, DiffTuple } from './utils/diffBuilder';
 import { ProjectCreationService, PROJECT_CREATION_PROMPTS } from './services/projectCreationService';
 import { ScaffoldService } from './services/scaffoldService';
+import { RunnerTreeProvider } from './providers/runnerTreeProvider';
 
 let gitService: GitService;
 let lakebaseService: LakebaseService;
@@ -152,6 +153,10 @@ export async function activate(context: vscode.ExtensionContext) {
   });
   const prView = vscode.window.createTreeView('lakebasePR', {
     treeDataProvider: pullRequestTreeProvider,
+  });
+  const runnerTreeProvider = new RunnerTreeProvider(gitService);
+  const runnerView = vscode.window.createTreeView('lakebaseRunner', {
+    treeDataProvider: runnerTreeProvider,
   });
   const mergesView = vscode.window.createTreeView('lakebaseMerges', {
     treeDataProvider: mergesTreeProvider,
@@ -846,7 +851,7 @@ export async function activate(context: vscode.ExtensionContext) {
           }
         );
         vscode.window.showInformationMessage(`Runner started for ${config.lakebaseProjectId}`);
-        branchTreeProvider.refresh();
+        runnerTreeProvider.refresh();
       } catch (err: any) {
         vscode.window.showErrorMessage(`Failed to start runner: ${err.message}`);
       }
@@ -860,7 +865,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const runnerService = new RunnerService();
         runnerService.stopRunner(config.lakebaseProjectId);
         vscode.window.showInformationMessage(`Runner stopped for ${config.lakebaseProjectId}`);
-        branchTreeProvider.refresh();
+        runnerTreeProvider.refresh();
       } catch (err: any) {
         vscode.window.showErrorMessage(`Failed to stop runner: ${err.message}`);
       }
