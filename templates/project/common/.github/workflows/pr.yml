@@ -308,76 +308,8 @@ jobs:
           ./mvnw -q flyway:info -Dflyway.url="$FLYWAY_URL" -Dflyway.user="${FLYWAY_USER:-}" -Dflyway.password="$FLYWAY_PASS_TRIMMED" -Dflyway.locations=filesystem:src/main/resources/db/migration
           echo "Flyway migrate completed."
 
-      # Apply migrations to the Lakebase branch named after the PR head (e.g. cart) so it stays in sync with CI.
-      - name: Run Flyway migrate (feature-named Lakebase branch)
-        if: steps.lakebase-db.outputs.url != '' && github.head_ref != ''
-        env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST || '' }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN || '' }}
-          LAKEBASE_PROJECT_ID: ${{ secrets.LAKEBASE_PROJECT_ID || '' }}
-        run: |
-          set +e
-          CI_BRANCH="${{ steps.lakebase-db.outputs.branch }}"
-          HEAD_REF="${{ github.head_ref }}"
-          FEATURE_BRANCH="$(echo "$HEAD_REF" | sed 's/\//-/g' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-63)"
-          if [ -z "$FEATURE_BRANCH" ] || [ "$FEATURE_BRANCH" = "main" ] || [ "$FEATURE_BRANCH" = "master" ] || [ "$FEATURE_BRANCH" = "$CI_BRANCH" ]; then
-            echo "Skipping feature-named branch (FEATURE_BRANCH=${FEATURE_BRANCH:-empty} same as CI or main)."
-            exit 0
-          fi
-          export DATABRICKS_HOST DATABRICKS_TOKEN
-          PROJ_PATH="projects/${LAKEBASE_PROJECT_ID}"
-          DB_NAME="databricks_postgres"
-          LIST_JSON="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null)" || true
-          BRANCHES="$(echo "$LIST_JSON" | jq -c 'if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end' 2>/dev/null)" || BRANCHES="[]"
-          EXISTS="$(echo "$BRANCHES" | jq -r --arg w "$FEATURE_BRANCH" '
-            (.[]? | select((.name | type == "string" and (endswith("/branches/" + $w) or (split("/") | last == $w))) or (.uid == $w) or (.id == $w))) | .name
-          ' 2>/dev/null | head -1)"
-          if [ -z "$EXISTS" ] || [ "$EXISTS" = "null" ]; then
-            # Create from production (default branch), NOT from ci-pr-N.
-            # Creating from CI branch makes it a child — preventing CI branch deletion on cleanup.
-            # Flyway migrate below will apply the new migrations to bring it in sync.
-            DEFAULT_NAME="$(echo "$BRANCHES" | jq -r '.[] | select((.status.default == true) or (.is_default == true)) | .name' 2>/dev/null | head -1)"
-            SOURCE="${DEFAULT_NAME:-${PROJ_PATH}/branches/production}"
-            echo "Creating Lakebase branch $FEATURE_BRANCH from production (${SOURCE})..."
-            databricks postgres create-branch "$PROJ_PATH" "$FEATURE_BRANCH" \
-              --json "{\"spec\": {\"source_branch\": \"${SOURCE}\", \"no_expiry\": true}}" 2>&1 || true
-            sleep 5
-            for _ in $(seq 1 24); do
-              STATE="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null | jq -r --arg w "$FEATURE_BRANCH" '
-                (if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[]?
-                | select((.name | type == "string" and (endswith("/branches/" + $w) or (split("/") | last == $w))) or (.uid == $w) or (.id == $w))
-                | .status.current_state // empty
-              ' 2>/dev/null | head -1)"
-              [ "$STATE" = "READY" ] && break
-              sleep 5
-            done
-          fi
-          FEAT_PATH="${PROJ_PATH}/branches/${FEATURE_BRANCH}"
-          HOST="$(databricks postgres list-endpoints "$FEAT_PATH" -o json 2>/dev/null | jq -r '.[0].status.hosts.host // empty')"
-          if [ -z "$HOST" ]; then
-            databricks postgres create-endpoint "$FEAT_PATH" "primary" \
-              --json '{"spec": {"endpoint_type": "ENDPOINT_TYPE_READ_WRITE", "autoscaling_limit_min_cu": 2, "autoscaling_limit_max_cu": 4}}' 2>/dev/null || true
-            for _ in $(seq 1 24); do
-              HOST="$(databricks postgres list-endpoints "$FEAT_PATH" -o json 2>/dev/null | jq -r '.[0].status.hosts.host // empty')"
-              [ -n "$HOST" ] && break
-              sleep 5
-            done
-          fi
-          if [ -z "$HOST" ]; then
-            echo "Could not get endpoint for $FEATURE_BRANCH; skipping Flyway on feature branch."
-            exit 0
-          fi
-          TOKEN="$(databricks postgres generate-database-credential "${FEAT_PATH}/endpoints/primary" -o json 2>/dev/null | jq -r '.token // empty')"
-          EMAIL="$(databricks current-user me -o json 2>/dev/null | jq -r '.userName // .emails[0].value // empty')"
-          if [ -z "$TOKEN" ] || [ -z "$EMAIL" ]; then
-            echo "Could not get credential for $FEATURE_BRANCH; skipping Flyway."
-            exit 0
-          fi
-          FEAT_URL="jdbc:postgresql://${HOST}:5432/${DB_NAME}?sslmode=require"
-          echo "Running Flyway migrate on Lakebase branch $FEATURE_BRANCH..."
-          ./mvnw -q flyway:migrate -Dflyway.url="$FEAT_URL" -Dflyway.user="$EMAIL" -Dflyway.password="$TOKEN" 2>&1 || true
-          echo "Flyway on $FEATURE_BRANCH done."
-          exit 0
+      # Feature-named Lakebase branch (e.g. slice-2) already has migrations applied
+      # from the developer's local ./mvnw test (Phase A5). No CI action needed.
 
       - name: Run tests
         env:
