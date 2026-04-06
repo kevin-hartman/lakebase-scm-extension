@@ -2156,42 +2156,14 @@ export async function activate(context: vscode.ExtensionContext) {
           );
         }
 
-        // Pre-flight: ensure GitHub secrets are set and fresh for CI
+        // Pre-flight: sync CI secrets in the background (non-blocking — never prevents PR creation)
         const root = getWorkspaceRoot();
         if (root) {
           try {
-            const cp = require('child_process');
-            const secretsRaw = cp.execSync('gh secret list', { cwd: root, timeout: 10000 }).toString();
-            const missingSecrets: string[] = [];
-            for (const name of ['DATABRICKS_HOST', 'DATABRICKS_TOKEN', 'LAKEBASE_PROJECT_ID']) {
-              if (!secretsRaw.includes(name)) { missingSecrets.push(name); }
-            }
-
-            if (missingSecrets.length > 0) {
-              // Secrets missing — offer to set them automatically
-              const action = await vscode.window.showWarningMessage(
-                `Missing GitHub secrets: ${missingSecrets.join(', ')}. CI needs these to create Lakebase branches.`,
-                'Set Secrets Automatically', 'Cancel'
-              );
-              if (action !== 'Set Secrets Automatically') { return; }
-            }
-
-            // Always refresh secrets to ensure the token is current
-            await vscode.window.withProgress(
-              { location: vscode.ProgressLocation.Notification, title: 'Syncing CI secrets...' },
-              async () => {
-                const { syncCiSecrets } = require('./utils/ciSecrets');
-                await syncCiSecrets(root, 'GitHub Actions CI', 86400);
-              }
-            );
-            vscode.window.showInformationMessage('CI secrets synced.');
-          } catch (secretErr: any) {
-            // Non-fatal — warn but continue
-            const action = await vscode.window.showWarningMessage(
-              `Could not sync CI secrets: ${secretErr.message}. CI may not create Lakebase branches.`,
-              'Continue Anyway', 'Cancel'
-            );
-            if (action !== 'Continue Anyway') { return; }
+            const { syncCiSecrets } = require('./utils/ciSecrets');
+            await syncCiSecrets(root, 'GitHub Actions CI', 86400);
+          } catch {
+            // Non-fatal — CI may still work with existing secrets
           }
         }
 
