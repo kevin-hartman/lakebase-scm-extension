@@ -118,17 +118,13 @@ export class GraphService {
       const match = ghUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
       if (!match) { return cache; }
       const [, owner, repo] = match;
-      const cp = require('child_process');
-      const { getWorkspaceRoot } = require('../utils/config');
-      const root = getWorkspaceRoot();
-      if (!root) { return cache; }
-      // Query current branch commits (not just default branch) so feature branch avatars resolve
-      const currentBranch = cp.execSync('git rev-parse --abbrev-ref HEAD', { cwd: root, timeout: 5000 }).toString().trim();
+      const currentBranch = await this.gitService.getCurrentBranch();
       const sha = currentBranch || 'HEAD';
-      const apiOut: string = cp.execSync(
-        `gh api "repos/${owner}/${repo}/commits?sha=${sha}&per_page=${limit}" --jq '.[] | "\\(.sha[:7]) \\(.author.avatar_url // "")"'`,
-        { cwd: root, timeout: 10000 }
-      ).toString();
+      const apiOut = await this.gitService.ghApi(
+        `repos/${owner}/${repo}/commits?sha=${sha}&per_page=${limit}`,
+        undefined,
+        '.[] | "\\(.sha[:7]) \\(.author.avatar_url // "")"'
+      );
       for (const line of apiOut.split('\n').filter(Boolean)) {
         const sp = line.indexOf(' ');
         if (sp > 0) { cache.set(line.substring(0, sp), line.substring(sp + 1)); }

@@ -454,16 +454,16 @@ export function runScenario(ctx: ScenarioContext): void {
   describe('Phase D: Verification', function () {
     this.timeout(60000);
     before(function () { if (phaseAFailed) { this.skip(); } });
-    it('D1: V6 applied', () => { assert.ok(verifyMigrationApplied(ctx, '6')); });
-    it('D2: orders table exists', () => { assert.ok(verifyTableExists(ctx, 'orders')); });
-    it('D2: order_item table exists', () => { assert.ok(verifyTableExists(ctx, 'order_item')); });
+    it('D1: V6 applied', async () => { assert.ok(await verifyMigrationApplied(ctx, '6')); });
+    it('D2: orders table exists', async () => { assert.ok(await verifyTableExists(ctx, 'orders')); });
+    it('D2: order_item table exists', async () => { assert.ok(await verifyTableExists(ctx, 'order_item')); });
     it('D3: files on GitHub', () => {
       assert.ok(verifyFileOnGitHub(ctx, 'src/main/java/com/example/demo/model/Order.java'));
       assert.ok(verifyFileOnGitHub(ctx, 'src/main/java/com/example/demo/model/OrderItem.java'));
     });
-    it('D4: cleanup', () => {
+    it('D4: cleanup', async () => {
       cleanupBranch(ctx, BRANCH);
-      deleteLakebaseBranch(ctx, BRANCH);
+      await deleteLakebaseBranch(ctx, BRANCH);
     });
   });
 }

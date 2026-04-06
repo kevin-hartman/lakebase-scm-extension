@@ -1100,6 +1100,45 @@ export class GitService {
     }
   }
 
+  /** Get the currently authenticated GitHub username via gh CLI. */
+  async getCurrentGitHubUser(): Promise<string> {
+    const result = await exec('gh api user --jq ".login"');
+    return result.trim();
+  }
+
+  /**
+   * Clone a GitHub repository into a parent directory.
+   * @param repoUrl - The repo URL (e.g. "https://github.com/owner/repo")
+   * @param parentDir - The directory to clone into
+   */
+  async cloneRepo(repoUrl: string, parentDir: string): Promise<void> {
+    await exec(`git clone "${repoUrl}"`, parentDir);
+  }
+
+  /**
+   * List GitHub Actions secrets for the current repository.
+   * @param cwd - Optional working directory (defaults to workspace root)
+   */
+  async listSecrets(cwd?: string): Promise<string> {
+    const root = cwd || getWorkspaceRoot() || undefined;
+    const result = await exec('gh secret list', root);
+    return result.trim();
+  }
+
+  /**
+   * Generic GitHub API call via gh CLI.
+   * @param endpoint - API endpoint (e.g. "repos/{owner}/{repo}/actions/runs")
+   * @param method - Optional HTTP method (e.g. "POST", "DELETE")
+   * @param jqFilter - Optional jq filter (e.g. ".[].name")
+   * @returns Raw response string
+   */
+  async ghApi(endpoint: string, method?: string, jqFilter?: string): Promise<string> {
+    const methodFlag = method ? `-X ${method} ` : '';
+    const jqFlag = jqFilter ? ` --jq '${jqFilter}'` : '';
+    const result = await exec(`gh api ${methodFlag}"${endpoint}"${jqFlag}`);
+    return result.trim();
+  }
+
   getCachedBranch(): string {
     return this.currentBranch;
   }

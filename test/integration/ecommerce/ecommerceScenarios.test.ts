@@ -185,26 +185,26 @@ describe('E-Commerce Backend — 8 Iterative Scenarios', function () {
     this.timeout(120000);
     before(function () { if (!created) { this.skip(); } });
 
-    it('8 migrations applied (V2-V9) in flyway_schema_history', () => {
+    it('8 migrations applied (V2-V9) in flyway_schema_history', async () => {
       for (let v = 2; v <= 9; v++) {
-        const applied = verifyMigrationApplied(ctx, String(v));
+        const applied = await verifyMigrationApplied(ctx, String(v));
         assert.ok(applied, `V${v} should be applied`);
       }
     });
 
-    it('book table does NOT exist (dropped in V9)', () => {
-      assert.ok(verifyTableNotExists(ctx, 'book'));
+    it('book table does NOT exist (dropped in V9)', async () => {
+      assert.ok(await verifyTableNotExists(ctx, 'book'));
     });
 
-    it('all 8 remaining tables exist on production', () => {
+    it('all 8 remaining tables exist on production', async () => {
       const tables = ['product', 'customer', 'cart', 'cart_item', 'orders', 'order_item', 'wishlist', 'wishlist_item'];
       for (const table of tables) {
-        assert.ok(verifyTableExists(ctx, table), `${table} should exist`);
+        assert.ok(await verifyTableExists(ctx, table), `${table} should exist`);
       }
     });
 
-    it('flyway_schema_history has exactly 9 entries (V1 placeholder + V2-V9)', () => {
-      const count = queryProduction(ctx, 'SELECT COUNT(*) FROM flyway_schema_history WHERE success=true;');
+    it('flyway_schema_history has exactly 9 entries (V1 placeholder + V2-V9)', async () => {
+      const count = await queryProduction(ctx, 'SELECT COUNT(*) FROM flyway_schema_history WHERE success=true;');
       assert.strictEqual(parseInt(count, 10), 9, `Expected 9 migrations, got ${count}`);
     });
 

@@ -307,18 +307,14 @@ export class SchemaScmProvider {
     try {
       const root = getWorkspaceRoot();
       if (root) {
-        const cp = require('child_process');
-
         let repoUrl = '';
         try {
           repoUrl = await this.gitService.getGitHubUrl();
         } catch { /* ignore */ }
 
-        // Use %h|%s|%b format to get sha, subject, and body (PR title)
-        const mergeLog = cp.execSync(
-          'git log --merges --format="%h|%s|%b" -5',
-          { cwd: root, timeout: 5000 }
-        ).toString().trim();
+        // Use getRecentMerges from GitService
+        const merges = await this.gitService.getRecentMerges(5);
+        const mergeLog = merges.map(m => `${m.sha}|${m.message}|`).join('\n');
 
         if (mergeLog) {
           // Split on lines that start with a sha (7+ hex chars followed by |)

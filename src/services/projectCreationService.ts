@@ -146,7 +146,7 @@ export class ProjectCreationService {
     // Step 8: Set GitHub secrets (before push so merge.yml has them on first run)
     report('Syncing CI secrets...');
     try {
-      syncCiSecrets(projectDir, 'GitHub Actions CI', 86400);
+      await syncCiSecrets(projectDir, 'GitHub Actions CI', 86400);
     } catch {
       // Non-fatal — user can run set-repo-secrets.sh manually
     }

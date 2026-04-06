@@ -4,9 +4,22 @@
  * Common functions used by all 8 scenario files. Wraps git, gh, Lakebase CLI,
  * and psql operations so each scenario reads like a script.
  *
- * Uses `databricks` CLI and `psql` directly (not LakebaseService / FlywayService)
- * because the test runs outside VS Code — LakebaseService reads project ID from
- * workspace config which isn't available in the test harness.
+ * ── Service-layer routing strategy ──────────────────────────────────────
+ *
+ * LakebaseService methods (createBranch, deleteBranch, getEndpoint, getCredential,
+ * getDefaultBranch, etc.) work correctly in the test harness because the service
+ * accepts host and project-ID overrides via setHostOverride / setProjectIdOverride,
+ * which the test setup configures. We route through LakebaseService wherever possible
+ * so the integration tests exercise the same code paths as the VS Code extension.
+ *
+ * GitService methods (getGitRoot, getCurrentBranch, etc.) cannot be used here because
+ * they call getWorkspaceRoot() which returns the VS Code workspace root — not the
+ * temporary test project directory. There is no cwd override on GitService, so git
+ * operations use the local `git()` helper with explicit `cwd: ctx.projectDir`.
+ *
+ * Direct CLI calls (gh, psql) are kept for the same reason — they need to target
+ * the test project's repo / connection, not the VS Code workspace.
+ * ────────────────────────────────────────────────────────────────────────
  */
 
 import * as fs from 'fs';
@@ -118,14 +131,6 @@ export function shell(ctx: ScenarioContext, cmd: string, timeout = 30000): strin
   }).toString().trim();
 }
 
-/** Run a databricks CLI command with DATABRICKS_HOST injected */
-function dbcli(ctx: ScenarioContext, args: string, timeout = 30000): string {
-  return cp.execSync(`databricks ${args}`, {
-    timeout,
-    env: { ...process.env, DATABRICKS_HOST: ctx.dbHost },
-  }).toString().trim();
-}
-
 /** Run a psql command against a connection string */
 function psql(connStr: string, sql: string, timeout = 30000): string {
   // Escape single quotes in SQL for the shell
@@ -136,80 +141,20 @@ function psql(connStr: string, sql: string, timeout = 30000): string {
   ).toString().trim();
 }
 
-// ── Lakebase CLI helpers (bypass LakebaseService) ────────────────────
-
-interface BranchInfo {
-  uid: string;
-  name: string;
-  branchId: string;
-  isDefault: boolean;
-}
-
-function sanitizeBranchName(gitBranch: string): string {
-  return gitBranch
-    .replace(/\//g, '-')
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, '-')
-    .substring(0, 63);
-}
-
-/** List Lakebase branches for the test project */
-function listLakebaseBranches(ctx: ScenarioContext): BranchInfo[] {
-  const raw = dbcli(ctx, `postgres list-branches "projects/${ctx.projectName}" -o json`);
-  const parsed = JSON.parse(raw);
-  const items: any[] = Array.isArray(parsed) ? parsed : parsed.branches || parsed.items || [];
-  return items.map((b: any) => {
-    const fullName: string = b.name || '';
-    const uid = b.uid || '';
-    const branchId = fullName.split('/branches/').pop() || uid;
-    return {
-      uid,
-      name: fullName,
-      branchId,
-      isDefault: b.status?.default === true || b.is_default === true,
-    };
-  });
-}
-
-/** Get the default (production) branch */
-function getDefaultBranch(ctx: ScenarioContext): BranchInfo {
-  const branches = listLakebaseBranches(ctx);
-  const def = branches.find(b => b.isDefault);
-  if (!def) { throw new Error('No default Lakebase branch found'); }
-  return def;
-}
-
-/** Get endpoint host for a branch by uid */
-function getEndpointHost(ctx: ScenarioContext, branchPath: string): string {
-  const raw = dbcli(ctx, `postgres list-endpoints "${branchPath}" -o json`);
-  const endpoints = JSON.parse(raw);
-  if (Array.isArray(endpoints) && endpoints.length > 0) {
-    return endpoints[0].status?.hosts?.host || '';
-  }
-  throw new Error(`No endpoint for ${branchPath}`);
-}
-
-/** Get credentials for a branch endpoint */
-function getCredential(ctx: ScenarioContext, branchPath: string): { email: string; token: string } {
-  const endpointPath = `${branchPath}/endpoints/primary`;
-  const tokenRaw = dbcli(ctx, `postgres generate-database-credential "${endpointPath}" -o json`);
-  const token = JSON.parse(tokenRaw).token || '';
-  const userRaw = dbcli(ctx, 'current-user me -o json');
-  const email = JSON.parse(userRaw).userName || '';
-  return { email, token };
-}
-
-/** Build a psql connection string for a branch */
-function buildConnStr(host: string, email: string, token: string): string {
-  return `postgresql://${encodeURIComponent(email)}:${encodeURIComponent(token)}@${host}:5432/databricks_postgres?sslmode=require`;
-}
+// ── Lakebase helpers (routed through LakebaseService) ────────────────
 
 /** Get a psql connection string for the production (default) branch */
-function getProductionConnStr(ctx: ScenarioContext): string {
-  const def = getDefaultBranch(ctx);
-  const host = getEndpointHost(ctx, def.name);
-  const cred = getCredential(ctx, def.name);
-  return buildConnStr(host, cred.email, cred.token);
+async function getProductionConnStr(ctx: ScenarioContext): Promise<string> {
+  const def = await ctx.lakebaseService.getDefaultBranch();
+  if (!def) { throw new Error('No default Lakebase branch found'); }
+
+  const ep = await ctx.lakebaseService.getEndpoint(def.uid);
+  if (!ep?.host) { throw new Error(`No endpoint for default branch ${def.uid}`); }
+
+  const cred = await ctx.lakebaseService.getCredential(def.uid);
+  if (!cred.token || !cred.email) { throw new Error('Empty credentials for default branch'); }
+
+  return `postgresql://${encodeURIComponent(cred.email)}:${encodeURIComponent(cred.token)}@${ep.host}:5432/databricks_postgres?sslmode=require`;
 }
 
 // ── Phase A: Developer (Local) ───────────────────────────────────────
@@ -530,31 +475,31 @@ export function getWorkflowLogs(ctx: ScenarioContext, runId: number, lines = 50)
 // ── Phase D: Production Verification ─────────────────────────────────
 
 /** Run a SQL query on the production database and return raw output */
-export function queryProduction(ctx: ScenarioContext, sql: string): string {
-  const connStr = getProductionConnStr(ctx);
+export async function queryProduction(ctx: ScenarioContext, sql: string): Promise<string> {
+  const connStr = await getProductionConnStr(ctx);
   return psql(connStr, sql);
 }
 
 /** Verify a table exists on the production database */
-export function verifyTableExists(ctx: ScenarioContext, tableName: string): boolean {
-  const result = queryProduction(ctx, `SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='${tableName}');`);
+export async function verifyTableExists(ctx: ScenarioContext, tableName: string): Promise<boolean> {
+  const result = await queryProduction(ctx, `SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='${tableName}');`);
   return result === 't';
 }
 
 /** Verify a table does NOT exist on the production database */
-export function verifyTableNotExists(ctx: ScenarioContext, tableName: string): boolean {
-  return !verifyTableExists(ctx, tableName);
+export async function verifyTableNotExists(ctx: ScenarioContext, tableName: string): Promise<boolean> {
+  return !(await verifyTableExists(ctx, tableName));
 }
 
 /** Verify a column exists on a table in the production database */
-export function verifyColumnExists(ctx: ScenarioContext, tableName: string, columnName: string): boolean {
-  const result = queryProduction(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='${tableName}' AND column_name='${columnName}');`);
+export async function verifyColumnExists(ctx: ScenarioContext, tableName: string, columnName: string): Promise<boolean> {
+  const result = await queryProduction(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='${tableName}' AND column_name='${columnName}');`);
   return result === 't';
 }
 
 /** Verify a migration was applied (exists in flyway_schema_history with success=true) */
-export function verifyMigrationApplied(ctx: ScenarioContext, version: string): boolean {
-  const result = queryProduction(ctx, `SELECT EXISTS (SELECT 1 FROM flyway_schema_history WHERE version='${version}' AND success=true);`);
+export async function verifyMigrationApplied(ctx: ScenarioContext, version: string): Promise<boolean> {
+  const result = await queryProduction(ctx, `SELECT EXISTS (SELECT 1 FROM flyway_schema_history WHERE version='${version}' AND success=true);`);
   return result === 't';
 }
 
@@ -586,14 +531,9 @@ export function parseMigrationSql(sql: string) {
 // ── Lakebase Branch Cleanup ──────────────────────────────────────────
 
 /** Delete a Lakebase branch (non-fatal if not found) */
-export function deleteLakebaseBranch(ctx: ScenarioContext, branchName: string): void {
-  const sanitized = sanitizeBranchName(branchName);
+export async function deleteLakebaseBranch(ctx: ScenarioContext, branchName: string): Promise<void> {
   try {
-    const branches = listLakebaseBranches(ctx);
-    const branch = branches.find(b => b.branchId === sanitized);
-    if (branch) {
-      dbcli(ctx, `postgres delete-branch "${branch.name}"`);
-    }
+    await ctx.lakebaseService.deleteBranch(branchName);
   } catch {
     // Branch may not exist — that's OK
   }

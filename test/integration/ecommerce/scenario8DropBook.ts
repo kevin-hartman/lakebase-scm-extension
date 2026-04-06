@@ -157,15 +157,15 @@ export function runScenario(ctx: ScenarioContext): void {
     this.timeout(60000);
     before(function () { if (phaseAFailed) { this.skip(); } });
 
-    it('D1: V9 applied', () => { assert.ok(verifyMigrationApplied(ctx, '9')); });
+    it('D1: V9 applied', async () => { assert.ok(await verifyMigrationApplied(ctx, '9')); });
 
-    it('D2: book table does NOT exist on production', () => {
-      assert.ok(verifyTableNotExists(ctx, 'book'), 'book table should be gone');
+    it('D2: book table does NOT exist on production', async () => {
+      assert.ok(await verifyTableNotExists(ctx, 'book'), 'book table should be gone');
     });
 
-    it('D2: all other tables still exist (no collateral damage)', () => {
+    it('D2: all other tables still exist (no collateral damage)', async () => {
       for (const table of ['product', 'customer', 'cart', 'cart_item', 'orders', 'order_item', 'wishlist', 'wishlist_item']) {
-        assert.ok(verifyTableExists(ctx, table), `${table} should still exist`);
+        assert.ok(await verifyTableExists(ctx, table), `${table} should still exist`);
       }
     });
 
@@ -176,9 +176,9 @@ export function runScenario(ctx: ScenarioContext): void {
       }
     });
 
-    it('D4: cleanup', () => {
+    it('D4: cleanup', async () => {
       cleanupBranch(ctx, BRANCH);
-      deleteLakebaseBranch(ctx, BRANCH);
+      await deleteLakebaseBranch(ctx, BRANCH);
     });
   });
 }

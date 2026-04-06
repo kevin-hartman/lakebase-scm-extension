@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as cp from 'child_process';
+import { exec } from './exec';
 
 /**
  * Sync CI secrets (DATABRICKS_HOST, LAKEBASE_PROJECT_ID, DATABRICKS_TOKEN)
@@ -10,7 +10,7 @@ import * as cp from 'child_process';
  * @param comment - Token comment (e.g. "GitHub Actions CI" or "CI merge")
  * @param lifetimeSeconds - Token lifetime (e.g. 86400 for PR, 3600 for merge)
  */
-export function syncCiSecrets(root: string, comment: string, lifetimeSeconds: number): void {
+export async function syncCiSecrets(root: string, comment: string, lifetimeSeconds: number): Promise<void> {
   const envContent = fs.readFileSync(path.join(root, '.env'), 'utf-8');
   const getEnvVal = (key: string): string => {
     const match = envContent.match(new RegExp(`^${key}=(.+)$`, 'm'));
@@ -21,27 +21,27 @@ export function syncCiSecrets(root: string, comment: string, lifetimeSeconds: nu
   const projectId = getEnvVal('LAKEBASE_PROJECT_ID');
 
   if (host) {
-    cp.execSync(`gh secret set DATABRICKS_HOST --body "${host}"`, { cwd: root, timeout: 30000 });
+    await exec(`gh secret set DATABRICKS_HOST --body "${host}"`, { cwd: root, timeout: 30000 });
   }
   if (projectId) {
-    cp.execSync(`gh secret set LAKEBASE_PROJECT_ID --body "${projectId}"`, { cwd: root, timeout: 30000 });
+    await exec(`gh secret set LAKEBASE_PROJECT_ID --body "${projectId}"`, { cwd: root, timeout: 30000 });
   }
 
   // Generate a fresh Databricks token for CI
   try {
-    const tokenRaw = cp.execSync(
+    const tokenRaw = await exec(
       `databricks tokens create --comment "${comment}" --lifetime-seconds ${lifetimeSeconds} -o json`,
-      { cwd: root, timeout: 30000, env: { ...process.env, DATABRICKS_HOST: host } }
-    ).toString();
+      { cwd: root, timeout: 30000, env: { DATABRICKS_HOST: host } }
+    );
     const token = JSON.parse(tokenRaw).token_value || JSON.parse(tokenRaw).token || '';
     if (token) {
-      cp.execSync(`gh secret set DATABRICKS_TOKEN --body "${token}"`, { cwd: root, timeout: 30000 });
+      await exec(`gh secret set DATABRICKS_TOKEN --body "${token}"`, { cwd: root, timeout: 30000 });
     }
   } catch {
     // Token creation may fail — fall back to existing token from .env
     const existingToken = getEnvVal('DATABRICKS_TOKEN');
     if (existingToken) {
-      cp.execSync(`gh secret set DATABRICKS_TOKEN --body "${existingToken}"`, { cwd: root, timeout: 30000 });
+      await exec(`gh secret set DATABRICKS_TOKEN --body "${existingToken}"`, { cwd: root, timeout: 30000 });
     }
   }
 }

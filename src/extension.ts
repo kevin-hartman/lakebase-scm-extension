@@ -116,14 +116,11 @@ export async function activate(context: vscode.ExtensionContext) {
   const commitContentProvider = vscode.workspace.registerTextDocumentContentProvider(
     'lakebase-commit',
     {
-      provideTextDocumentContent(uri: vscode.Uri): string {
+      async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
         const ref = uri.authority; // e.g., "abc1234" or "abc1234~1"
         const filePath = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
-        const root = getWorkspaceRoot();
-        if (!root) { return ''; }
         try {
-          const cp = require('child_process');
-          return cp.execSync(`git show "${ref}:${filePath}"`, { cwd: root, timeout: 10000 }).toString();
+          return await gitService.getFileAtRef(ref, filePath);
         } catch {
           return '';
         }
@@ -282,13 +279,12 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('lakebaseSync.graphPickRef', async () => {
       const root = getWorkspaceRoot();
       if (!root) { return; }
-      const cp = require('child_process');
       try {
         // Get local and remote branches
-        const localRaw = cp.execSync('git branch --format="%(refname:short)"', { cwd: root, timeout: 5000 }).toString();
-        const remoteRaw = cp.execSync('git branch -r --format="%(refname:short)"', { cwd: root, timeout: 5000 }).toString();
-        const locals = localRaw.split('\n').filter(Boolean);
-        const remotes = remoteRaw.split('\n').filter(Boolean).filter((r: string) => !r.includes('HEAD'));
+        const localBranches = await gitService.listLocalBranches();
+        const remoteBranches = await gitService.listRemoteBranches();
+        const locals = localBranches.map(b => b.name);
+        const remotes = remoteBranches.map(b => b.name).filter((r: string) => !r.includes('HEAD'));
         const currentBranch = await gitService.getCurrentBranch();
 
         const filterRefs = graphWebviewProvider.graphFilterRefs;
@@ -338,7 +334,7 @@ export async function activate(context: vscode.ExtensionContext) {
       const root = getWorkspaceRoot();
       if (!root) { return; }
       try {
-        require('child_process').execSync('git fetch --all', { cwd: root, timeout: 30000 });
+        await gitService.fetchAll();
         vscode.window.showInformationMessage('Fetched from all remotes.');
         graphWebviewProvider.refresh();
       } catch (err: any) { vscode.window.showErrorMessage(`Fetch failed: ${err.message}`); }
@@ -469,7 +465,7 @@ export async function activate(context: vscode.ExtensionContext) {
       // ── Step 2: GitHub auth + repo ───────────────────────────────
       let ghUser: string | undefined;
       try {
-        ghUser = cp.execSync('gh api user --jq ".login"', { timeout: 10000 }).toString().trim();
+        ghUser = await gitService.getCurrentGitHubUser();
       } catch { /* not authenticated */ }
 
       if (ghUser) {
@@ -496,7 +492,7 @@ export async function activate(context: vscode.ExtensionContext) {
         });
 
         try {
-          ghUser = cp.execSync('gh api user --jq ".login"', { timeout: 10000 }).toString().trim();
+          ghUser = await gitService.getCurrentGitHubUser();
         } catch {
           vscode.window.showErrorMessage('GitHub authentication failed. Please try again.');
           return;
@@ -1718,8 +1714,7 @@ export async function activate(context: vscode.ExtensionContext) {
           if (!ref) { return; }
           const root = getWorkspaceRoot();
           if (root) {
-            const cp = require('child_process');
-            cp.execSync(`git checkout --detach "${ref}"`, { cwd: root });
+            await gitService.checkoutDetached(ref);
             vscode.window.showInformationMessage(`Detached HEAD at ${ref}`);
             statusBarProvider.refresh();
             branchTreeProvider.refresh();
@@ -1735,11 +1730,7 @@ export async function activate(context: vscode.ExtensionContext) {
               if (pick.isRemote) {
                 // Checkout remote branch — creates a local tracking branch
                 progress.report({ message: `Checking out remote branch ${pick.branchName}...` });
-                const root = getWorkspaceRoot();
-                if (root) {
-                  const cp = require('child_process');
-                  cp.execSync(`git checkout -b "${pick.branchName}" --track "origin/${pick.branchName}"`, { cwd: root, timeout: 10000 });
-                }
+                await gitService.checkoutBranch(pick.branchName!, true, 'origin/' + pick.branchName!);
               } else {
                 progress.report({ message: 'Checking out...' });
                 await gitService.checkoutBranch(pick.branchName!);
@@ -1892,9 +1883,8 @@ export async function activate(context: vscode.ExtensionContext) {
             const root = getWorkspaceRoot();
             if (root) {
               try {
-                const cp = require('child_process');
                 const { syncCiSecrets } = require('./utils/ciSecrets');
-                syncCiSecrets(root, 'CI merge', 3600);
+                await syncCiSecrets(root, 'CI merge', 3600);
               } catch { /* non-fatal */ }
             }
 
@@ -2191,7 +2181,7 @@ export async function activate(context: vscode.ExtensionContext) {
               { location: vscode.ProgressLocation.Notification, title: 'Syncing CI secrets...' },
               async () => {
                 const { syncCiSecrets } = require('./utils/ciSecrets');
-                syncCiSecrets(root, 'GitHub Actions CI', 86400);
+                await syncCiSecrets(root, 'GitHub Actions CI', 86400);
               }
             );
             vscode.window.showInformationMessage('CI secrets synced.');

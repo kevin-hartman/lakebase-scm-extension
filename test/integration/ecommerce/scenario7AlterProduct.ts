@@ -247,16 +247,16 @@ export function runScenario(ctx: ScenarioContext): void {
   describe('Phase D: Verification', function () {
     this.timeout(60000);
     before(function () { if (phaseAFailed) { this.skip(); } });
-    it('D1: V8 applied', () => { assert.ok(verifyMigrationApplied(ctx, '8')); });
-    it('D2: average_rating column exists on product', () => {
-      assert.ok(verifyColumnExists(ctx, 'product', 'average_rating'));
+    it('D1: V8 applied', async () => { assert.ok(await verifyMigrationApplied(ctx, '8')); });
+    it('D2: average_rating column exists on product', async () => {
+      assert.ok(await verifyColumnExists(ctx, 'product', 'average_rating'));
     });
-    it('D2: review_count column exists on product', () => {
-      assert.ok(verifyColumnExists(ctx, 'product', 'review_count'));
+    it('D2: review_count column exists on product', async () => {
+      assert.ok(await verifyColumnExists(ctx, 'product', 'review_count'));
     });
-    it('D4: cleanup', () => {
+    it('D4: cleanup', async () => {
       cleanupBranch(ctx, BRANCH);
-      deleteLakebaseBranch(ctx, BRANCH);
+      await deleteLakebaseBranch(ctx, BRANCH);
     });
   });
 }

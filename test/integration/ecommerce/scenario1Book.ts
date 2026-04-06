@@ -373,13 +373,13 @@ export function runScenario(ctx: ScenarioContext): void {
     this.timeout(60000);
     before(function () { if (phaseAFailed) { this.skip(); } });
 
-    it('D1: V2 is in flyway_schema_history', () => {
-      const applied = verifyMigrationApplied(ctx, '2');
+    it('D1: V2 is in flyway_schema_history', async () => {
+      const applied = await verifyMigrationApplied(ctx, '2');
       assert.ok(applied, 'V2 should be applied');
     });
 
-    it('D2: book table exists on production', () => {
-      const exists = verifyTableExists(ctx, 'book');
+    it('D2: book table exists on production', async () => {
+      const exists = await verifyTableExists(ctx, 'book');
       assert.ok(exists, 'book table should exist');
     });
 
@@ -388,9 +388,9 @@ export function runScenario(ctx: ScenarioContext): void {
       assert.ok(verifyFileOnGitHub(ctx, 'src/main/java/com/example/demo/controller/BookController.java'));
     });
 
-    it('D4: cleanup feature branch', () => {
+    it('D4: cleanup feature branch', async () => {
       cleanupBranch(ctx, BRANCH);
-      deleteLakebaseBranch(ctx, BRANCH);
+      await deleteLakebaseBranch(ctx, BRANCH);
     });
   });
 }
