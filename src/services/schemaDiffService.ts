@@ -282,54 +282,52 @@ export class SchemaDiffService {
       if (cached) { return cached; }
     }
 
-    // Fetch fresh credentials for both branches via Lakebase CLI
-    let branchHost: string | undefined;
-    let branchUser: string | undefined;
-    let branchPass: string | undefined;
-    let prodHost: string | undefined;
-    let prodUser: string | undefined;
-    let prodPass: string | undefined;
+    // Primary: query actual schema via information_schema (fast, reliable).
+    // Fallback: pg_dump --schema-only (slower, requires pg_dump on PATH).
+    type TableList = { tables: Array<{ name: string; columns: Array<{ name: string; dataType: string }> }>; error?: string };
+    let branchTables: TableList;
+    let prodTables: TableList;
 
     try {
-      // Current branch credentials — retry once if endpoint not found (may still be provisioning)
-      let branchEp = await this.lakebaseService.getEndpoint(branchId);
-      if (!branchEp?.host) {
-        // Wait and retry — endpoint may still be provisioning after branch creation
-        await new Promise(r => setTimeout(r, 5000));
-        branchEp = await this.lakebaseService.getEndpoint(branchId);
-      }
-      if (!branchEp?.host) {
-        return this.emptyResult(`No endpoint for branch "${branchId}". The branch may still be provisioning — try again in a few seconds.`);
-      }
-      branchHost = branchEp.host;
-      const branchCred = await this.lakebaseService.getCredential(branchId);
-      branchUser = branchCred.email;
-      branchPass = branchCred.token;
-
-      // Production (default branch) credentials
       const defaultBranch = await this.lakebaseService.getDefaultBranch();
       if (!defaultBranch) {
         return this.emptyResult('No default Lakebase branch found');
       }
-      let prodEp = await this.lakebaseService.getEndpoint(defaultBranch.branchId);
-      if (!prodEp?.host) {
-        await new Promise(r => setTimeout(r, 5000));
-        prodEp = await this.lakebaseService.getEndpoint(defaultBranch.branchId);
-      }
-      if (!prodEp?.host) {
-        return this.emptyResult('No endpoint for default branch');
-      }
-      prodHost = prodEp.host;
-      const prodCred = await this.lakebaseService.getCredential(defaultBranch.branchId);
-      prodUser = prodCred.email;
-      prodPass = prodCred.token;
+      const branchSchema = await this.lakebaseService.queryBranchSchema(branchId);
+      const prodSchema = await this.lakebaseService.queryBranchSchema(defaultBranch.uid);
+      branchTables = { tables: branchSchema.filter(t => t.name !== 'flyway_schema_history') };
+      prodTables = { tables: prodSchema.filter(t => t.name !== 'flyway_schema_history') };
     } catch (err: any) {
-      return this.emptyResult(`Cannot fetch credentials: ${err.message}`);
+      // Fallback: fetch credentials and use pg_dump
+      try {
+        let branchEp = await this.lakebaseService.getEndpoint(branchId);
+        if (!branchEp?.host) {
+          await new Promise(r => setTimeout(r, 5000));
+          branchEp = await this.lakebaseService.getEndpoint(branchId);
+        }
+        if (!branchEp?.host) {
+          return this.emptyResult(`No endpoint for branch "${branchId}". Try again in a few seconds.`);
+        }
+        const branchCred = await this.lakebaseService.getCredential(branchId);
+        const defaultBranch = await this.lakebaseService.getDefaultBranch();
+        if (!defaultBranch) {
+          return this.emptyResult('No default Lakebase branch found');
+        }
+        let prodEp = await this.lakebaseService.getEndpoint(defaultBranch.branchId);
+        if (!prodEp?.host) {
+          await new Promise(r => setTimeout(r, 5000));
+          prodEp = await this.lakebaseService.getEndpoint(defaultBranch.branchId);
+        }
+        if (!prodEp?.host) {
+          return this.emptyResult('No endpoint for default branch');
+        }
+        const prodCred = await this.lakebaseService.getCredential(defaultBranch.branchId);
+        branchTables = await this.listTables(branchEp.host, '5432', 'databricks_postgres', branchCred.email, branchCred.token);
+        prodTables = await this.listTables(prodEp.host, '5432', 'databricks_postgres', prodCred.email, prodCred.token);
+      } catch (fallbackErr: any) {
+        return this.emptyResult(`Cannot fetch schema: ${err.message}. Fallback also failed: ${fallbackErr.message}`);
+      }
     }
-
-    // List tables on both branches via pg_dump --schema-only
-    const branchTables = await this.listTables(branchHost, '5432', 'databricks_postgres', branchUser, branchPass);
-    const prodTables = await this.listTables(prodHost, '5432', 'databricks_postgres', prodUser, prodPass);
 
     if (branchTables.error && prodTables.error) {
       return this.emptyResult(`Branch: ${branchTables.error}\nProduction: ${prodTables.error}`);
