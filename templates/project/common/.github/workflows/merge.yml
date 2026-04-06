@@ -138,13 +138,28 @@ jobs:
 
           echo "Verifying schema on ${PG_HOST}:${PG_PORT}/${PG_DB}..."
 
-          # Extract expected tables from migration files (CREATE TABLE statements)
-          EXPECTED_TABLES="$(grep -rhi 'CREATE TABLE' src/main/resources/db/migration/*.sql 2>/dev/null \
+          # Extract expected tables from migration files:
+          # 1. Find all CREATE TABLE statements → tables that should exist
+          # 2. Find all DROP TABLE statements → tables that should NOT exist
+          # 3. Expected = created minus dropped
+          CREATED_TABLES="$(grep -rhi 'CREATE TABLE' src/main/resources/db/migration/*.sql 2>/dev/null \
             | sed -n 's/.*CREATE TABLE[^[:alnum:]]*\(IF NOT EXISTS[[:space:]]*\)\{0,1\}\(public\.\)\{0,1\}\([a-zA-Z_][a-zA-Z0-9_]*\).*/\3/p' \
             | sort -u)"
+          DROPPED_TABLES="$(grep -rhi 'DROP TABLE' src/main/resources/db/migration/*.sql 2>/dev/null \
+            | sed -n 's/.*DROP TABLE[^[:alnum:]]*\(IF EXISTS[[:space:]]*\)\{0,1\}\(public\.\)\{0,1\}\([a-zA-Z_][a-zA-Z0-9_]*\).*/\3/p' \
+            | sort -u)"
+
+          # Remove dropped tables from expected list
+          EXPECTED_TABLES=""
+          for table in $CREATED_TABLES; do
+            if ! echo "$DROPPED_TABLES" | grep -qw "$table"; then
+              EXPECTED_TABLES="${EXPECTED_TABLES:+$EXPECTED_TABLES
+}$table"
+            fi
+          done
 
           if [ -z "$EXPECTED_TABLES" ]; then
-            echo "No CREATE TABLE statements found in migrations; nothing to verify."
+            echo "No tables expected on production after accounting for DROP TABLE migrations; nothing to verify."
             exit 0
           fi
 
