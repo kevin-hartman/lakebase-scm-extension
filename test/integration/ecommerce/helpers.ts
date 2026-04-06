@@ -472,6 +472,25 @@ export function getWorkflowLogs(ctx: ScenarioContext, runId: number, lines = 50)
   }
 }
 
+/**
+ * Wait until all queued/in-progress workflow runs have completed.
+ * Call between scenarios to ensure the runner is idle before starting the next one.
+ */
+export function waitForRunnerIdle(ctx: ScenarioContext, timeoutMs = 300000): void {
+  const startTime = Date.now();
+  while (Date.now() - startTime < timeoutMs) {
+    try {
+      const raw = cp.execSync(
+        `gh run list --repo "${ctx.fullRepoName}" --status=queued --status=in_progress --json databaseId --jq 'length'`,
+        { timeout: 15000 }
+      ).toString().trim();
+      const active = parseInt(raw, 10) || 0;
+      if (active === 0) { return; }
+    } catch {}
+    cp.execSync('sleep 10');
+  }
+}
+
 // ── Phase D: Production Verification ─────────────────────────────────
 
 /** Run a SQL query on the production database and return raw output */

@@ -13,7 +13,7 @@ import {
   verifyTableExists, verifyMigrationApplied, verifyFileOnGitHub,
   parseMigrationSql, deleteLakebaseBranch,
   verifyBranchConnection, createLakebaseBranchAndConnect, writeJavaTestFile, deleteJavaTestFile, runMavenTests,
-  setCurrentScenario,
+  setCurrentScenario, waitForRunnerIdle,
 } from './helpers';
 
 const BRANCH = 'feature/wishlist';
@@ -400,6 +400,11 @@ export function runScenario(ctx: ScenarioContext): void {
     it('D4: cleanup', async () => {
       cleanupBranch(ctx, BRANCH);
       await deleteLakebaseBranch(ctx, BRANCH);
+    });
+
+    it('D5: wait for runner idle', function () {
+      this.timeout(300000);
+      waitForRunnerIdle(ctx);
     });
   });
 }
