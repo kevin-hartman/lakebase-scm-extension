@@ -102,9 +102,14 @@ export class ProjectCreationService {
       description: `Lakebase project: ${input.projectName}`,
     });
 
-    // Step 2: Clone the repo
+    // Step 2: Clone the repo (retry once — GitHub API may not have propagated yet)
     report('Cloning repository...', projectDir);
-    await exec(`gh repo clone "${fullRepoName}" "${projectDir}"`, { timeout: 30000 });
+    try {
+      await exec(`gh repo clone "${fullRepoName}" "${projectDir}"`, { timeout: 30000 });
+    } catch {
+      await new Promise(r => setTimeout(r, 3000));
+      await exec(`gh repo clone "${fullRepoName}" "${projectDir}"`, { timeout: 30000 });
+    }
 
     // Step 3: Create Lakebase project
     report('Creating Lakebase database...', lakebaseProjectId);
