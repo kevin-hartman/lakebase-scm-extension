@@ -410,7 +410,7 @@ lakebase-scm-extension/
     - `lakebaseSync.createBranch` — Create Lakebase Branch (db-only)
     - `lakebaseSync.showCachedBranchDiff` — Branch Diff (Cached)
     Add these to appropriate menus (Lakebase submenu, Project view context, or view title bars).
-57. **Eliminate remaining execSync in GraphService** — `GraphService.getCommits()` still uses `require('child_process').execSync` for the batch git log operation. Refactor to use `GitService.getLogRaw()` and `GitService.getLogShortstat()` (already exist). The `fetchAvatars()` method also uses `cp.execSync` for `gh api` — add a `GitService.ghApi()` method or accept this as an external tool call.
+57. **Eliminate remaining execSync in GraphService** — ✅ Partial: `fetchAvatars()` now uses `gitService.getCurrentBranch()` + `gitService.ghApi()`. Remaining: `getCommits()` still uses `execSync` for batch git log — refactor to use `GitService.getLogRaw()` + `getLogShortstat()` (already exist).
 
 ---
 
@@ -425,7 +425,7 @@ lakebase-scm-extension/
 | 4 | Unified Project Creation | ✅ Complete | v0.4.0 |
 | 5 | Advanced Features | Partially complete | v0.3.7 (Graph), v0.3.8 (Refactoring) |
 | 5.5 | R1-R8 Refactoring | ✅ Complete | v0.3.8 |
-| 6 | Remaining Cleanup | Not started | — |
+| 6 | Remaining Cleanup | Partially complete | v0.4.0 (#57 partial) |
 
 **Current state:** v0.4.0
 
@@ -455,4 +455,6 @@ lakebase-scm-extension/
 ### Known issues / tech debt:
 - `actions/setup-java@v4` in common workflow templates hangs on self-hosted runners when Maven Central is unreachable. The `mavenProject.ts` test helper patches this to use local JDK, but existing projects need manual workflow update.
 - Runner zombie processes can still occur if the extension crashes mid-operation. The `stopRunner` pkill fix handles most cases but edge cases remain.
-- E-commerce integration test scenarios 7-8 need a clean full run with all template fixes applied.
+- `GraphService.getCommits()` still uses `execSync` for the batch git log operation (Phase 6 #57 remaining).
+- Extension.ts still has some direct `cp.execSync` calls for health checks (`databricks --version`, `gh --version`) and secret listing — these are simple availability checks, not service-layer operations.
+- E-commerce integration tests: **179 passing, 0 failing** (all 8 scenarios complete end-to-end, 29 min).
