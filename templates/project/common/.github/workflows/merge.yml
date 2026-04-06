@@ -153,10 +153,10 @@ jobs:
           EXPECTED_TABLES=""
           for table in $CREATED_TABLES; do
             if ! echo "$DROPPED_TABLES" | grep -qw "$table"; then
-              EXPECTED_TABLES="${EXPECTED_TABLES:+$EXPECTED_TABLES
-}$table"
+              EXPECTED_TABLES="$(printf '%s\n%s' "$EXPECTED_TABLES" "$table")"
             fi
           done
+          EXPECTED_TABLES="$(echo "$EXPECTED_TABLES" | sed '/^$/d')"
 
           if [ -z "$EXPECTED_TABLES" ]; then
             echo "No tables expected on production after accounting for DROP TABLE migrations; nothing to verify."
