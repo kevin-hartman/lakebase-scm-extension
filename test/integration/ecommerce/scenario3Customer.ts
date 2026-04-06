@@ -87,6 +87,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+import java.util.UUID;
+
 @SpringBootTest
 @AutoConfigureMockMvc
 class CustomerControllerTest {
@@ -95,17 +97,21 @@ class CustomerControllerTest {
     @Test
     void givenCustomerPayload_whenPostCustomers_thenCreated() throws Exception {
         // Given
-        String json = "{\\"email\\":\\"ctrl@example.com\\",\\"name\\":\\"Ctrl User\\",\\"passwordHash\\":\\"hash789\\"}";
+        String uid = UUID.randomUUID().toString().substring(0, 8);
+        String email = "ctrl-" + uid + "@example.com";
+        String json = "{\\"email\\":\\"" + email + "\\",\\"name\\":\\"Ctrl User\\",\\"passwordHash\\":\\"hash789\\"}";
         // When / Then
         mockMvc.perform(post("/customers").contentType(MediaType.APPLICATION_JSON).content(json))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.email").value("ctrl@example.com"));
+            .andExpect(jsonPath("$.email").value(email));
     }
 
     @Test
     void givenCustomerId_whenGet_thenReturnsCustomer() throws Exception {
         // Given
-        String json = "{\\"email\\":\\"get@example.com\\",\\"name\\":\\"Get User\\",\\"passwordHash\\":\\"hashabc\\"}";
+        String uid = UUID.randomUUID().toString().substring(0, 8);
+        String email = "get-" + uid + "@example.com";
+        String json = "{\\"email\\":\\"" + email + "\\",\\"name\\":\\"Get User\\",\\"passwordHash\\":\\"hashabc\\"}";
         String response = mockMvc.perform(post("/customers").contentType(MediaType.APPLICATION_JSON).content(json))
             .andReturn().getResponse().getContentAsString();
         String id = new com.fasterxml.jackson.databind.ObjectMapper().readTree(response).get("id").asText();

@@ -119,6 +119,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.UUID;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -144,7 +145,8 @@ class OrderControllerTest {
     @Test
     void givenOrderId_whenGet_thenReturnsOrder() throws Exception {
         // Given
-        Customer customer = createCustomer("ordctrl1@test.com");
+        String uid = UUID.randomUUID().toString().substring(0, 8);
+        Customer customer = createCustomer("ordctrl1-" + uid + "@test.com");
         Product product = createProduct("CtrlProd1");
         OrderItem item = new OrderItem();
         item.setProduct(product); item.setQuantity(1); item.setPriceAtOrder(product.getPrice());
@@ -158,7 +160,8 @@ class OrderControllerTest {
     @Test
     void givenOrderId_whenPatchStatus_thenUpdated() throws Exception {
         // Given
-        Customer customer = createCustomer("ordctrl2@test.com");
+        String uid = UUID.randomUUID().toString().substring(0, 8);
+        Customer customer = createCustomer("ordctrl2-" + uid + "@test.com");
         Product product = createProduct("CtrlProd2");
         OrderItem item = new OrderItem();
         item.setProduct(product); item.setQuantity(1); item.setPriceAtOrder(product.getPrice());

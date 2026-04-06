@@ -129,6 +129,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -142,8 +143,9 @@ class CartControllerTest {
     @Test
     void givenCartItemId_whenDeleteCartItem_thenSucceeds() throws Exception {
         // Given
+        String uid = UUID.randomUUID().toString().substring(0, 8);
         Customer c = new Customer();
-        c.setEmail("cartctrl@test.com"); c.setName("Ctrl"); c.setPasswordHash("hash");
+        c.setEmail("cartctrl-" + uid + "@test.com"); c.setName("Ctrl"); c.setPasswordHash("hash");
         c = customerService.register(c);
         Product p = new Product();
         p.setTitle("CtrlProd"); p.setPrice(new BigDecimal("5.00")); p.setStock(5);
