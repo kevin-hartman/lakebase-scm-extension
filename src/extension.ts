@@ -2021,7 +2021,7 @@ export async function activate(context: vscode.ExtensionContext) {
       const missingSecrets: string[] = [];
       if (ghOk) {
         try {
-          const secretsRaw = cp.execSync('gh secret list', { cwd: root, timeout: 10000 }).toString();
+          const secretsRaw = await gitService.listSecrets(root);
           secretsChecked = true;
           for (const name of ['DATABRICKS_HOST', 'DATABRICKS_TOKEN', 'LAKEBASE_PROJECT_ID']) {
             if (!secretsRaw.includes(name)) {
@@ -2760,8 +2760,7 @@ export async function activate(context: vscode.ExtensionContext) {
         await vscode.window.withProgress(
           { location: vscode.ProgressLocation.Notification, title: 'Cloning repository...' },
           async () => {
-            const cp = require('child_process');
-            cp.execSync(`git clone "${repoUrl}"`, { cwd: parentDir, timeout: 120000 });
+            await gitService.cloneRepo(repoUrl, parentDir);
           }
         );
         // Extract repo name from URL

@@ -203,7 +203,8 @@ export class GraphWebviewProvider implements vscode.WebviewViewProvider {
             // 1. Try CI comment from PR
             if (msg.pr) {
               try {
-                const prComments = cp.execSync(`gh pr view ${msg.pr} --json comments --jq '.comments[].body'`, { cwd: root, timeout: 15000 }).toString();
+                const commentsRaw = await this.gitService.ghApi(`repos/${(await this.gitService.getGitHubUrl()).match(/github\.com\/(.+)/)?.[1] || ''}/issues/${msg.pr}/comments`, undefined, '.[].body');
+                const prComments = commentsRaw;
                 const schemaComment = prComments.split('\n').find((line: string) =>
                   line.includes('CREATED') || line.includes('MODIFIED') || line.includes('REMOVED') ||
                   line.includes('No schema changes') || line.includes('schema diff'));
