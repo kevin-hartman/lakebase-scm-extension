@@ -302,10 +302,7 @@ Available from Command Palette and Project view title bar.
 51. **Cursor AI context** — Schema-aware code generation
 52. **Graph webview** — Visual commit graph with branch lines, Lakebase pairing annotations, and clickable commits ✅ (v0.3.7)
 53. **Adopt STATUS_ICONS/STATUS_COLORS from theme.ts** — Replace all inline icon/color object literals in schemaScmProvider.ts (3 maps), branchTreeProvider.ts (3 maps + inline assignments), and pullRequestTree.ts (1 map) with imports from `src/utils/theme.ts`. The constants exist but are not yet consumed by callers.
-54. **Evaluate pg_dump vs migration SQL parsing consolidation** — `schemaDiffService.parsePgDumpTables` and `FlywayService.parseSql` both parse CREATE TABLE statements but from different sources and with different regex patterns. Determine whether these should share a common parser or remain separate. Investigation needed:
-    - `parsePgDumpTables` parses `pg_dump --schema-only` output: no `IF NOT EXISTS`, no `public.` prefix, includes `CONSTRAINT` lines, output is a complete DDL dump of all tables
-    - `FlywayService.parseSql` parses hand-written migration SQL: includes `IF NOT EXISTS`, may have `public.` prefix, mixed with ALTER/DROP statements, output is incremental changes
-    - Key question: are the regex differences driven by actual format differences in pg_dump vs migration SQL, or are they accidental divergence that should be unified?
+54. **Evaluate pg_dump vs migration SQL parsing consolidation** — ✅ Partially resolved: `compareBranchSchemas` now uses `queryBranchSchema()` (information_schema query) as primary path, with pg_dump as fallback. The two parsers (`parsePgDumpTables` and `FlywayService.parseSql`) still exist separately but pg_dump is no longer the primary code path. Remaining: remove `parsePgDumpTables` if pg_dump fallback is never triggered, or keep as defensive fallback.
 
 ---
 
@@ -430,31 +427,19 @@ lakebase-scm-extension/
 **Current state:** v0.4.0
 
 ### v0.4.0 changelog:
-- **Create New Project command** — 9-step wizard: project name → parent dir → GitHub auth gate (web login) → repo name → visibility → language picker (Java/Python/Node.js) → Databricks workspace picker + auth gate → Lakebase project name → execute with progress. Cascading defaults, cleanup on failure, opens project folder on success.
-- **Multi-language templates** — Templates restructured into `common/` + `java/` + `python/` + `nodejs/`. Java: Maven/Spring Boot/Flyway/JPA. Python: FastAPI/Alembic/SQLAlchemy/pytest. Node.js: Express/Knex/pg/Jest. Smart `flyway-migrate.sh` and `run-tests.sh` detect language via marker files.
-- **Self-hosted CI Runner** — `RunnerService` manages persistent local runners at `~/.lakebase/runners/{project}/`. Auto-deployed during project creation (before initial commit so merge.yml has a runner). Binary cached at `~/.cache/github-actions-runner/`.
-- **CI Runner sidebar view** — Top-level view (peer to Project, Changes, Graph). Shows: status (running/stopped), start/stop actions, runner log, job log, collapsible Recent Runs with workflow history (green/red/spinning icons, click opens GitHub), runner name.
-- **Live branch table queries** — Sidebar tree queries actual Lakebase database tables via `queryBranchSchema()` with diff indicators (green +new, yellow ~modified, red -removed vs production). Production shows all tables in white. Feature branches show only diffs. Clicking tables opens diff view (production ↔ branch DDL).
-- **PR flow fix** — Complete pipeline: detect uncommitted changes → commit → detect unpushed branch → push → create PR. Previously dropped user after commit. PR status now deduplicates check runs by name (latest wins), so retried checks show correct green/red.
-- **Lakebase console URL fix** — Uses project UUID instead of project name.
-- **GitHub avatar fix** — Queries current branch commits (not just default branch). Removed Gravatar fallback.
-- **Template fixes:**
-  - pr.yml/merge.yml: use `.name` (full resource path) for source_branch, not `.uid`
-  - merge.yml: fix sed `\t` bug in branch name extraction
-  - pr.yml: add `permissions: pull-requests: write` for PR comments
-  - pr.yml: removed redundant Flyway migrate on feature branch (developer already did this locally)
-  - pr.yml: feature Lakebase branch no longer created from ci-pr-N (was causing parent-child relationship that blocked cleanup)
-  - delete-lakebase-branches.sh: delete feature branches before CI branches
-  - flyway-migrate.sh / run-tests.sh: detect language (pom.xml/requirements.txt/package.json)
-- **Runner reliability:**
-  - `stopRunner` kills child `.NET Runner.Listener`/`.Worker` processes via `pkill -f` (not just the bash wrapper)
-  - Clears `_diag/pages`, `_work/_temp`, `_work/_actions` on stop/restart to prevent stale file errors
-  - CI secrets sync timeouts increased from 10-15s to 30s
-- **E-commerce integration test suite** — 8 scenarios with ephemeral self-hosted runner, given/when/then Java tests against live Lakebase branch DBs, pause gate for step-by-step debugging
+- **Create New Project wizard** — 10-step flow: project name → parent dir → GitHub auth gate → repo name → visibility → language (Java/Python/Node.js) → runner type (self-hosted/GitHub-hosted) → Databricks workspace + auth gate → Lakebase project name → execute. Cascading defaults, cleanup on failure, opens project folder.
+- **Configurable runner type** — Wizard step 6 picks self-hosted (default) or GitHub-hosted. Self-hosted: workflows patched (local JDK, offline Maven), runner auto-deployed. GitHub-hosted: workflows unchanged (actions/setup-java, online Maven), no runner deployed. `ScaffoldService.patchWorkflowsForRunnerType()` handles patching.
+- **Multi-language templates** — `common/` + `java/` + `python/` + `nodejs/`. Smart scripts detect language via marker files.
+- **Self-hosted CI Runner** — `RunnerService` at `~/.lakebase/runners/{project}/`. Skips re-configuration on restart if already configured. Kills child .NET processes via pkill. Clears stale diagnostics on stop/restart.
+- **CI Runner sidebar view** — Top-level view with status, start/stop, logs, collapsible Recent Runs.
+- **Live branch table queries** — `queryBranchSchema()` (information_schema) as primary, pg_dump as fallback. Correctly captures ALTER TABLE columns. Diff indicators vs production.
+- **Branch Review** — Uses `queryBranchSchema` for both sides (fast, captures ALTER TABLE effects).
+- **PR flow** — Full pipeline: uncommitted → commit → unpushed → push → sync secrets (non-blocking) → PR title → create. PR status deduplicates check runs (latest wins).
+- **Service layer routing** — Extension.ts, providers, and graphService route through GitService/LakebaseService. Remaining: health check version commands (acceptable).
+- **Integration tests** — 179 passing (8 e-commerce scenarios, 29 min) + 11 passing (self-hosted runner test, 2 min) = **190 total**.
 
 ### Known issues / tech debt:
-- `actions/setup-java@v4` in common workflow templates hangs on self-hosted runners when Maven Central is unreachable. The `mavenProject.ts` test helper patches this to use local JDK, but existing projects need manual workflow update.
-- Runner zombie processes can still occur if the extension crashes mid-operation. The `stopRunner` pkill fix handles most cases but edge cases remain.
-- `GraphService.getCommits()` still uses `execSync` for the batch git log operation (Phase 6 #57 remaining).
-- Extension.ts still has some direct `cp.execSync` calls for health checks (`databricks --version`, `gh --version`) and secret listing — these are simple availability checks, not service-layer operations.
-- E-commerce integration tests: **179 passing, 0 failing** (all 8 scenarios complete end-to-end, 29 min).
+- Existing projects created before v0.4.0 need manual workflow update (replace `actions/setup-java` with local JDK step) for self-hosted runners.
+- Runner zombie processes can still occur if the extension crashes mid-operation.
+- `GraphService.getCommits()` still uses `execSync` for batch git log (Phase 6 #57 remaining).
+- Health check commands (`databricks --version`, `gh --version`) use direct `execSync` — acceptable.
