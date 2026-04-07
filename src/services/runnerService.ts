@@ -83,18 +83,24 @@ export class RunnerService {
       fs.mkdirSync(diagPages, { recursive: true });
     }
 
-    // Get registration token
-    report('Registering runner with GitHub...');
-    const regToken = cp.execSync(
-      `gh api -X POST repos/${fullRepoName}/actions/runners/registration-token --jq '.token'`,
-      { timeout: 15000 }
-    ).toString().trim();
+    // Configure runner — skip if already configured for this repo
+    const runnerFile = path.join(dir, '.runner');
+    const alreadyConfigured = fs.existsSync(runnerFile);
 
-    // Configure (--replace in case previously configured)
-    cp.execSync(
-      `./config.sh --url "https://github.com/${fullRepoName}" --token "${regToken}" --name "${runnerName}" --labels self-hosted --unattended --replace`,
-      { cwd: dir, timeout: 60000 }
-    );
+    if (!alreadyConfigured) {
+      report('Registering runner with GitHub...');
+      const regToken = cp.execSync(
+        `gh api -X POST repos/${fullRepoName}/actions/runners/registration-token --jq '.token'`,
+        { timeout: 15000 }
+      ).toString().trim();
+
+      cp.execSync(
+        `./config.sh --url "https://github.com/${fullRepoName}" --token "${regToken}" --name "${runnerName}" --labels self-hosted --unattended --replace`,
+        { cwd: dir, timeout: 60000 }
+      );
+    } else {
+      report('Runner already configured — restarting...');
+    }
 
     // Start in background
     report('Starting runner...');
