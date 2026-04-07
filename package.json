@@ -120,6 +120,11 @@
         "icon": "$(diff)"
       },
       {
+        "command": "lakebaseSync.moreActions",
+        "title": "More Actions...",
+        "icon": "$(ellipsis)"
+      },
+      {
         "command": "lakebaseSync.showCachedBranchDiff",
         "title": "Branch Diff (Cached)"
       },
@@ -932,6 +937,11 @@
           "command": "lakebaseSync.showBranchDiff",
           "when": "view == lakebaseBranches && viewItem == project",
           "group": "inline@7"
+        },
+        {
+          "command": "lakebaseSync.moreActions",
+          "when": "view == lakebaseBranches && viewItem == project",
+          "group": "inline@8"
         },
         {
           "command": "lakebaseSync.pull",

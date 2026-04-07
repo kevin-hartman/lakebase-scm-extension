@@ -32,7 +32,8 @@ export function exec(command: string, cwdOrOpts?: string | ExecOptions, env?: Re
         if (opts.tagAuthErrors) {
           if (msg.includes('project id not found') || msg.includes('not authenticated') ||
               msg.includes('PERMISSION_DENIED') || msg.includes('401') ||
-              msg.includes('invalid token') || msg.includes('no configuration')) {
+              msg.includes('invalid token') || msg.includes('no configuration') ||
+              msg.includes('cannot configure default credentials')) {
             const authErr = new Error(msg);
             (authErr as any).isAuthError = true;
             reject(authErr);

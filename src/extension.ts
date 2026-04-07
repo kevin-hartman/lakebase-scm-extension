@@ -1048,6 +1048,50 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
+    vscode.commands.registerCommand('lakebaseSync.moreActions', async () => {
+      interface ActionItem extends vscode.QuickPickItem { command: string }
+      const items: ActionItem[] = [
+        { label: 'Pull', command: 'lakebaseSync.pull' },
+        { label: 'Push', command: 'lakebaseSync.push' },
+        { label: 'Clone', command: 'lakebaseSync.clone' },
+        { label: 'Fetch', command: 'lakebaseSync.fetch' },
+        { label: '', kind: vscode.QuickPickItemKind.Separator, command: '' },
+        { label: 'Commit', command: 'lakebaseSync.commit' },
+        { label: 'Commit Staged', command: 'lakebaseSync.commitStaged' },
+        { label: 'Commit All', command: 'lakebaseSync.commitAll' },
+        { label: 'Undo Last Commit', command: 'lakebaseSync.undoLastCommit' },
+        { label: 'Amend Last Commit', command: 'lakebaseSync.commitAmend' },
+        { label: '', kind: vscode.QuickPickItemKind.Separator, command: '' },
+        { label: 'Pull (Rebase)', command: 'lakebaseSync.pullRebase' },
+        { label: 'Sync', command: 'lakebaseSync.sync' },
+        { label: 'Fetch (Prune)', command: 'lakebaseSync.fetchPrune' },
+        { label: 'Fetch From All Remotes', command: 'lakebaseSync.fetchAll' },
+        { label: 'Publish Branch', command: 'lakebaseSync.publishBranch' },
+        { label: '', kind: vscode.QuickPickItemKind.Separator, command: '' },
+        { label: 'Create Branch...', command: 'lakebaseSync.createUnifiedBranch' },
+        { label: 'Create Branch From...', command: 'lakebaseSync.createBranchFrom' },
+        { label: 'Rename Branch...', command: 'lakebaseSync.renameBranch' },
+        { label: 'Delete Branch...', command: 'lakebaseSync.deleteBranch' },
+        { label: 'Merge Branch...', command: 'lakebaseSync.mergeBranch' },
+        { label: '', kind: vscode.QuickPickItemKind.Separator, command: '' },
+        { label: 'Stash', command: 'lakebaseSync.stash' },
+        { label: 'Stash (Include Untracked)', command: 'lakebaseSync.stashIncludeUntracked' },
+        { label: 'Apply Latest Stash', command: 'lakebaseSync.stashApply' },
+        { label: 'Pop Latest Stash', command: 'lakebaseSync.stashPop' },
+        { label: '', kind: vscode.QuickPickItemKind.Separator, command: '' },
+        { label: 'Create Tag...', command: 'lakebaseSync.createTag' },
+        { label: 'Delete Tag...', command: 'lakebaseSync.deleteTag' },
+        { label: '', kind: vscode.QuickPickItemKind.Separator, command: '' },
+        { label: 'Refresh Credentials', command: 'lakebaseSync.refreshCredentials' },
+        { label: 'Run Migrate', command: 'lakebaseSync.runMigrate' },
+        { label: 'Branch Diff Summary', command: 'lakebaseSync.showBranchDiff' },
+        { label: 'Connect Workspace...', command: 'lakebaseSync.connectWorkspace' },
+        { label: 'Health Check', command: 'lakebaseSync.healthCheck' },
+      ];
+      const pick = await vscode.window.showQuickPick(items, { placeHolder: 'More Actions...' });
+      if (pick?.command) { vscode.commands.executeCommand(pick.command); }
+    }),
+
     vscode.commands.registerCommand('lakebaseSync.showBranchDiff', async (item?: BranchItem) => {
       try {
         // If invoked on main/production, there's nothing to diff
