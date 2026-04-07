@@ -23,6 +23,8 @@ export interface ProjectCreationInput {
   privateRepo?: boolean;
   /** Project language stack (default: 'java') */
   language?: 'java' | 'python' | 'nodejs';
+  /** CI runner type (default: 'self-hosted') */
+  runnerType?: 'self-hosted' | 'github-hosted';
 }
 
 /**
@@ -138,6 +140,7 @@ export class ProjectCreationService {
       databricksHost: host,
       lakebaseProjectId,
       language: input.language || 'java',
+      runnerType: input.runnerType || 'self-hosted',
     });
 
     // Step 6: Write .env with real connection values
@@ -156,13 +159,18 @@ export class ProjectCreationService {
       // Non-fatal — user can run set-repo-secrets.sh manually
     }
 
-    // Step 9: Deploy self-hosted runner (before push so merge.yml has a runner)
-    report('Setting up self-hosted runner...');
-    const runnerService = new RunnerService();
-    try {
-      await runnerService.setupRunner(fullRepoName, lakebaseProjectId, (msg) => report(msg));
-    } catch (err: any) {
-      report(`Warning: runner setup failed (${err.message}). CI workflows will queue until a runner is available.`);
+    // Step 9: Deploy runner (self-hosted only — before push so merge.yml has a runner)
+    const runnerType = input.runnerType || 'self-hosted';
+    if (runnerType === 'self-hosted') {
+      report('Setting up self-hosted runner...');
+      const runnerService = new RunnerService();
+      try {
+        await runnerService.setupRunner(fullRepoName, lakebaseProjectId, (msg) => report(msg));
+      } catch (err: any) {
+        report(`Warning: runner setup failed (${err.message}). CI workflows will queue until a runner is available.`);
+      }
+    } else {
+      report('Using GitHub-hosted runners — no local runner needed.');
     }
 
     // Step 10: Initial commit + push (triggers merge.yml → runner picks it up)

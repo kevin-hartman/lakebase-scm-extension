@@ -106,12 +106,14 @@ export class ScaffoldService {
     databricksHost?: string;
     lakebaseProjectId?: string;
     language?: ProjectLanguage;
+    runnerType?: 'self-hosted' | 'github-hosted';
   }): Promise<{
     scripts: string[];
     workflows: string[];
     hooks: string;
   }> {
     const language = values?.language || 'java';
+    const runnerType = values?.runnerType || 'self-hosted';
 
     // Common files
     await this.deployGitignore(targetDir, language);
@@ -124,8 +126,52 @@ export class ScaffoldService {
     // Scripts, workflows, hooks (common across all languages)
     const scripts = await this.deployScripts(targetDir);
     const workflows = await this.deployWorkflows(targetDir);
+
+    // Patch workflows for runner type
+    await this.patchWorkflowsForRunnerType(targetDir, runnerType);
+
     const hooks = await this.installHooks(targetDir);
     return { scripts, workflows, hooks };
+  }
+
+  /**
+   * Patch pr.yml and merge.yml for the selected runner type.
+   * Templates ship with github-hosted config (actions/setup-java, online Maven).
+   * For self-hosted runners, replaces with local JDK detection and offline Maven.
+   */
+  async patchWorkflowsForRunnerType(targetDir: string, runnerType: 'self-hosted' | 'github-hosted'): Promise<void> {
+    if (runnerType === 'github-hosted') { return; }
+
+    const workflowDir = path.join(targetDir, '.github', 'workflows');
+    const localJdkStep = [
+      '- name: Set up JDK (local)',
+      '        run: |',
+      '          echo "Using local JDK:"',
+      '          java -version',
+      '          if [ -z "$JAVA_HOME" ]; then',
+      '            export JAVA_HOME="$(/usr/libexec/java_home 2>/dev/null || dirname $(dirname $(readlink -f $(which java))))"',
+      '            echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV',
+      '          fi',
+      '          echo "JAVA_HOME=$JAVA_HOME"',
+      '',
+    ].join('\n');
+
+    for (const file of ['pr.yml', 'merge.yml']) {
+      const filePath = path.join(workflowDir, file);
+      if (!fs.existsSync(filePath)) { continue; }
+      let content = fs.readFileSync(filePath, 'utf-8');
+
+      // Replace actions/setup-java block with local JDK step
+      content = content.replace(
+        /- name: Set up JDK\n\s+uses: actions\/setup-java@v4\n\s+with:\n(?:\s+#[^\n]*\n)*(?:\s+[\w-]+:.*\n)+/g,
+        localJdkStep
+      );
+
+      // Add -o (offline) to mvnw calls for local Maven cache
+      content = content.replace(/\.\/mvnw /g, './mvnw -o ');
+
+      fs.writeFileSync(filePath, content);
+    }
   }
 
   // ── Verification ───────────────────────────────────────────────

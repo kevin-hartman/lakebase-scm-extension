@@ -420,35 +420,8 @@ export function scaffoldMavenProject(projectDir: string): void {
   // DemoApplicationTests.java
   writeFile(projectDir, 'src/test/java/com/example/demo/DemoApplicationTests.java', DEMO_APPLICATION_TESTS_JAVA);
 
-  // Patch workflow files: replace actions/setup-java (needs internet to download JDK)
-  // with a shell step that uses the locally installed JDK.
-  patchWorkflowsForLocalRunner(projectDir);
+  // Workflow patching for self-hosted runners is now handled by ScaffoldService.patchWorkflowsForRunnerType()
+  // which is called by scaffoldAll() in ProjectCreationService. No separate patching needed here.
 
   console.log('    [maven] Maven project scaffolded (pom.xml, mvnw, application.properties, DemoApplication.java).');
-}
-
-/**
- * Patch pr.yml and merge.yml to work on a self-hosted runner without internet access to
- * download JDKs. Replaces `actions/setup-java@v4` (which downloads Temurin) with a shell
- * step that verifies the local JDK and sets JAVA_HOME.
- */
-function patchWorkflowsForLocalRunner(projectDir: string): void {
-  const workflowDir = path.join(projectDir, '.github', 'workflows');
-  for (const file of ['pr.yml', 'merge.yml']) {
-    const filePath = path.join(workflowDir, file);
-    if (!fs.existsSync(filePath)) { continue; }
-    let content = fs.readFileSync(filePath, 'utf-8');
-
-    // Replace the setup-java action block with a local JDK verification step.
-    content = content.replace(
-      /- name: Set up JDK\n\s+uses: actions\/setup-java@v4\n\s+with:\n(?:\s+#[^\n]*\n)*(?:\s+[\w-]+:.*\n)+/g,
-      `- name: Set up JDK (local)\n        run: |\n          echo "Using local JDK:"\n          java -version\n          if [ -z "$JAVA_HOME" ]; then\n            export JAVA_HOME="$(/usr/libexec/java_home 2>/dev/null || dirname $(dirname $(readlink -f $(which java))))";\n            echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV\n          fi\n          echo "JAVA_HOME=$JAVA_HOME"\n`
-    );
-
-    // Add -o (offline) flag to all ./mvnw calls so Maven uses local cache
-    // (avoids Maven Central connectivity issues on restricted networks)
-    content = content.replace(/\.\/mvnw /g, './mvnw -o ');
-
-    fs.writeFileSync(filePath, content);
-  }
 }

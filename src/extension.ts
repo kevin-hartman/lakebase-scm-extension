@@ -448,7 +448,7 @@ export async function activate(context: vscode.ExtensionContext) {
         prompt: PROJECT_CREATION_PROMPTS.projectName.prompt,
         placeHolder: PROJECT_CREATION_PROMPTS.projectName.placeHolder,
         validateInput: PROJECT_CREATION_PROMPTS.projectName.validateInput,
-        title: 'Lakebase: Create New Project (1/9)',
+        title: 'Lakebase: Create New Project (1/10)',
       });
       if (!projectName) { return; }
 
@@ -472,7 +472,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const authPick = await vscode.window.showQuickPick([
           { label: `$(check) Authenticated as ${ghUser}`, description: 'Continue with this account', action: 'continue' },
           { label: '$(sign-in) Switch GitHub account...', description: 'Sign in with a different account', action: 'login' },
-        ], { title: 'Lakebase: GitHub Authentication (2/9)', placeHolder: `GitHub: ${ghUser}` });
+        ], { title: 'Lakebase: GitHub Authentication (2/10)', placeHolder: `GitHub: ${ghUser}` });
         if (!authPick) { return; }
         if (authPick.action === 'login') { ghUser = undefined; }
       }
@@ -480,7 +480,7 @@ export async function activate(context: vscode.ExtensionContext) {
       if (!ghUser) {
         const loginPick = await vscode.window.showQuickPick([
           { label: '$(sign-in) Sign in to GitHub', description: 'Opens browser for GitHub authentication' },
-        ], { title: 'Lakebase: GitHub Authentication (2/9)', placeHolder: 'GitHub authentication required' });
+        ], { title: 'Lakebase: GitHub Authentication (2/10)', placeHolder: 'GitHub authentication required' });
         if (!loginPick) { return; }
 
         const terminal = vscode.window.createTerminal('GitHub Login');
@@ -503,7 +503,7 @@ export async function activate(context: vscode.ExtensionContext) {
         prompt: 'GitHub repository name',
         value: projectName,
         placeHolder: projectName,
-        title: 'Lakebase: GitHub Repository (3/9)',
+        title: 'Lakebase: GitHub Repository (3/10)',
         validateInput: (val) => {
           if (!val.trim()) { return 'Repository name is required'; }
           if (!/^[a-zA-Z0-9._-]+$/.test(val)) { return 'Invalid characters in repo name'; }
@@ -515,7 +515,7 @@ export async function activate(context: vscode.ExtensionContext) {
       const visibilityPick = await vscode.window.showQuickPick([
         { label: '$(lock) Private', description: 'Only you and collaborators can see this repository', value: true },
         { label: '$(globe) Public', description: 'Anyone on the internet can see this repository', value: false },
-      ], { title: 'Lakebase: Repository Visibility (4/9)', placeHolder: 'Choose repository visibility' });
+      ], { title: 'Lakebase: Repository Visibility (4/10)', placeHolder: 'Choose repository visibility' });
       if (!visibilityPick) { return; }
 
       // ── Step 2b: Language stack ──────────────────────────────────
@@ -523,8 +523,15 @@ export async function activate(context: vscode.ExtensionContext) {
         { label: '$(symbol-class) Java / Spring Boot', description: 'Maven, Flyway, JPA', value: 'java' as const },
         { label: '$(symbol-method) Python / FastAPI', description: 'Alembic, SQLAlchemy, pytest', value: 'python' as const },
         { label: '$(symbol-variable) Node.js / Express', description: 'Knex, pg, Jest', value: 'nodejs' as const },
-      ], { title: 'Lakebase: Project Language (5/9)', placeHolder: 'Choose project language and framework' });
+      ], { title: 'Lakebase: Project Language (5/10)', placeHolder: 'Choose project language and framework' });
       if (!languagePick) { return; }
+
+      // ── Step 2c: Runner type ─────────────────────────────────────
+      const runnerPick = await vscode.window.showQuickPick([
+        { label: '$(vm) Self-hosted runner (local)', description: 'Runs CI on your machine. No internet needed for builds.', value: 'self-hosted' as const },
+        { label: '$(cloud) GitHub-hosted runner', description: 'Runs CI on GitHub infrastructure. Requires internet access.', value: 'github-hosted' as const },
+      ], { title: 'Lakebase: CI Runner Type (6/10)', placeHolder: 'How should CI/CD workflows run?' });
+      if (!runnerPick) { return; }
 
       // ── Step 3: Databricks / Lakebase auth ───────────────────────
       let dbHost: string | undefined;
@@ -537,7 +544,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const dbPick = await vscode.window.showQuickPick([
           { label: `$(check) Connected to ${dbHost.replace(/^https?:\/\//, '')}`, description: 'Use this workspace', action: 'continue' },
           { label: '$(plug) Connect to a different workspace...', description: 'Choose another Databricks workspace', action: 'switch' },
-        ], { title: 'Lakebase: Databricks Workspace (6/9)', placeHolder: 'Databricks workspace' });
+        ], { title: 'Lakebase: Databricks Workspace (7/10)', placeHolder: 'Databricks workspace' });
         if (!dbPick) { return; }
         if (dbPick.action === 'switch') { dbHost = undefined; }
       }
@@ -568,7 +575,7 @@ export async function activate(context: vscode.ExtensionContext) {
         });
 
         const wsPick = await vscode.window.showQuickPick(wsItems, {
-          title: 'Lakebase: Select Workspace (6/9)',
+          title: 'Lakebase: Select Workspace (7/10)',
           placeHolder: 'Choose a Databricks workspace with Lakebase',
         });
         if (!wsPick) { return; }
@@ -610,7 +617,7 @@ export async function activate(context: vscode.ExtensionContext) {
         prompt: 'Lakebase project name',
         value: repoName,
         placeHolder: repoName,
-        title: 'Lakebase: Project Name (8/9)',
+        title: 'Lakebase: Project Name (9/10)',
         validateInput: PROJECT_CREATION_PROMPTS.projectName.validateInput,
       });
       if (!lakebaseProjectName) { return; }
@@ -638,6 +645,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 githubOwner: ghUser!,
                 privateRepo: visibilityPick.value,
                 language: languagePick.value,
+                runnerType: runnerPick.value,
               },
               (step, detail) => {
                 progress.report({ message: `${step}${detail ? ' — ' + detail : ''}` });
