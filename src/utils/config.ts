@@ -92,7 +92,9 @@ export function updateEnvConnection(opts: {
 
   const envPath = path.join(root, '.env');
   const dbName = 'databricks_postgres';
-  const jdbcUrl = `jdbc:postgresql://${opts.host}:5432/${dbName}?sslmode=require`;
+  const jdbcUrl = opts.host
+    ? `jdbc:postgresql://${opts.host}:5432/${dbName}?sslmode=require`
+    : '# ENDPOINT_NOT_READY — run Refresh Credentials';
 
   const keysToReplace = new Set([
     'LAKEBASE_HOST', 'LAKEBASE_BRANCH_ID',

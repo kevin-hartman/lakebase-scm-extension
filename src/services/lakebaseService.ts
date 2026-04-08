@@ -403,11 +403,25 @@ export class LakebaseService {
   /**
    * Sync connection for a branch: get endpoint, get credential, update .env.
    * Encapsulates the 3-step pattern used in 7 places across extension.ts.
-   * @returns Connection info, or undefined if endpoint is not available.
+   * Retries up to 30s waiting for the endpoint to become available (newly
+   * created branches have a delay between branch READY and endpoint ACTIVE).
+   * @returns Connection info, or undefined if endpoint never became available.
    */
   async syncConnection(branchId: string): Promise<{ host: string; branchId: string; username: string; password: string } | undefined> {
     const { updateEnvConnection } = require('../utils/config');
-    const ep = await this.getEndpoint(branchId);
+    // Immediately point .env at this branch with empty credentials.
+    // This ensures .env never remains pointed at production.
+    updateEnvConnection({ host: '', branchId, username: '', password: '' });
+
+    let ep = await this.getEndpoint(branchId);
+    if (!ep?.host) {
+      // Endpoint may still be provisioning — retry up to 30s
+      for (let i = 0; i < 6; i++) {
+        await new Promise(r => setTimeout(r, 5000));
+        ep = await this.getEndpoint(branchId);
+        if (ep?.host) { break; }
+      }
+    }
     if (!ep?.host) { return undefined; }
     const cred = await this.getCredential(branchId);
     updateEnvConnection({ host: ep.host, branchId, username: cred.email, password: cred.token });

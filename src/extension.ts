@@ -210,7 +210,12 @@ export async function activate(context: vscode.ExtensionContext) {
       const existing = await lakebaseService.getBranchByName(newBranch);
       if (existing) {
         // Branch exists — just refresh credentials and update .env
-        await lakebaseService.syncConnection(existing.branchId);
+        const conn = await lakebaseService.syncConnection(existing.branchId);
+        if (!conn) {
+          vscode.window.showWarningMessage(
+            `Switched to "${newBranch}" but endpoint not ready. .env not updated. Click "Refresh Credentials" when the branch is active.`
+          );
+        }
         return;
       }
 
@@ -230,8 +235,13 @@ export async function activate(context: vscode.ExtensionContext) {
           const branch = await lakebaseService.createBranch(newBranch);
           if (!branch) { return undefined; }
 
-          progress.report({ message: 'Syncing connection...' });
-          await lakebaseService.syncConnection(branch.branchId);
+          progress.report({ message: 'Waiting for endpoint...' });
+          const conn = await lakebaseService.syncConnection(branch.branchId);
+          if (!conn) {
+            vscode.window.showWarningMessage(
+              `Lakebase branch "${sanitized}" created but endpoint not ready. .env not updated. Click "Refresh Credentials" when the branch is active.`
+            );
+          }
           return branch;
         }
       );
@@ -725,12 +735,20 @@ export async function activate(context: vscode.ExtensionContext) {
             }
 
             // 3. Get endpoint and credentials
-            progress.report({ message: 'Syncing connection...' });
-            await lakebaseService.syncConnection(lb.branchId);
+            progress.report({ message: 'Waiting for endpoint...' });
+            const conn = await lakebaseService.syncConnection(lb.branchId);
 
-            vscode.window.showInformationMessage(
-              `Branch "${branchName}" created — code + database ready.`
-            );
+            if (conn) {
+              vscode.window.showInformationMessage(
+                `Branch "${branchName}" created — code + database ready.`
+              );
+            } else {
+              vscode.window.showWarningMessage(
+                `Branch "${branchName}" created but endpoint not ready. ` +
+                `.env still points to the previous branch. ` +
+                `Click "Refresh Credentials" once the branch is active.`
+              );
+            }
           } catch (err: any) {
             if (!await handleAuthError(lakebaseService, err)) {
               vscode.window.showErrorMessage(`Failed to create branch: ${err.message}`);
