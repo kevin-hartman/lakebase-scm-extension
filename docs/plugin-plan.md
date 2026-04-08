@@ -411,6 +411,31 @@ lakebase-scm-extension/
 
 ---
 
+## Phase 7: Deploy to Databricks Apps
+
+### Goals
+- One-click deployment of the scaffolded project to Databricks Apps
+- Generate `app.yaml`, `databricks.yml`, and DABs resource files
+- Use `databricks-sdk` for OAuth M2M auth (service principal) in deployed apps
+- Support synced tables (Delta → Lakebase) for read paths alongside migration-managed schema
+
+### Deliverables
+58. **Deploy command** — `Lakebase: Deploy to Databricks Apps` from the sidebar or Command Palette. Generates deployment config, builds frontend (if React), and runs `databricks bundle deploy`.
+59. **`app.yaml` generation** — Auto-detect language and generate the app entry point (`uvicorn main:app` for Python, `node src/index.js` for Node.js, `java -jar` for Java). Inject `PGHOST`, `PGDATABASE`, `PGSCHEMA` env vars.
+60. **`databricks.yml` bundle config** — Generate DABs bundle with app resource, Lakebase database instance, and optional synced table resources. Support `dev`/`staging`/`production` targets.
+61. **OAuth M2M auth in deployed apps** — Add `databricks-sdk` to project dependencies at deploy time. Generate a `database.py` (Python) or equivalent that uses `WorkspaceClient().config.oauth_token().access_token` as the Postgres password. Local dev continues to use `.env`-based credentials; deployed apps use service principal auth.
+62. **Database resource config** — Generate `resources/database.yml` defining the Lakebase instance and any synced tables. Auto-detect instance capacity from current project.
+63. **Service principal permissions** — After deploy, run `GRANT` statements to give the app's service principal access to the Lakebase database and tables.
+64. **Frontend build integration** — For projects with a `frontend/` directory (React+Vite), run `npm install && npm run build` before deploy. Configure `sync.include` for `frontend/dist` in `databricks.yml`.
+65. **Deploy status in sidebar** — Show deployment status, app URL, and logs in the CI Runner or a new Deployments view.
+
+### Dependencies
+- Databricks CLI v0.285+ with `bundle deploy` and `apps` support
+- Databricks workspace with Apps enabled
+- Service principal auto-created by Databricks Apps
+
+---
+
 ## Summary
 
 | Phase | What | Status | Version |
@@ -423,8 +448,9 @@ lakebase-scm-extension/
 | 5 | Advanced Features | Partially complete | v0.3.7 (Graph), v0.3.8 (Refactoring) |
 | 5.5 | R1-R8 Refactoring | ✅ Complete | v0.3.8 |
 | 6 | Remaining Cleanup | Partially complete | v0.4.0 (#57 partial) |
+| 7 | Deploy to Databricks Apps | Future | — |
 
-**Current state:** v0.4.0
+**Current state:** v0.4.1
 
 ### v0.4.0 changelog:
 - **Create New Project wizard** — 10-step flow: project name → parent dir → GitHub auth gate → repo name → visibility → language (Java/Python/Node.js) → runner type (self-hosted/GitHub-hosted) → Databricks workspace + auth gate → Lakebase project name → execute. Cascading defaults, cleanup on failure, opens project folder.
@@ -438,8 +464,16 @@ lakebase-scm-extension/
 - **Service layer routing** — Extension.ts, providers, and graphService route through GitService/LakebaseService. Remaining: health check version commands (acceptable).
 - **Integration tests** — 179 passing (8 e-commerce scenarios, 29 min) + 11 passing (self-hosted runner test, 2 min) = **190 total**.
 
+### v0.4.1 changelog:
+- **Fix .env pointing at production after branch creation** — `syncConnection` now immediately clears `.env` connection fields before waiting for the endpoint, ensuring `.env` never remains pointed at production. Retries up to 30s for the endpoint to become available.
+- **More Actions menu** — `...` (ellipsis) icon on the project tree item opens a QuickPick with all Git + Lakebase commands (Pull, Push, Commit, Branch, Stash, Tags, Lakebase ops) with separators.
+- **Auth error detection** — Added `cannot configure default credentials` to the auth error recognition in `exec.ts`.
+- **Python template: pyproject.toml + uv** — Replaced `requirements.txt` with `pyproject.toml` and `uv` for package management. Switched from `psycopg2-binary` to `psycopg[binary]` (v3). Updated `database.py` and `alembic/env.py` to use the `postgresql+psycopg://` dialect.
+- **README rewrite** — Comprehensive docs covering all features, workflows, settings, and the full developer lifecycle.
+
 ### Known issues / tech debt:
 - Existing projects created before v0.4.0 need manual workflow update (replace `actions/setup-java` with local JDK step) for self-hosted runners.
 - Runner zombie processes can still occur if the extension crashes mid-operation.
 - `GraphService.getCommits()` still uses `execSync` for batch git log (Phase 6 #57 remaining).
 - Health check commands (`databricks --version`, `gh --version`) use direct `execSync` — acceptable.
+- More Actions `...` opens a QuickPick at the top of the window — VS Code extension API does not support floating popups positioned near tree items.

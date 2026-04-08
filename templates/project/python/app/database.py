@@ -11,6 +11,10 @@ DATABASE_URL = os.getenv(
     ),
 )
 
+# Use psycopg v3 driver (psycopg, not psycopg2)
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+
 # For Lakebase connections, ensure sslmode=require
 if "sslmode" not in DATABASE_URL:
     DATABASE_URL += "?sslmode=require" if "?" not in DATABASE_URL else "&sslmode=require"

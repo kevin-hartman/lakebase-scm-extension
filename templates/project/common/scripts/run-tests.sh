@@ -39,6 +39,6 @@ elif [ -f "$REPO_ROOT/package.json" ]; then
   # Node.js / Jest
   npm test "$@"
 else
-  echo "Could not detect project language. Expected pom.xml (Java), requirements.txt (Python), or package.json (Node.js)."
+  echo "Could not detect project language. Expected pom.xml (Java), pyproject.toml/requirements.txt (Python), or package.json (Node.js)."
   exit 1
 fi

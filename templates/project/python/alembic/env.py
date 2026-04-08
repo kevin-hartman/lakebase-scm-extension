@@ -20,6 +20,11 @@ db_url = os.getenv(
         "jdbc:postgresql://", "postgresql://"
     ),
 )
+
+# Use psycopg v3 driver
+if db_url.startswith("postgresql://"):
+    db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
+
 if "sslmode" not in db_url:
     db_url += "?sslmode=require" if "?" not in db_url else "&sslmode=require"
 
