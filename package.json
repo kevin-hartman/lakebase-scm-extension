@@ -7,7 +7,7 @@
   "icon": "resources/icons/extension-icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/kevin-hartman_data/lakebase-scm-extension"
+    "url": "https://github.com/kevin-hartman/lakebase-scm-extension"
   },
   "engines": {
     "vscode": "^1.85.0"
