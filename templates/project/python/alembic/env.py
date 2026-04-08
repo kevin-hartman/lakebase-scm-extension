@@ -1,10 +1,9 @@
 """Alembic environment configuration. Reads DATABASE_URL from environment."""
 
-import os
 from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
-from app.database import Base
+from app.database import Base, DATABASE_URL
 
 config = context.config
 
@@ -12,27 +11,11 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
-
-# Read database URL from environment (same as app/database.py)
-db_url = os.getenv(
-    "DATABASE_URL",
-    os.getenv("SPRING_DATASOURCE_URL", "postgresql://localhost:5432/databricks_postgres").replace(
-        "jdbc:postgresql://", "postgresql://"
-    ),
-)
-
-# Use psycopg v3 driver
-if db_url.startswith("postgresql://"):
-    db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
-
-if "sslmode" not in db_url:
-    db_url += "?sslmode=require" if "?" not in db_url else "&sslmode=require"
-
-config.set_main_option("sqlalchemy.url", db_url)
+config.set_main_option("sqlalchemy.url", DATABASE_URL)
 
 
 def run_migrations_offline():
-    context.configure(url=db_url, target_metadata=target_metadata, literal_binds=True)
+    context.configure(url=DATABASE_URL, target_metadata=target_metadata, literal_binds=True)
     with context.begin_transaction():
         context.run_migrations()
 

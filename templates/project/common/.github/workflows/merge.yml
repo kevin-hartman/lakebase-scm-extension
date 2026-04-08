@@ -1,5 +1,6 @@
-# On merge to main: run Flyway on production, delete ci-pr-* and merged feature branch.
-# Branch cleanup runs in a separate job so it always runs on merge even if Flyway fails.
+# On merge to main: run migrations on production, delete ci-pr-* and merged feature branch.
+# Language-aware: detects Java/Flyway, Python/Alembic, or Node.js/Knex.
+# Branch cleanup runs in a separate job so it always runs on merge even if migrations fail.
 name: Merge
 
 on:
@@ -12,20 +13,59 @@ jobs:
   merge-to-main:
     runs-on: self-hosted
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main')
-    env:
-      MAVEN_OPTS: --enable-native-access=ALL-UNNAMED
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Detect project language
+        id: detect-lang
+        run: |
+          if [ -f pom.xml ]; then
+            echo "lang=java" >> $GITHUB_OUTPUT
+          elif [ -f pyproject.toml ] || [ -f requirements.txt ]; then
+            echo "lang=python" >> $GITHUB_OUTPUT
+          elif [ -f package.json ]; then
+            echo "lang=nodejs" >> $GITHUB_OUTPUT
+          else
+            echo "::error::Cannot detect project language."
+            exit 1
+          fi
+          echo "Detected language: $(cat $GITHUB_OUTPUT | grep lang | cut -d= -f2)"
+
       - name: Set up JDK
+        if: steps.detect-lang.outputs.lang == 'java'
         uses: actions/setup-java@v4
         with:
-          # Use 21 for reliability on self-hosted runners; Temurin 25 can have cache issues. Override to '25' if your runner has it.
           java-version: '21'
           distribution: 'temurin'
           cache: 'maven'
+
+      - name: Set Java env vars
+        if: steps.detect-lang.outputs.lang == 'java'
+        run: echo "MAVEN_OPTS=--enable-native-access=ALL-UNNAMED" >> $GITHUB_ENV
+
+      - name: Set up Python + uv
+        if: steps.detect-lang.outputs.lang == 'python'
+        run: |
+          if command -v uv >/dev/null 2>&1; then
+            echo "uv already on PATH"; uv --version
+          elif command -v pip >/dev/null 2>&1; then
+            pip install uv
+          else
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="$HOME/.local/bin:$PATH"
+            echo "PATH=$HOME/.local/bin:$PATH" >> $GITHUB_ENV
+          fi
+          uv sync --all-extras
+
+      - name: Set up Node.js
+        if: steps.detect-lang.outputs.lang == 'nodejs'
+        run: |
+          if command -v node >/dev/null 2>&1; then
+            echo "Node.js already on PATH"; node --version
+          fi
+          npm install
 
       - name: Install Databricks CLI
         run: |
@@ -89,65 +129,106 @@ jobs:
             echo "Could not generate production credential."
             exit 0
           fi
-          echo "SPRING_DATASOURCE_URL=jdbc:postgresql://${HOST}:5432/${DB_NAME}?sslmode=require" >> $GITHUB_ENV
-          echo "SPRING_DATASOURCE_USERNAME=${EMAIL}" >> $GITHUB_ENV
-          echo "SPRING_DATASOURCE_PASSWORD<<PROD_PW_EOF" >> $GITHUB_ENV
+          JDBC_URL="jdbc:postgresql://${HOST}:5432/${DB_NAME}?sslmode=require"
+          # Generic vars
+          echo "DB_USERNAME=${EMAIL}" >> $GITHUB_ENV
+          echo "DB_PASSWORD<<PROD_PW_EOF" >> $GITHUB_ENV
           printf '%s' "$TOKEN" >> $GITHUB_ENV
           echo "" >> $GITHUB_ENV
           echo "PROD_PW_EOF" >> $GITHUB_ENV
+          # Java-specific (Spring reads these natively)
+          echo "SPRING_DATASOURCE_URL=${JDBC_URL}" >> $GITHUB_ENV
+          echo "SPRING_DATASOURCE_USERNAME=${EMAIL}" >> $GITHUB_ENV
+          echo "SPRING_DATASOURCE_PASSWORD=${TOKEN}" >> $GITHUB_ENV
+          # DATABASE_URL in postgresql:// format with embedded credentials
+          ENCODED_PASS="$(printf '%s' "$TOKEN" | sed 's/@/%40/g; s/:/%3A/g; s/\//%2F/g; s/?/%3F/g; s/#/%23/g')"
+          echo "DATABASE_URL=postgresql://${EMAIL}:${ENCODED_PASS}@${HOST}:5432/${DB_NAME}?sslmode=require" >> $GITHUB_ENV
           echo "Production credentials resolved (default branch: $DEFAULT_UID)."
 
-      - name: Flyway migrate (production)
+      - name: Run migrations (production)
         env:
-          # Use credentials from "Resolve production DB credentials" step (GITHUB_ENV); fallback to repo secrets if set
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+          DB_USERNAME: ${{ env.DB_USERNAME }}
+          DB_PASSWORD: ${{ env.DB_PASSWORD }}
           SPRING_DATASOURCE_URL: ${{ env.SPRING_DATASOURCE_URL || secrets.SPRING_DATASOURCE_URL || '' }}
           SPRING_DATASOURCE_USERNAME: ${{ env.SPRING_DATASOURCE_USERNAME || secrets.SPRING_DATASOURCE_USERNAME || '' }}
           SPRING_DATASOURCE_PASSWORD: ${{ env.SPRING_DATASOURCE_PASSWORD || secrets.SPRING_DATASOURCE_PASSWORD || '' }}
         run: |
-          if [ -z "$SPRING_DATASOURCE_URL" ]; then
-            echo "SPRING_DATASOURCE_URL not set; skip production migrate. Ensure DATABRICKS_HOST, DATABRICKS_TOKEN, LAKEBASE_PROJECT_ID are set so the workflow can resolve production credentials automatically (or set SPRING_DATASOURCE_* secrets as fallback)."
+          if [ -z "$DATABASE_URL" ] && [ -z "$SPRING_DATASOURCE_URL" ]; then
+            echo "No database credentials set; skip production migrate."
             exit 0
           fi
-          echo "Running Flyway migrate on production..."
-          if ! ./mvnw -q flyway:migrate -Dflyway.url="$SPRING_DATASOURCE_URL" -Dflyway.user="${SPRING_DATASOURCE_USERNAME:-}" -Dflyway.password="${SPRING_DATASOURCE_PASSWORD:-}"; then
-            echo "::error::Flyway migrate failed. Check: (1) Production DB reachable and credentials valid, (2) No migration version conflict, (3) Migration SQL is valid."
-            exit 1
+          LANG="${{ steps.detect-lang.outputs.lang }}"
+          echo "Running migrations on production ($LANG)..."
+          if [ "$LANG" = "java" ]; then
+            if ! ./mvnw -q flyway:migrate -Dflyway.url="$SPRING_DATASOURCE_URL" -Dflyway.user="${SPRING_DATASOURCE_USERNAME:-}" -Dflyway.password="${SPRING_DATASOURCE_PASSWORD:-}"; then
+              echo "::error::Flyway migrate failed."
+              exit 1
+            fi
+          elif [ "$LANG" = "python" ]; then
+            if ! uv run alembic upgrade head; then
+              echo "::error::Alembic upgrade failed."
+              exit 1
+            fi
+          elif [ "$LANG" = "nodejs" ]; then
+            if ! npx knex migrate:latest; then
+              echo "::error::Knex migrate failed."
+              exit 1
+            fi
           fi
 
       - name: Verify schema (post-migrate)
         env:
-          SPRING_DATASOURCE_URL: ${{ env.SPRING_DATASOURCE_URL || secrets.SPRING_DATASOURCE_URL || '' }}
-          SPRING_DATASOURCE_USERNAME: ${{ env.SPRING_DATASOURCE_USERNAME || secrets.SPRING_DATASOURCE_USERNAME || '' }}
-          SPRING_DATASOURCE_PASSWORD: ${{ env.SPRING_DATASOURCE_PASSWORD || secrets.SPRING_DATASOURCE_PASSWORD || '' }}
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+          DB_USERNAME: ${{ env.DB_USERNAME }}
+          DB_PASSWORD: ${{ env.DB_PASSWORD }}
         run: |
-          if [ -z "$SPRING_DATASOURCE_URL" ]; then
-            echo "No datasource URL; skipping verification."
+          if [ -z "$DATABASE_URL" ]; then
+            echo "No database URL; skipping verification."
             exit 0
           fi
           if ! command -v psql >/dev/null 2>&1; then
-            echo "::warning::psql not found; skipping schema verification. Install postgresql-client on the runner for post-migrate checks."
+            echo "::warning::psql not found; skipping schema verification."
             exit 0
           fi
 
-          # Parse JDBC URL into psql connection params
-          # Format: jdbc:postgresql://host:port/dbname?sslmode=require
-          PG_HOST="$(echo "$SPRING_DATASOURCE_URL" | sed -n 's|.*://\([^:/]*\).*|\1|p')"
-          PG_PORT="$(echo "$SPRING_DATASOURCE_URL" | sed -n 's|.*:\([0-9]*\)/.*|\1|p')"
-          PG_DB="$(echo "$SPRING_DATASOURCE_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')"
+          # Parse postgresql:// URL into psql connection params
+          # Strip credentials from URL to extract host/port/db
+          URL_NO_SCHEME="${DATABASE_URL#postgresql://}"
+          URL_AFTER_AT="${URL_NO_SCHEME#*@}"
+          PG_HOST="$(echo "$URL_AFTER_AT" | sed -n 's|\([^:/]*\).*|\1|p')"
+          PG_PORT="$(echo "$URL_AFTER_AT" | sed -n 's|[^:]*:\([0-9]*\)/.*|\1|p')"
+          PG_DB="$(echo "$URL_AFTER_AT" | sed -n 's|[^/]*/\([^?]*\).*|\1|p')"
           [ -z "$PG_PORT" ] && PG_PORT="5432"
 
           echo "Verifying schema on ${PG_HOST}:${PG_PORT}/${PG_DB}..."
 
-          # Extract expected tables from migration files:
-          # 1. Find all CREATE TABLE statements → tables that should exist
-          # 2. Find all DROP TABLE statements → tables that should NOT exist
-          # 3. Expected = created minus dropped
-          CREATED_TABLES="$(grep -rhi 'CREATE TABLE' src/main/resources/db/migration/*.sql 2>/dev/null \
-            | sed -n 's/.*CREATE TABLE[^[:alnum:]]*\(IF NOT EXISTS[[:space:]]*\)\{0,1\}\(public\.\)\{0,1\}\([a-zA-Z_][a-zA-Z0-9_]*\).*/\3/p' \
-            | sort -u)"
-          DROPPED_TABLES="$(grep -rhi 'DROP TABLE' src/main/resources/db/migration/*.sql 2>/dev/null \
-            | sed -n 's/.*DROP TABLE[^[:alnum:]]*\(IF EXISTS[[:space:]]*\)\{0,1\}\(public\.\)\{0,1\}\([a-zA-Z_][a-zA-Z0-9_]*\).*/\3/p' \
-            | sort -u)"
+          # Extract expected tables from migration files (language-aware)
+          LANG="${{ steps.detect-lang.outputs.lang }}"
+          CREATED_TABLES=""
+          DROPPED_TABLES=""
+          if [ "$LANG" = "java" ]; then
+            CREATED_TABLES="$(grep -rhi 'CREATE TABLE' src/main/resources/db/migration/*.sql 2>/dev/null \
+              | sed -n 's/.*CREATE TABLE[^[:alnum:]]*\(IF NOT EXISTS[[:space:]]*\)\{0,1\}\(public\.\)\{0,1\}\([a-zA-Z_][a-zA-Z0-9_]*\).*/\3/p' \
+              | sort -u)"
+            DROPPED_TABLES="$(grep -rhi 'DROP TABLE' src/main/resources/db/migration/*.sql 2>/dev/null \
+              | sed -n 's/.*DROP TABLE[^[:alnum:]]*\(IF EXISTS[[:space:]]*\)\{0,1\}\(public\.\)\{0,1\}\([a-zA-Z_][a-zA-Z0-9_]*\).*/\3/p' \
+              | sort -u)"
+          elif [ "$LANG" = "python" ]; then
+            CREATED_TABLES="$(grep -rhi 'op.create_table\|CREATE TABLE' alembic/versions/*.py 2>/dev/null \
+              | sed -n "s/.*op.create_table(['\"][[:space:]]*\([a-zA-Z_][a-zA-Z0-9_]*\).*/\1/p; s/.*CREATE TABLE[^[:alnum:]]*\(IF NOT EXISTS[[:space:]]*\)\{0,1\}\(public\.\)\{0,1\}\([a-zA-Z_][a-zA-Z0-9_]*\).*/\3/p" \
+              | sort -u)"
+            DROPPED_TABLES="$(grep -rhi 'op.drop_table\|DROP TABLE' alembic/versions/*.py 2>/dev/null \
+              | sed -n "s/.*op.drop_table(['\"][[:space:]]*\([a-zA-Z_][a-zA-Z0-9_]*\).*/\1/p; s/.*DROP TABLE[^[:alnum:]]*\(IF EXISTS[[:space:]]*\)\{0,1\}\(public\.\)\{0,1\}\([a-zA-Z_][a-zA-Z0-9_]*\).*/\3/p" \
+              | sort -u)"
+          elif [ "$LANG" = "nodejs" ]; then
+            CREATED_TABLES="$(grep -rhi 'createTable\|CREATE TABLE' migrations/*.js 2>/dev/null \
+              | sed -n "s/.*createTable(['\"][[:space:]]*\([a-zA-Z_][a-zA-Z0-9_]*\).*/\1/p; s/.*CREATE TABLE[^[:alnum:]]*\(IF NOT EXISTS[[:space:]]*\)\{0,1\}\(public\.\)\{0,1\}\([a-zA-Z_][a-zA-Z0-9_]*\).*/\3/p" \
+              | sort -u)"
+            DROPPED_TABLES="$(grep -rhi 'dropTable\|DROP TABLE' migrations/*.js 2>/dev/null \
+              | sed -n "s/.*dropTable(['\"][[:space:]]*\([a-zA-Z_][a-zA-Z0-9_]*\).*/\1/p; s/.*DROP TABLE[^[:alnum:]]*\(IF EXISTS[[:space:]]*\)\{0,1\}\(public\.\)\{0,1\}\([a-zA-Z_][a-zA-Z0-9_]*\).*/\3/p" \
+              | sort -u)"
+          fi
 
           # Remove dropped tables from expected list
           EXPECTED_TABLES=""
@@ -164,14 +245,17 @@ jobs:
           fi
 
           # Query actual tables from production
-          ACTUAL_TABLES="$(PGPASSWORD="$SPRING_DATASOURCE_PASSWORD" psql \
-            "host=$PG_HOST port=$PG_PORT dbname=$PG_DB user=$SPRING_DATASOURCE_USERNAME sslmode=require" \
+          ACTUAL_TABLES="$(PGPASSWORD="$DB_PASSWORD" psql \
+            "host=$PG_HOST port=$PG_PORT dbname=$PG_DB user=$DB_USERNAME sslmode=require" \
             -t -A -c "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;" 2>&1)"
 
           MISSING=""
           for table in $EXPECTED_TABLES; do
-            # Skip flyway_schema_history — it's managed by Flyway, not our migrations
+            # Skip migration tracking tables
             [ "$table" = "flyway_schema_history" ] && continue
+            [ "$table" = "alembic_version" ] && continue
+            [ "$table" = "knex_migrations" ] && continue
+            [ "$table" = "knex_migrations_lock" ] && continue
             if ! echo "$ACTUAL_TABLES" | grep -qw "$table"; then
               MISSING="${MISSING} ${table}"
             fi

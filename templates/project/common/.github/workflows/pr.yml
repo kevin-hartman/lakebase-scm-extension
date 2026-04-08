@@ -1,5 +1,6 @@
-# CI/CD on PR: create Lakebase branch ci-pr-<N> (N = PR number), build, run Flyway, run tests.
+# CI/CD on PR: create Lakebase branch ci-pr-<N> (N = PR number), build, run migrations, run tests.
 # - Branch names stay in sync: one Lakebase branch per PR, named ci-pr-<PR_number>.
+# - Language-aware: detects Java/Flyway, Python/Alembic, or Node.js/Knex from marker files.
 # - On failure: post comment on PR to notify the committer (and GitHub shows failed check).
 # - On success: post comment on PR and optionally notify tester queue via webhook (set TESTER_QUEUE_WEBHOOK_URL).
 name: PR
@@ -12,29 +13,65 @@ permissions:
   contents: read
   pull-requests: write
 
-env:
-  JAVA_VERSION: '25'
-
 jobs:
   build-and-test:
     runs-on: self-hosted
     outputs:
       ci_branch_used: ${{ steps.datasource.outputs.ci_branch_used }}
       schema_diff_b64: ${{ steps.schema-diff-export.outputs.content }}
-    env:
-      # Reduce JVM warning: allow Jansi native load (Java 21+)
-      MAVEN_OPTS: --enable-native-access=ALL-UNNAMED
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Detect project language
+        id: detect-lang
+        run: |
+          if [ -f pom.xml ]; then
+            echo "lang=java" >> $GITHUB_OUTPUT
+          elif [ -f pyproject.toml ] || [ -f requirements.txt ]; then
+            echo "lang=python" >> $GITHUB_OUTPUT
+          elif [ -f package.json ]; then
+            echo "lang=nodejs" >> $GITHUB_OUTPUT
+          else
+            echo "::error::Cannot detect project language. Expected pom.xml, pyproject.toml, or package.json in repo root."
+            exit 1
+          fi
+          echo "Detected language: $(cat $GITHUB_OUTPUT | grep lang | cut -d= -f2)"
+
       - name: Set up JDK
+        if: steps.detect-lang.outputs.lang == 'java'
         uses: actions/setup-java@v4
         with:
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version: '25'
           distribution: 'temurin'
           cache: 'maven'
+
+      - name: Set Java env vars
+        if: steps.detect-lang.outputs.lang == 'java'
+        run: echo "MAVEN_OPTS=--enable-native-access=ALL-UNNAMED" >> $GITHUB_ENV
+
+      - name: Set up Python + uv
+        if: steps.detect-lang.outputs.lang == 'python'
+        run: |
+          if command -v uv >/dev/null 2>&1; then
+            echo "uv already on PATH"; uv --version
+          elif command -v pip >/dev/null 2>&1; then
+            pip install uv
+          else
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="$HOME/.local/bin:$PATH"
+            echo "PATH=$HOME/.local/bin:$PATH" >> $GITHUB_ENV
+          fi
+          uv sync --all-extras
+
+      - name: Set up Node.js
+        if: steps.detect-lang.outputs.lang == 'nodejs'
+        run: |
+          if command -v node >/dev/null 2>&1; then
+            echo "Node.js already on PATH"; node --version
+          fi
+          npm install
 
       - name: Install Databricks CLI
         run: |
@@ -204,18 +241,29 @@ jobs:
       - name: Configure datasource for CI
         id: datasource
         run: |
-          URL="${{ steps.lakebase-db.outputs.url }}"
-          USER="${{ steps.lakebase-db.outputs.username }}"
-          PASS="${{ steps.lakebase-db.outputs.password }}"
-          if [ -n "$URL" ]; then
-            echo "SPRING_DATASOURCE_URL=$URL" >> $GITHUB_ENV
-            [ -n "$USER" ] && echo "SPRING_DATASOURCE_USERNAME=$USER" >> $GITHUB_ENV
-            [ -n "$PASS" ] && echo "SPRING_DATASOURCE_PASSWORD=$PASS" >> $GITHUB_ENV
+          JDBC_URL="${{ steps.lakebase-db.outputs.url }}"
+          DB_USER="${{ steps.lakebase-db.outputs.username }}"
+          DB_PASS="${{ steps.lakebase-db.outputs.password }}"
+          if [ -n "$JDBC_URL" ]; then
+            # Generic vars for all languages
+            echo "DB_USERNAME=$DB_USER" >> $GITHUB_ENV
+            echo "DB_PASSWORD=$DB_PASS" >> $GITHUB_ENV
+            # DATABASE_URL in postgresql:// format with embedded credentials
+            PG_URL="$(echo "$JDBC_URL" | sed 's|^jdbc:postgresql://|postgresql://|')"
+            if [ -n "$DB_USER" ] && [ -n "$DB_PASS" ]; then
+              ENCODED_PASS="$(printf '%s' "$DB_PASS" | sed 's/@/%40/g; s/:/%3A/g; s/\//%2F/g; s/?/%3F/g; s/#/%23/g')"
+              PG_URL="$(echo "$PG_URL" | sed "s|postgresql://|postgresql://${DB_USER}:${ENCODED_PASS}@|")"
+            fi
+            echo "DATABASE_URL=$PG_URL" >> $GITHUB_ENV
+            # Java-specific: Spring reads these natively
+            echo "SPRING_DATASOURCE_URL=$JDBC_URL" >> $GITHUB_ENV
+            echo "SPRING_DATASOURCE_USERNAME=$DB_USER" >> $GITHUB_ENV
+            echo "SPRING_DATASOURCE_PASSWORD=$DB_PASS" >> $GITHUB_ENV
             echo "ci_branch_used=true" >> $GITHUB_OUTPUT
             echo "Using CI branch URL"
           else
             echo "ci_branch_used=false" >> $GITHUB_OUTPUT
-            echo "No CI branch URL; tests may use default or fail. Set Lakebase secrets (DATABRICKS_*, LAKEBASE_PROJECT_ID) for this demo."
+            echo "No CI branch URL; tests may use default or fail."
           fi
 
       - name: Comment on PR (no Lakebase branch)
@@ -228,7 +276,7 @@ jobs:
           BODY="⚠️ **No Lakebase CI branch** was created. This run is not using a dedicated database branch. Open the [workflow run](${RUN_URL}), expand **Create CI database branch (Lakebase)** and check the step **Summary** (or log) for the reason and how to fix it."
           gh pr comment "$PR" --body "$BODY" 2>/dev/null || true
 
-      - name: Install PostgreSQL client (for Flyway repair)
+      - name: Install PostgreSQL client
         if: steps.lakebase-db.outputs.url != ''
         run: |
           if command -v psql >/dev/null 2>&1; then
@@ -244,7 +292,7 @@ jobs:
 
       - name: Repair flyway_schema_history (remove bogus entries when objects missing)
         id: flyway-repair
-        if: steps.lakebase-db.outputs.url != ''
+        if: steps.detect-lang.outputs.lang == 'java' && steps.lakebase-db.outputs.url != ''
         env:
           FLYWAY_URL: ${{ steps.lakebase-db.outputs.url }}
           FLYWAY_USER: ${{ steps.lakebase-db.outputs.username }}
@@ -288,41 +336,61 @@ jobs:
           unset PGPASSWORD PGHOST PGPORT PGDATABASE PGUSER PGSSLMODE
           exit 0
 
-      - name: Run Flyway migrate (CI branch)
-        id: flyway-ci
+      - name: Run migrations (CI branch)
+        id: migrate-ci
         if: steps.lakebase-db.outputs.url != ''
         env:
-          FLYWAY_URL: ${{ steps.lakebase-db.outputs.url }}
-          FLYWAY_USER: ${{ steps.lakebase-db.outputs.username }}
-          FLYWAY_PASS: ${{ steps.lakebase-db.outputs.password }}
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+          DB_USERNAME: ${{ env.DB_USERNAME }}
+          DB_PASSWORD: ${{ env.DB_PASSWORD }}
+          SPRING_DATASOURCE_URL: ${{ env.SPRING_DATASOURCE_URL }}
+          SPRING_DATASOURCE_USERNAME: ${{ env.SPRING_DATASOURCE_USERNAME }}
+          SPRING_DATASOURCE_PASSWORD: ${{ env.SPRING_DATASOURCE_PASSWORD }}
         run: |
-          echo "Migration files in repo:"
-          ls -la src/main/resources/db/migration/ || true
-          # Strip newlines from password (GitHub Actions multiline output can break -Dflyway.password)
-          FLYWAY_PASS_TRIMMED="$(printf '%s' "$FLYWAY_PASS" | tr -d '\n')"
-          echo "Flyway info (before migrate):"
-          ./mvnw -q flyway:info -Dflyway.url="$FLYWAY_URL" -Dflyway.user="${FLYWAY_USER:-}" -Dflyway.password="$FLYWAY_PASS_TRIMMED" -Dflyway.locations=filesystem:src/main/resources/db/migration 2>&1 || true
-          echo "Running Flyway migrate on CI branch..."
-          ./mvnw -q flyway:migrate -Dflyway.url="$FLYWAY_URL" -Dflyway.user="${FLYWAY_USER:-}" -Dflyway.password="$FLYWAY_PASS_TRIMMED" -Dflyway.locations=filesystem:src/main/resources/db/migration
-          echo "Flyway info (after migrate):"
-          ./mvnw -q flyway:info -Dflyway.url="$FLYWAY_URL" -Dflyway.user="${FLYWAY_USER:-}" -Dflyway.password="$FLYWAY_PASS_TRIMMED" -Dflyway.locations=filesystem:src/main/resources/db/migration
-          echo "Flyway migrate completed."
-
-      # Feature-named Lakebase branch (e.g. slice-2) already has migrations applied
-      # from the developer's local ./mvnw test (Phase A5). No CI action needed.
+          LANG="${{ steps.detect-lang.outputs.lang }}"
+          if [ "$LANG" = "java" ]; then
+            echo "Migration files:"; ls -la src/main/resources/db/migration/ || true
+            PASS_TRIMMED="$(printf '%s' "$SPRING_DATASOURCE_PASSWORD" | tr -d '\n')"
+            echo "Running Flyway migrate on CI branch..."
+            ./mvnw -q flyway:migrate -Dflyway.url="$SPRING_DATASOURCE_URL" -Dflyway.user="${SPRING_DATASOURCE_USERNAME:-}" -Dflyway.password="$PASS_TRIMMED" -Dflyway.locations=filesystem:src/main/resources/db/migration
+            echo "Flyway info (after migrate):"
+            ./mvnw -q flyway:info -Dflyway.url="$SPRING_DATASOURCE_URL" -Dflyway.user="${SPRING_DATASOURCE_USERNAME:-}" -Dflyway.password="$PASS_TRIMMED" -Dflyway.locations=filesystem:src/main/resources/db/migration
+          elif [ "$LANG" = "python" ]; then
+            echo "Migration files:"; ls -la alembic/versions/ || true
+            echo "Running Alembic upgrade head on CI branch..."
+            uv run alembic upgrade head
+            echo "Alembic current:"; uv run alembic current || true
+          elif [ "$LANG" = "nodejs" ]; then
+            echo "Migration files:"; ls -la migrations/ || true
+            echo "Running Knex migrate:latest on CI branch..."
+            npx knex migrate:latest
+          fi
+          echo "Migrations completed."
 
       - name: Run tests
         env:
-          SPRING_DATASOURCE_URL: ${{ steps.lakebase-db.outputs.url }}
-          SPRING_DATASOURCE_USERNAME: ${{ steps.lakebase-db.outputs.username }}
-          SPRING_DATASOURCE_PASSWORD: ${{ steps.lakebase-db.outputs.password }}
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+          DB_USERNAME: ${{ env.DB_USERNAME }}
+          DB_PASSWORD: ${{ env.DB_PASSWORD }}
+          SPRING_DATASOURCE_URL: ${{ env.SPRING_DATASOURCE_URL }}
+          SPRING_DATASOURCE_USERNAME: ${{ env.SPRING_DATASOURCE_USERNAME }}
+          SPRING_DATASOURCE_PASSWORD: ${{ env.SPRING_DATASOURCE_PASSWORD }}
         run: |
-          if [ -n "$SPRING_DATASOURCE_URL" ]; then
-            echo "Running tests against CI branch (Flyway was run in previous step)."
-            ./mvnw -q test -Dspring.datasource.url="$SPRING_DATASOURCE_URL" -Dspring.datasource.username="${SPRING_DATASOURCE_USERNAME:-}" -Dspring.datasource.password="${SPRING_DATASOURCE_PASSWORD:-}"
+          LANG="${{ steps.detect-lang.outputs.lang }}"
+          if [ -n "$DATABASE_URL" ]; then
+            echo "Running tests against CI branch."
+            if [ "$LANG" = "java" ]; then
+              ./mvnw -q test -Dspring.datasource.url="$SPRING_DATASOURCE_URL" -Dspring.datasource.username="${SPRING_DATASOURCE_USERNAME:-}" -Dspring.datasource.password="${SPRING_DATASOURCE_PASSWORD:-}"
+            elif [ "$LANG" = "python" ]; then
+              uv run pytest
+            elif [ "$LANG" = "nodejs" ]; then
+              npm test
+            fi
           else
-            echo "No CI branch URL; skipping DB tests. Set Lakebase secrets (DATABRICKS_*, LAKEBASE_PROJECT_ID) for full CI."
-            ./mvnw -q test -DskipTests=true
+            echo "No CI branch URL; skipping DB tests."
+            if [ "$LANG" = "java" ]; then
+              ./mvnw -q test -DskipTests=true
+            fi
           fi
 
       - name: Install PostgreSQL client (for schema dump)
@@ -341,9 +409,9 @@ jobs:
         if: success() && steps.datasource.outputs.ci_branch_used == 'true'
         id: schema-diff
         env:
-          SPRING_DATASOURCE_URL: ${{ env.SPRING_DATASOURCE_URL }}
-          SPRING_DATASOURCE_USERNAME: ${{ env.SPRING_DATASOURCE_USERNAME }}
-          SPRING_DATASOURCE_PASSWORD: ${{ env.SPRING_DATASOURCE_PASSWORD }}
+          CI_JDBC_URL: ${{ steps.lakebase-db.outputs.url }}
+          CI_DB_USERNAME: ${{ env.DB_USERNAME }}
+          CI_DB_PASSWORD: ${{ env.DB_PASSWORD }}
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST || '' }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN || '' }}
           LAKEBASE_PROJECT_ID: ${{ secrets.LAKEBASE_PROJECT_ID || '' }}
@@ -355,16 +423,35 @@ jobs:
           echo "## Schema (Lakebase branch \`${BRANCH}\`)" > "$MD"
           echo "" >> "$MD"
           # Migrations applied on CI branch (from repo)
+          LANG="${{ steps.detect-lang.outputs.lang }}"
           echo "### Migrations applied on this branch (CI)" >> "$MD"
           echo "| Version | Migration |" >> "$MD"
           echo "|---------|-----------|" >> "$MD"
-          for f in src/main/resources/db/migration/*.sql; do
-            [ -f "$f" ] || continue
-            base=$(basename "$f")
-            ver=$(echo "$base" | sed -n 's/^V\([0-9]*\)__.*/\1/p')
-            desc=$(echo "$base" | sed -n 's/^V[0-9]*__\(.*\)\.sql$/\1/p' | tr '_' ' ')
-            [ -n "$ver" ] && echo "| V$ver | $desc |" >> "$MD"
-          done
+          if [ "$LANG" = "java" ]; then
+            for f in src/main/resources/db/migration/*.sql; do
+              [ -f "$f" ] || continue
+              base=$(basename "$f")
+              ver=$(echo "$base" | sed -n 's/^V\([0-9]*\)__.*/\1/p')
+              desc=$(echo "$base" | sed -n 's/^V[0-9]*__\(.*\)\.sql$/\1/p' | tr '_' ' ')
+              [ -n "$ver" ] && echo "| V$ver | $desc |" >> "$MD"
+            done
+          elif [ "$LANG" = "python" ]; then
+            for f in alembic/versions/*.py; do
+              [ -f "$f" ] || continue
+              base=$(basename "$f")
+              rev=$(echo "$base" | cut -d_ -f1)
+              desc=$(echo "$base" | sed 's/^[^_]*_//' | sed 's/\.py$//' | tr '_' ' ')
+              [ -n "$rev" ] && echo "| $rev | $desc |" >> "$MD"
+            done
+          elif [ "$LANG" = "nodejs" ]; then
+            for f in migrations/*.js; do
+              [ -f "$f" ] || continue
+              base=$(basename "$f")
+              ver=$(echo "$base" | sed -n 's/^\([0-9]*\)_.*/\1/p')
+              desc=$(echo "$base" | sed 's/^[0-9]*_//' | sed 's/\.js$//' | tr '_' ' ')
+              [ -n "$ver" ] && echo "| $ver | $desc |" >> "$MD"
+            done
+          fi
           echo "" >> "$MD"
           # Obtain production (default branch) URL via Lakebase CLI (same approach as scripts/connect-main-branch.sh)
           PRODUCTION_DATASOURCE_URL=""
@@ -414,7 +501,7 @@ jobs:
           # Schema diff from prod + CI schema SQL (format-schema-diff.sh), or fallback to migration version comparison
           if [ -n "$PRODUCTION_DATASOURCE_URL" ] && command -v pg_dump >/dev/null 2>&1; then
             PROD_HP=$(parse_jdbc "$PRODUCTION_DATASOURCE_URL")
-            CI_HP=$(parse_jdbc "$SPRING_DATASOURCE_URL")
+            CI_HP=$(parse_jdbc "$CI_JDBC_URL")
             PROD_HOST=$(echo "$PROD_HP" | cut -d'|' -f1); PROD_PORT=$(echo "$PROD_HP" | cut -d'|' -f2); PROD_DB=$(echo "$PROD_HP" | cut -d'|' -f3)
             CI_HOST=$(echo "$CI_HP" | cut -d'|' -f1); CI_PORT=$(echo "$CI_HP" | cut -d'|' -f2); CI_DB=$(echo "$CI_HP" | cut -d'|' -f3)
             export PGSSLMODE=require
@@ -422,7 +509,7 @@ jobs:
             # Unsorted schema so formatter can parse CREATE TABLE ... ( columns ); blocks (same as scripts/prepare-schema-diff.sh)
             PROD_ERR=$(mktemp); CI_ERR=$(mktemp); trap "rm -f '$PROD_ERR' '$CI_ERR'" EXIT
             PGPASSWORD="${PRODUCTION_DATASOURCE_PASSWORD:-}" pg_dump -h "$PROD_HOST" -p "$PROD_PORT" -U "${PRODUCTION_DATASOURCE_USERNAME:-}" -d "$PROD_DB" --schema-only --no-owner --no-privileges 2>"$PROD_ERR" | grep -v '^--' | grep -v '^$' > .tmp/prod-schema.sql || true
-            PGPASSWORD="${SPRING_DATASOURCE_PASSWORD:-}" pg_dump -h "$CI_HOST" -p "$CI_PORT" -U "${SPRING_DATASOURCE_USERNAME:-}" -d "$CI_DB" --schema-only --no-owner --no-privileges 2>"$CI_ERR" | grep -v '^--' | grep -v '^$' > .tmp/ci-schema.sql || true
+            PGPASSWORD="${CI_DB_PASSWORD:-}" pg_dump -h "$CI_HOST" -p "$CI_PORT" -U "${CI_DB_USERNAME:-}" -d "$CI_DB" --schema-only --no-owner --no-privileges 2>"$CI_ERR" | grep -v '^--' | grep -v '^$' > .tmp/ci-schema.sql || true
             if [ -s .tmp/prod-schema.sql ] && [ -s .tmp/ci-schema.sql ]; then
               trap - EXIT; rm -f "$PROD_ERR" "$CI_ERR"
               echo "### Schema diff: \`${BRANCH}\` vs production" >> "$MD"
@@ -435,24 +522,41 @@ jobs:
               [ ! -s .tmp/prod-schema.sql ] && echo "# Tip: ensure production (default branch) credentials are valid in workflow secrets." >> "$MD"
               [ ! -s .tmp/ci-schema.sql ] && echo "# Tip: CI branch credentials are generated in this run; transient failures can be retried." >> "$MD"
               trap - EXIT; rm -f "$PROD_ERR" "$CI_ERR"
-              CI_INFO=$(./mvnw -q flyway:info -Dflyway.url="$SPRING_DATASOURCE_URL" -Dflyway.user="${SPRING_DATASOURCE_USERNAME:-}" -Dflyway.password="${SPRING_DATASOURCE_PASSWORD:-}" 2>/dev/null | grep "Success" | awk -F'|' '{gsub(/^ +| +$/,"",$2); print $2}' || true)
-              PROD_INFO=$(./mvnw -q flyway:info -Dflyway.url="$PRODUCTION_DATASOURCE_URL" -Dflyway.user="${PRODUCTION_DATASOURCE_USERNAME:-}" -Dflyway.password="${PRODUCTION_DATASOURCE_PASSWORD:-}" 2>/dev/null | grep "Success" | awk -F'|' '{gsub(/^ +| +$/,"",$2); print $2}' || true)
-              CI_VERS=$(echo "$CI_INFO" | tr '\n' ' '); PROD_VERS=$(echo "$PROD_INFO" | tr '\n' ' ')
-              for v in $CI_VERS; do echo " $PROD_VERS " | grep -q " $v " || echo "**New on this PR:** V$v" >> "$MD"; done
-              for v in $PROD_VERS; do echo " $CI_VERS " | grep -q " $v " || echo "**Only on production:** V$v" >> "$MD"; done
+              echo "pg_dump failed; falling back to table comparison via psql." >> "$MD"
+              # Compare tables directly via psql (language-independent)
+              if command -v psql >/dev/null 2>&1; then
+                CI_TABLES="$(PGPASSWORD="${CI_DB_PASSWORD:-}" psql "host=$CI_HOST port=$CI_PORT dbname=$CI_DB user=$CI_DB_USERNAME sslmode=require" -t -A -c "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename" 2>/dev/null || true)"
+                PROD_TABLES="$(PGPASSWORD="${PRODUCTION_DATASOURCE_PASSWORD:-}" psql "host=$PROD_HOST port=$PROD_PORT dbname=$PROD_DB user=$PRODUCTION_DATASOURCE_USERNAME sslmode=require" -t -A -c "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename" 2>/dev/null || true)"
+                for t in $CI_TABLES; do echo " $PROD_TABLES " | grep -q " $t " || echo "**New on this PR:** \`$t\`" >> "$MD"; done
+                for t in $PROD_TABLES; do echo " $CI_TABLES " | grep -q " $t " || echo "**Only on production:** \`$t\`" >> "$MD"; done
+              fi
             fi
           elif [ -n "$PRODUCTION_DATASOURCE_URL" ]; then
-            echo "### Schema diff vs production (migration versions)" >> "$MD"
-            CI_INFO=$(./mvnw -q flyway:info -Dflyway.url="$SPRING_DATASOURCE_URL" -Dflyway.user="${SPRING_DATASOURCE_USERNAME:-}" -Dflyway.password="${SPRING_DATASOURCE_PASSWORD:-}" 2>/dev/null | grep "Success" | awk -F'|' '{gsub(/^ +| +$/,"",$2); print $2}' || true)
-            PROD_INFO=$(./mvnw -q flyway:info -Dflyway.url="$PRODUCTION_DATASOURCE_URL" -Dflyway.user="${PRODUCTION_DATASOURCE_USERNAME:-}" -Dflyway.password="${PRODUCTION_DATASOURCE_PASSWORD:-}" 2>/dev/null | grep "Success" | awk -F'|' '{gsub(/^ +| +$/,"",$2); print $2}' || true)
-            CI_VERS=$(echo "$CI_INFO" | tr '\n' ' '); PROD_VERS=$(echo "$PROD_INFO" | tr '\n' ' ')
-            NEW_ON_CI=""; ON_BOTH=""; ONLY_PROD=""
-            for v in $CI_VERS; do if echo " $PROD_VERS " | grep -q " $v "; then ON_BOTH="$ON_BOTH V$v"; else NEW_ON_CI="$NEW_ON_CI V$v"; fi; done
-            for v in $PROD_VERS; do echo " $CI_VERS " | grep -q " $v " || ONLY_PROD="$ONLY_PROD V$v"; done
-            [ -n "$NEW_ON_CI" ] && echo "**New on this PR (not on production):**$NEW_ON_CI" >> "$MD"
-            [ -n "$ON_BOTH" ] && echo "**On both:**$ON_BOTH" >> "$MD"
-            [ -n "$ONLY_PROD" ] && echo "**Only on production:**$ONLY_PROD" >> "$MD"
-            [ -z "$NEW_ON_CI" ] && [ -z "$ONLY_PROD" ] && echo "**In sync:** CI and production have the same migrations." >> "$MD"
+            echo "### Schema diff vs production (table comparison)" >> "$MD"
+            # Compare tables directly via psql (language-independent, no flyway:info needed)
+            PROD_HP=$(parse_jdbc "$PRODUCTION_DATASOURCE_URL")
+            CI_HP=$(parse_jdbc "$CI_JDBC_URL")
+            PROD_HOST=$(echo "$PROD_HP" | cut -d'|' -f1); PROD_PORT=$(echo "$PROD_HP" | cut -d'|' -f2); PROD_DB=$(echo "$PROD_HP" | cut -d'|' -f3)
+            CI_HOST=$(echo "$CI_HP" | cut -d'|' -f1); CI_PORT=$(echo "$CI_HP" | cut -d'|' -f2); CI_DB=$(echo "$CI_HP" | cut -d'|' -f3)
+            if command -v psql >/dev/null 2>&1; then
+              export PGSSLMODE=require
+              CI_TABLES="$(PGPASSWORD="${CI_DB_PASSWORD:-}" psql "host=$CI_HOST port=$CI_PORT dbname=$CI_DB user=$CI_DB_USERNAME sslmode=require" -t -A -c "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename" 2>/dev/null || true)"
+              PROD_TABLES="$(PGPASSWORD="${PRODUCTION_DATASOURCE_PASSWORD:-}" psql "host=$PROD_HOST port=$PROD_PORT dbname=$PROD_DB user=$PRODUCTION_DATASOURCE_USERNAME sslmode=require" -t -A -c "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename" 2>/dev/null || true)"
+              NEW_ON_CI=""; ONLY_PROD=""
+              for t in $CI_TABLES; do
+                [ "$t" = "flyway_schema_history" ] || [ "$t" = "alembic_version" ] || [ "$t" = "knex_migrations" ] || [ "$t" = "knex_migrations_lock" ] && continue
+                echo " $PROD_TABLES " | grep -q " $t " || NEW_ON_CI="$NEW_ON_CI \`$t\`"
+              done
+              for t in $PROD_TABLES; do
+                [ "$t" = "flyway_schema_history" ] || [ "$t" = "alembic_version" ] || [ "$t" = "knex_migrations" ] || [ "$t" = "knex_migrations_lock" ] && continue
+                echo " $CI_TABLES " | grep -q " $t " || ONLY_PROD="$ONLY_PROD \`$t\`"
+              done
+              [ -n "$NEW_ON_CI" ] && echo "**New on this PR:**$NEW_ON_CI" >> "$MD"
+              [ -n "$ONLY_PROD" ] && echo "**Only on production:**$ONLY_PROD" >> "$MD"
+              [ -z "$NEW_ON_CI" ] && [ -z "$ONLY_PROD" ] && echo "**In sync:** CI and production have the same tables." >> "$MD"
+            else
+              echo "psql not available; cannot compare tables." >> "$MD"
+            fi
           else
             echo "### Schema diff vs production" >> "$MD"
             echo "Production URL could not be resolved from Lakebase (default branch). Check \`LAKEBASE_PROJECT_ID\`, \`DATABRICKS_HOST\`, and \`DATABRICKS_TOKEN\`." >> "$MD"

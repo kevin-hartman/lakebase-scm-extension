@@ -1,7 +1,7 @@
 .PHONY: install test migrate run
 
 install:
-	uv sync
+	uv sync --all-extras
 
 test:
 	uv run --env-file .env pytest

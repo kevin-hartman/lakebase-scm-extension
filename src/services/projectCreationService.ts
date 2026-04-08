@@ -224,10 +224,10 @@ export class ProjectCreationService {
       `DATABRICKS_HOST=${host}`,
       `LAKEBASE_PROJECT_ID=${lakebaseProjectId}`,
       '',
-      '# Connection (auto-populated by post-checkout hook)',
-      '# SPRING_DATASOURCE_URL=',
-      '# SPRING_DATASOURCE_USERNAME=',
-      '# SPRING_DATASOURCE_PASSWORD=',
+      '# Connection (auto-populated on branch switch)',
+      '# DATABASE_URL=',
+      '# DB_USERNAME=',
+      '# DB_PASSWORD=',
       '',
     ].join('\n');
     fs.writeFileSync(path.join(projectDir, '.env'), envContent);

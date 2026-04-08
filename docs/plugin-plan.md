@@ -450,7 +450,7 @@ lakebase-scm-extension/
 | 6 | Remaining Cleanup | Partially complete | v0.4.0 (#57 partial) |
 | 7 | Deploy to Databricks Apps | Future | — |
 
-**Current state:** v0.4.1
+**Current state:** v0.4.2
 
 ### v0.4.0 changelog:
 - **Create New Project wizard** — 10-step flow: project name → parent dir → GitHub auth gate → repo name → visibility → language (Java/Python/Node.js) → runner type (self-hosted/GitHub-hosted) → Databricks workspace + auth gate → Lakebase project name → execute. Cascading defaults, cleanup on failure, opens project folder.
@@ -477,3 +477,4 @@ lakebase-scm-extension/
 - `GraphService.getCommits()` still uses `execSync` for batch git log (Phase 6 #57 remaining).
 - Health check commands (`databricks --version`, `gh --version`) use direct `execSync` — acceptable.
 - More Actions `...` opens a QuickPick at the top of the window — VS Code extension API does not support floating popups positioned near tree items.
+- `lakebaseSync` prefix used for all command IDs, settings, context keys, and submenu IDs (457 occurrences across 11 files). Should be renamed to `lakebaseScm` to match the extension name "Lakebase SCM Extension". Breaking change — requires updating all `when` clauses, `registerCommand` calls, `contributes` entries, and user-facing settings simultaneously.
