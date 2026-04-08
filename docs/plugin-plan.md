@@ -468,8 +468,16 @@ lakebase-scm-extension/
 - **Fix .env pointing at production after branch creation** — `syncConnection` now immediately clears `.env` connection fields before waiting for the endpoint, ensuring `.env` never remains pointed at production. Retries up to 30s for the endpoint to become available.
 - **More Actions menu** — `...` (ellipsis) icon on the project tree item opens a QuickPick with all Git + Lakebase commands (Pull, Push, Commit, Branch, Stash, Tags, Lakebase ops) with separators.
 - **Auth error detection** — Added `cannot configure default credentials` to the auth error recognition in `exec.ts`.
-- **Python template: pyproject.toml + uv** — Replaced `requirements.txt` with `pyproject.toml` and `uv` for package management. Switched from `psycopg2-binary` to `psycopg[binary]` (v3). Updated `database.py` and `alembic/env.py` to use the `postgresql+psycopg://` dialect.
 - **README rewrite** — Comprehensive docs covering all features, workflows, settings, and the full developer lifecycle.
+
+### v0.4.2 changelog:
+- **Language-aware CI/CD** — `pr.yml` and `merge.yml` detect project language via marker files (`pom.xml` → Java/Flyway, `pyproject.toml` → Python/Alembic, `package.json` → Node.js/Knex) and run the correct setup, migration, and test tools. Conditional steps for JDK, Python+uv, or Node.js setup.
+- **Generic env vars** — `.env` now uses `DATABASE_URL`, `DB_USERNAME`, `DB_PASSWORD` instead of `SPRING_DATASOURCE_*`. Java continues to get `spring.datasource.*` via `application-local.properties` (only written when `pom.xml` exists). CI workflows set both generic and Spring vars for backward compatibility.
+- **Python template: pyproject.toml + uv** — Replaced `requirements.txt` with `pyproject.toml` and `uv` for package management. Switched from `psycopg2-binary` to `psycopg[binary]` (v3). Updated `database.py` and `alembic/env.py` to use the `postgresql+psycopg://` dialect. `Makefile` uses `uv sync --all-extras` and `uv run --env-file .env`.
+- **Python database.py** — Reads `DATABASE_URL` (preferred) or builds URL from `DB_USERNAME`/`DB_PASSWORD`/`LAKEBASE_HOST` env vars. No more `SPRING_DATASOURCE_*` in Python templates.
+- **Node.js knexfile.js** — Reads `DATABASE_URL` (preferred) or builds connection from `DB_USERNAME`/`DB_PASSWORD`/`LAKEBASE_HOST`. No more `SPRING_DATASOURCE_*` in Node.js templates.
+- **Schema diff fallback** — Replaced `flyway:info` version comparison with language-independent `psql` table comparison for the pg_dump fallback path.
+- **Phase 7 planned** — Deploy to Databricks Apps (deliverables 58–65): deploy command, `app.yaml`/`databricks.yml` generation, OAuth M2M via `databricks-sdk`, database resource config, frontend build integration.
 
 ### Known issues / tech debt:
 - Existing projects created before v0.4.0 need manual workflow update (replace `actions/setup-java` with local JDK step) for self-hosted runners.
