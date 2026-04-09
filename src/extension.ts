@@ -879,6 +879,10 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
+    vscode.commands.registerCommand('lakebaseSync.refreshRunner', () => {
+      runnerTreeProvider.refresh();
+    }),
+
     vscode.commands.registerCommand('lakebaseSync.stopRunner', async () => {
       const config = getConfig();
       if (!config.lakebaseProjectId) { return; }
