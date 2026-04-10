@@ -15,11 +15,10 @@ set -a
 source .env 2>/dev/null || true
 set +a
 
-# Build a psql-compatible DATABASE_URL from SPRING_DATASOURCE_* if not already set
+# Build DATABASE_URL from SPRING_DATASOURCE_* if not already set (backward compat)
 if [ -z "${DATABASE_URL:-}" ] && [ -n "${SPRING_DATASOURCE_URL:-}" ]; then
   DATABASE_URL="$(echo "$SPRING_DATASOURCE_URL" | sed 's|^jdbc:postgresql://|postgresql://|')"
   if [ -n "${SPRING_DATASOURCE_USERNAME:-}" ] && [ -n "${SPRING_DATASOURCE_PASSWORD:-}" ]; then
-    # Insert user:pass into URL
     DATABASE_URL="$(echo "$DATABASE_URL" | sed "s|postgresql://|postgresql://${SPRING_DATASOURCE_USERNAME}:${SPRING_DATASOURCE_PASSWORD}@|")"
   fi
   export DATABASE_URL
@@ -27,11 +26,17 @@ fi
 
 # Detect project language
 if [ -f "$REPO_ROOT/pom.xml" ]; then
-  # Java / Maven / Flyway
+  # Java / Maven / Flyway — export SPRING_DATASOURCE_* for Maven/Spring
+  if [ -z "${SPRING_DATASOURCE_URL:-}" ] && [ -n "${DATABASE_URL:-}" ]; then
+    SPRING_DATASOURCE_URL="jdbc:$(echo "$DATABASE_URL" | sed 's|^postgresql://[^@]*@|postgresql://|')"
+    SPRING_DATASOURCE_USERNAME="${DB_USERNAME:-}"
+    SPRING_DATASOURCE_PASSWORD="${DB_PASSWORD:-}"
+  fi
   if [ -z "${SPRING_DATASOURCE_URL:-}" ]; then
-    echo "SPRING_DATASOURCE_URL not set in .env."
+    echo "DATABASE_URL (or SPRING_DATASOURCE_URL) not set in .env."
     exit 1
   fi
+  export SPRING_DATASOURCE_URL SPRING_DATASOURCE_USERNAME SPRING_DATASOURCE_PASSWORD
   ./mvnw flyway:migrate "$@"
 elif [ -f "$REPO_ROOT/requirements.txt" ] || [ -f "$REPO_ROOT/pyproject.toml" ]; then
   # Python / Alembic

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Resolve production (default) Lakebase branch URL and credentials, then set
-# SPRING_DATASOURCE_URL, SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD
+# DATABASE_URL, DB_USERNAME, DB_PASSWORD (and SPRING_DATASOURCE_* for backward compat)
 # as GitHub repository secrets so the Merge workflow can run Flyway on production.
 # Usage: from repo root, with .env (or env) containing LAKEBASE_PROJECT_ID and
 #   Databricks auth (DATABRICKS_HOST, DATABRICKS_TOKEN or databricks auth login).
@@ -72,11 +72,21 @@ if [ -z "$TOKEN" ] || [ -z "$EMAIL" ]; then
   exit 1
 fi
 
+# URL-encode the username (@ -> %40, etc.)
+ENCODED_EMAIL="$(python3 -c "import urllib.parse; print(urllib.parse.quote('$EMAIL', safe=''))" 2>/dev/null || echo "$EMAIL")"
+DATABASE_URL="postgresql://${ENCODED_EMAIL}:${TOKEN}@${HOST}:5432/${DB_NAME}?sslmode=require"
+DB_USERNAME="$EMAIL"
+DB_PASSWORD="$TOKEN"
 SPRING_DATASOURCE_URL="jdbc:postgresql://${HOST}:5432/${DB_NAME}?sslmode=require"
 SPRING_DATASOURCE_USERNAME="$EMAIL"
 SPRING_DATASOURCE_PASSWORD="$TOKEN"
 
-echo "Setting repository secrets for production Flyway (Merge workflow)..."
+echo "Setting repository secrets for production (Merge workflow)..."
+# Generic secrets (primary)
+gh secret set DATABASE_URL --body "$DATABASE_URL"
+gh secret set DB_USERNAME --body "$DB_USERNAME"
+gh secret set DB_PASSWORD --body "$DB_PASSWORD"
+# Spring-specific secrets (backward compat for existing Java workflows)
 gh secret set SPRING_DATASOURCE_URL --body "$SPRING_DATASOURCE_URL"
 gh secret set SPRING_DATASOURCE_USERNAME --body "$SPRING_DATASOURCE_USERNAME"
 gh secret set SPRING_DATASOURCE_PASSWORD --body "$SPRING_DATASOURCE_PASSWORD"

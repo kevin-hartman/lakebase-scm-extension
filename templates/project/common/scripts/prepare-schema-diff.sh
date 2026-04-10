@@ -2,7 +2,7 @@
 # Run the PR schema-diff logic locally (no PR needed).
 # Compares current branch DB (from .env) vs production (default Lakebase branch from CLI).
 # Usage: ./scripts/prepare-schema-diff.sh
-# Requires: .env with LAKEBASE_PROJECT_ID, Databricks auth; SPRING_DATASOURCE_* for current branch; pg_dump (postgresql client).
+# Requires: .env with LAKEBASE_PROJECT_ID, Databricks auth; DATABASE_URL (or SPRING_DATASOURCE_*) for current branch; pg_dump (postgresql client).
 set -e
 
 WORK_TREE="$(git rev-parse --show-toplevel 2>/dev/null || true)"
@@ -18,10 +18,17 @@ set -a
 source .env 2>/dev/null || true
 set +a
 
+# Derive connection vars from DATABASE_URL if SPRING_DATASOURCE_* not set (backward compat)
+if [ -z "${SPRING_DATASOURCE_URL:-}" ] && [ -n "${DATABASE_URL:-}" ]; then
+  SPRING_DATASOURCE_URL="jdbc:$(echo "$DATABASE_URL" | sed 's|^postgresql://[^@]*@|postgresql://|')"
+  SPRING_DATASOURCE_USERNAME="${DB_USERNAME:-}"
+  SPRING_DATASOURCE_PASSWORD="${DB_PASSWORD:-}"
+fi
+
 for var in LAKEBASE_PROJECT_ID SPRING_DATASOURCE_URL SPRING_DATASOURCE_USERNAME SPRING_DATASOURCE_PASSWORD; do
   eval "v=\$$var"
   if [ -z "$v" ]; then
-    echo "prepare-schema-diff: $var not set in .env. Run 'git checkout <branch>' so the hook sets SPRING_DATASOURCE_*."
+    echo "prepare-schema-diff: $var not set in .env. Run 'git checkout <branch>' so the hook sets DATABASE_URL."
     exit 1
   fi
 done

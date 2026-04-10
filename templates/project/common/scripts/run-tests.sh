@@ -15,7 +15,7 @@ set -a
 source .env 2>/dev/null || true
 set +a
 
-# Build DATABASE_URL from SPRING_DATASOURCE_* if not already set
+# Build DATABASE_URL from SPRING_DATASOURCE_* if not already set (backward compat)
 if [ -z "${DATABASE_URL:-}" ] && [ -n "${SPRING_DATASOURCE_URL:-}" ]; then
   DATABASE_URL="$(echo "$SPRING_DATASOURCE_URL" | sed 's|^jdbc:postgresql://|postgresql://|')"
   if [ -n "${SPRING_DATASOURCE_USERNAME:-}" ] && [ -n "${SPRING_DATASOURCE_PASSWORD:-}" ]; then
@@ -26,7 +26,13 @@ fi
 
 # Detect project language
 if [ -f "$REPO_ROOT/pom.xml" ]; then
-  # Java / Maven
+  # Java / Maven — export SPRING_DATASOURCE_* for Maven/Spring
+  if [ -z "${SPRING_DATASOURCE_URL:-}" ] && [ -n "${DATABASE_URL:-}" ]; then
+    # Derive SPRING_DATASOURCE_* from DATABASE_URL
+    SPRING_DATASOURCE_URL="jdbc:$(echo "$DATABASE_URL" | sed 's|^postgresql://[^@]*@|postgresql://|')"
+    SPRING_DATASOURCE_USERNAME="${DB_USERNAME:-}"
+    SPRING_DATASOURCE_PASSWORD="${DB_PASSWORD:-}"
+  fi
   export SPRING_DATASOURCE_URL SPRING_DATASOURCE_USERNAME SPRING_DATASOURCE_PASSWORD
   ./mvnw test "$@"
 elif [ -f "$REPO_ROOT/requirements.txt" ] || [ -f "$REPO_ROOT/pyproject.toml" ]; then
