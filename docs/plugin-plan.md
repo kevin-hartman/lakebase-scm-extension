@@ -228,48 +228,50 @@ A VS Code / Cursor extension that provides unified visibility into both code cha
 ### Template Structure
 
 ```
-lakebase-sync/
-├── templates/
-│   └── project/
-│       ├── .env.example
-│       ├── .gitignore
-│       ├── pom.xml
-│       ├── mvnw
-│       ├── .mvn/
-│       ├── src/main/resources/db/migration/
-│       │   └── V1__init_placeholder.sql
-│       ├── src/main/resources/application.properties
-│       ├── scripts/
-│       │   ├── post-checkout.sh
-│       │   ├── refresh-token.sh
-│       │   ├── flyway-migrate.sh
-│       │   └── install-hook.sh
-│       └── .github/workflows/
-│           ├── pr.yml
-│           └── merge.yml
+templates/project/
+├── common/                     # Shared across all languages
+│   ├── .env.example
+│   ├── .gitignore.base
+│   ├── .vscode/settings.json
+│   ├── .github/workflows/
+│   │   ├── pr.yml              # Language-aware CI (detects pom.xml/pyproject.toml/package.json)
+│   │   └── merge.yml           # Language-aware merge + cleanup
+│   └── scripts/                # 16 shared scripts (hooks, migration, secrets, schema diff)
+├── java/                       # Spring Boot + Flyway + JUnit
+│   ├── pom.xml, mvnw, .mvn/
+│   ├── src/main/resources/db/migration/V1__init_placeholder.sql
+│   └── src/main/java/.../DemoApplication.java
+├── python/                     # FastAPI + SQLAlchemy + Alembic (uv + pyproject.toml)
+│   ├── pyproject.toml
+│   ├── Makefile
+│   ├── app/main.py, database.py, models.py
+│   ├── alembic/env.py, versions/001_init_placeholder.py
+│   └── tests/test_app.py
+└── nodejs/                     # Express + Knex + Jest
+    ├── package.json, knexfile.js
+    ├── src/index.js, db.js, routes/health.js
+    ├── migrations/001_init_placeholder.js
+    └── tests/app.test.js
 ```
 
 ### Command: `lakebaseSync.createProject`
 
 Available from Command Palette and Project view title bar.
 
-### Execution Steps
+### Execution Steps (10-step wizard)
 
 | Step | Action | Method |
 |------|--------|--------|
-| 1 | Prompt for project name | `showInputBox` |
-| 2 | Prompt for parent directory | `showOpenDialog` (folder picker) |
-| 3 | Select Databricks workspace | Reuse existing `connectWorkspace` picker (lists workspaces with Lakebase) |
-| 4 | Create Lakebase database | Databricks REST API (`POST /api/2.0/lakebase/projects`) using auth from `~/.databrickscfg` |
-| 5 | Get project ID | From API response |
-| 6 | Create GitHub repo | `gh repo create <name> --private --clone` in parent dir |
-| 7 | Scaffold files | Copy `templates/project/` into repo; substitute `{{PROJECT_NAME}}`, `{{DATABRICKS_HOST}}`, `{{LAKEBASE_PROJECT_ID}}` placeholders |
-| 8 | Write `.env` | Fill with real host, project ID, initial connection |
-| 9 | Set GitHub secrets | `gh secret set DATABRICKS_HOST`, `DATABRICKS_TOKEN`, `LAKEBASE_PROJECT_ID` |
-| 10 | Install git hooks | Run `scripts/install-hook.sh` to symlink post-checkout |
-| 11 | Initial commit + push | `git add . && git commit && git push` |
-| 12 | Open workspace | `vscode.commands.executeCommand('vscode.openFolder', uri)` |
-| 13 | Run health check | Auto-run `lakebaseSync.healthCheck` to verify all components are in place (workflows, secrets, CLI auth, hooks, migration dir) |
+| 1 | Project name | `showInputBox` |
+| 2 | Parent directory | `showOpenDialog` (folder picker) |
+| 3 | GitHub authentication | `gh auth login` if needed |
+| 4 | GitHub repo name | `showInputBox` (defaults to project name) |
+| 5 | Visibility | Private (default) or Public |
+| 6 | Language | Java/Spring Boot, Python/FastAPI, or Node.js/Express |
+| 7 | Runner type | Self-hosted (default) or GitHub-hosted |
+| 8 | Databricks workspace | Select or connect + `databricks auth login` |
+| 9 | Lakebase project name | `showInputBox` (defaults to repo name) |
+| 10 | Execute | Create GitHub repo, Lakebase project, scaffold, secrets, hooks, runner, initial commit, offer to open |
 
 ### Deliverables
 42. **Project scaffold template** ✅ — 21 files in `templates/project/` (16 scripts, 2 workflows, .env.example, .gitignore, .vscode/settings.json, V1 migration placeholder). Deployed by `ScaffoldService`.
@@ -321,48 +323,31 @@ lakebase-scm-extension/
 │   │   ├── migrationsTree.ts        # Schema Migrations view
 │   │   ├── pullRequestTree.ts       # Pull Request view
 │   │   ├── mergesTree.ts            # Recent Merges view
-│   │   ├── lakebaseSchemaTree.ts    # Standalone Lakebase schema view (now merged into Changes)
+│   │   ├── runnerTreeProvider.ts    # CI Runner view: status, start/stop, logs, recent runs
 │   │   ├── statusBarProvider.ts     # Status bar management
 │   │   ├── schemaDiffProvider.ts    # Branch Diff Summary + table diff webviews
 │   │   ├── schemaContentProvider.ts # DDL content for multi-diff (with migration fallback)
-│   │   └── schemaScmProvider.ts     # SCM provider with public accessors + onDidRefresh
+│   │   ├── schemaScmProvider.ts     # SCM provider with public accessors + onDidRefresh
+│   │   └── graphWebview.ts          # Visual commit graph with Lakebase annotations
 │   ├── services/
-│   │   ├── lakebaseService.ts       # Databricks CLI wrapper + console URLs + display name
+│   │   ├── lakebaseService.ts       # Databricks CLI wrapper + console URLs + syncConnection
 │   │   ├── gitService.ts            # Git operations + event watching + diff content
 │   │   ├── flywayService.ts         # Migration parsing + execution
-│   │   └── schemaDiffService.ts     # pg_dump diff generation + per-branch cache
+│   │   ├── schemaDiffService.ts     # Schema diff generation + per-branch cache
+│   │   ├── projectCreationService.ts # 10-step project creation wizard
+│   │   ├── scaffoldService.ts       # Template deployment (common + java/python/nodejs)
+│   │   └── runnerService.ts         # Self-hosted GitHub Actions runner lifecycle
 │   └── utils/
-│       └── config.ts                # .env + settings management + connection updates
-├── resources/
-│   └── icons/
-│       ├── lakebase-sidebar.svg     # Activity bar icon (Lakebase + SCM composite)
-│       └── extension-icon.png       # Marketplace icon
-├── templates/
-│   └── project/                     # Project scaffold template (Phase 4)
+│       ├── config.ts                # .env + settings management + connection updates
+│       ├── exec.ts                  # Async exec wrapper with auth error detection
+│       └── theme.ts                 # Status icons, colors, branch name utilities
+├── resources/icons/
+├── templates/project/               # Multi-language scaffold (common + java + python + nodejs)
 ├── docs/
-│   ├── plugin-plan.md               # This file
-│   └── sidebar-plan.md              # Original sidebar implementation plan
+│   └── plugin-plan.md               # This file
 ├── test/
-│   ├── setup.js                     # vscode module mock loader
-│   ├── mocks/
-│   │   └── vscode.js                # Full vscode API mock
-│   └── suite/                       # 299 tests across 16 suites
-│       ├── config.test.ts
-│       ├── flywayService.test.ts
-│       ├── gitService.test.ts
-│       ├── lakebaseService.test.ts
-│       ├── schemaDiffService.test.ts
-│       ├── schemaDiffProvider.test.ts
-│       ├── schemaScmProvider.test.ts
-│       ├── branchTreeProvider.test.ts
-│       ├── statusBarProvider.test.ts
-│       ├── autoBranchCreation.test.ts
-│       ├── branchPicker.test.ts
-│       ├── branchReview.test.ts
-│       ├── gitOperations.test.ts
-│       ├── lakebaseSync.test.ts
-│       ├── mergeAwareness.test.ts
-│       └── ciSecrets.test.ts
+│   ├── suite/                       # 299 unit tests across 16 suites
+│   └── integration/                 # 190 integration tests (e-commerce + self-hosted runner)
 └── .vscodeignore
 ```
 

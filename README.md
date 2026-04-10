@@ -51,13 +51,13 @@ After creation, the extension offers to open the new project folder.
 
 ### Language Templates
 
-| Language | Framework | Migration Tool | Test Framework |
-|----------|-----------|---------------|----------------|
-| **Java** | Spring Boot 3.5 / JPA | Flyway 10.22 | JUnit 5 + MockMvc |
-| **Python** | FastAPI / SQLAlchemy | Alembic 1.14 | pytest + httpx |
-| **Node.js** | Express | Knex 3.1 | Jest + supertest |
+| Language | Framework | Migration Tool | Package Manager | Test Framework |
+|----------|-----------|---------------|-----------------|----------------|
+| **Java** | Spring Boot 3.5 / JPA | Flyway 10.22 | Maven (mvnw) | JUnit 5 + MockMvc |
+| **Python** | FastAPI / SQLAlchemy / psycopg3 | Alembic 1.14 | uv + pyproject.toml | pytest + httpx |
+| **Node.js** | Express | Knex 3.1 | npm | Jest + supertest |
 
-Smart scripts (`flyway-migrate.sh`, `run-tests.sh`) auto-detect the language from `pom.xml`, `requirements.txt`, or `package.json`.
+Smart scripts (`flyway-migrate.sh`, `run-tests.sh`) auto-detect the language from `pom.xml`, `pyproject.toml`, or `package.json`. CI workflows are language-aware — they detect the project type and run the correct setup, migration, and test tools automatically.
 
 ### Runner Types
 
@@ -79,12 +79,12 @@ Smart scripts (`flyway-migrate.sh`, `run-tests.sh`) auto-detect the language fro
 | Databricks workspace | With Lakebase enabled |
 
 **For Java projects:** Java 21+ and Maven (the scaffold includes `mvnw`)
-**For Python projects:** Python 3.10+
+**For Python projects:** Python 3.10+ and [uv](https://docs.astral.sh/uv/) (`brew install uv` or `pip install uv`)
 **For Node.js projects:** Node.js 18+
 
 ### Install the Extension
 
-1. Download `lakebase-scm-extension-0.4.1.vsix` from the [latest release](https://github.com/kevin-hartman/lakebase-scm-extension/releases/latest)
+1. Download `lakebase-scm-extension-0.4.2.vsix` from the [latest release](https://github.com/kevin-hartman/lakebase-scm-extension/releases/latest)
 2. In VS Code: **Extensions** → `...` → **Install from VSIX** → select the file
 3. Reload the window
 
@@ -119,7 +119,7 @@ Write your feature:
 ./scripts/run-tests.sh        # auto-detects language
 # or directly:
 ./mvnw test                   # Java
-pytest                        # Python
+uv run pytest                 # Python
 npm test                      # Node.js
 ```
 
@@ -252,6 +252,7 @@ npm run test:integration -- --grep "Self-Hosted Runner" # 11 runner pipeline tes
 
 ## Roadmap
 
+- **Deploy to Databricks Apps** — One-click deployment with `app.yaml`/`databricks.yml` generation, OAuth M2M auth, and synced table support
 - **Data preview** — Read-only table viewer for branch databases
 - **Conflict detection** — Warn when two branches modify the same tables
 - **Branch comparison** — Diff any two Lakebase branches
