@@ -435,7 +435,7 @@ lakebase-scm-extension/
 | 6 | Remaining Cleanup | Partially complete | v0.4.0 (#57 partial) |
 | 7 | Deploy to Databricks Apps | Future | — |
 
-**Current state:** v0.4.2
+**Current state:** v0.4.3
 
 ### v0.4.0 changelog:
 - **Create New Project wizard** — 10-step flow: project name → parent dir → GitHub auth gate → repo name → visibility → language (Java/Python/Node.js) → runner type (self-hosted/GitHub-hosted) → Databricks workspace + auth gate → Lakebase project name → execute. Cascading defaults, cleanup on failure, opens project folder.
@@ -463,6 +463,12 @@ lakebase-scm-extension/
 - **Node.js knexfile.js** — Reads `DATABASE_URL` (preferred) or builds connection from `DB_USERNAME`/`DB_PASSWORD`/`LAKEBASE_HOST`. No more `SPRING_DATASOURCE_*` in Node.js templates.
 - **Schema diff fallback** — Replaced `flyway:info` version comparison with language-independent `psql` table comparison for the pg_dump fallback path.
 - **Phase 7 planned** — Deploy to Databricks Apps (deliverables 58–65): deploy command, `app.yaml`/`databricks.yml` generation, OAuth M2M via `databricks-sdk`, database resource config, frontend build integration.
+
+### v0.4.3 changelog:
+- **Fix stale runner auto-reconfigure** — `setupRunner` now verifies the runner is registered on GitHub before reusing the `.runner` config. If stale (removed from GitHub side), it deletes credentials and re-runs `config.sh` with a fresh token automatically.
+- **Fix Alembic sys.path** — `alembic/env.py` adds the project root to `sys.path` so `from app.database import ...` resolves in CI runner working directories.
+- **Register refreshRunner command** — Was declared in `package.json` but missing from `extension.ts`; CI Runner view refresh button now works.
+- **Docs updated** — README reflects v0.4.3, uv in prerequisites, language-aware CI, Deploy to Databricks Apps in roadmap. Plan updated with multi-language template structure, 10-step wizard, current extension file tree. Removed completed plan docs.
 
 ### Known issues / tech debt:
 - Existing projects created before v0.4.0 need manual workflow update (replace `actions/setup-java` with local JDK step) for self-hosted runners.
