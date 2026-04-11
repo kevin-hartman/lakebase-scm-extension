@@ -60,6 +60,13 @@ describe('LakebaseService', () => {
       const long = 'a'.repeat(100);
       assert.strictEqual(service.sanitizeBranchName(long).length, 63);
     });
+
+    it('pads short names to 3 chars minimum', () => {
+      assert.strictEqual(service.sanitizeBranchName('f5'), 'f5-x');
+      assert.strictEqual(service.sanitizeBranchName('ab'), 'ab-x');
+      assert.strictEqual(service.sanitizeBranchName('a'), 'a-x');
+      assert.strictEqual(service.sanitizeBranchName('foo'), 'foo');
+    });
   });
 
   describe('getEffectiveHost', () => {

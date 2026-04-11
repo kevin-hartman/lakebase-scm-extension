@@ -43,11 +43,14 @@ function lakebaseExec(command: string, cwd?: string, env?: Record<string, string
 }
 
 function sanitizeBranchName(gitBranch: string): string {
-  return gitBranch
+  let name = gitBranch
     .replace(/\//g, '-')
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, '-')
     .substring(0, 63);
+  // Lakebase requires a minimum branch name length of 3 characters
+  while (name.length < 3) name += '-x';
+  return name;
 }
 
 export class LakebaseService {
