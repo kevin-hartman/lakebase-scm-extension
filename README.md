@@ -84,7 +84,7 @@ Smart scripts (`flyway-migrate.sh`, `run-tests.sh`) auto-detect the language fro
 
 ### Install the Extension
 
-1. Download `lakebase-scm-extension-0.4.3.vsix` from the [latest release](https://github.com/kevin-hartman/lakebase-scm-extension/releases/latest)
+1. Download `lakebase-scm-extension-0.4.4.vsix` from the [latest release](https://github.com/kevin-hartman/lakebase-scm-extension/releases/latest)
 2. In VS Code: **Extensions** → `...` → **Install from VSIX** → select the file
 3. Reload the window
 
@@ -133,8 +133,8 @@ Stage files and commit from the sidebar. If the branch hasn't been pushed, the e
 
 Click `$(git-pull-request-create)` on the project item. The extension handles the full pipeline:
 
-1. Detects uncommitted changes → prompts to commit
-2. Detects unpushed branch → prompts to push
+1. Detects uncommitted changes → prompts to commit → verifies commit succeeded
+2. Pushes branch automatically (no separate dialog)
 3. Syncs CI secrets (non-blocking)
 4. Prompts for PR title and description
 5. Creates the PR

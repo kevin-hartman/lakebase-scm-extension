@@ -56,6 +56,18 @@ fi
 PROJ_PATH="projects/${PROJ_ID}"
 DB_NAME="databricks_postgres"
 
+# --- Helper: npm install in client/ on first checkout or when node_modules is absent ---
+# Runs silently after Lakebase setup so switching branches is fully self-contained.
+maybe_npm_install() {
+  if [ -f "$WORK_TREE/client/package.json" ] && [ ! -d "$WORK_TREE/client/node_modules" ]; then
+    if command -v npm >/dev/null 2>&1; then
+      echo "React client: node_modules missing — running npm install..."
+      npm install --prefix "$WORK_TREE/client" --silent
+      echo "React client: ready."
+    fi
+  fi
+}
+
 # --- Helper: update .env and application-local.properties with connection info ---
 # Maven/Spring do not load .env; they use application-local.properties (spring.config.import).
 # So we must write the branch URL to both, or Maven will use whatever is in application-local.properties
@@ -170,6 +182,7 @@ if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
 
   update_env "$HOST" "$EMAIL" "$TOKEN" "$DEFAULT_BRANCH_UID"
   echo "Lakebase: $BRANCH -> default branch ($DEFAULT_BRANCH_UID). Updated .env."
+  maybe_npm_install
   exit 0
 fi
 
@@ -222,3 +235,4 @@ fi
 
 update_env "$HOST" "$EMAIL" "$TOKEN" "$LAKEBASE_BRANCH"
 echo "Lakebase: branch '$LAKEBASE_BRANCH' ready. Updated .env with DATABASE_URL."
+maybe_npm_install

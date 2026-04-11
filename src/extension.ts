@@ -2181,7 +2181,7 @@ export async function activate(context: vscode.ExtensionContext) {
           return;
         }
 
-        // ── Pre-PR checks: uncommitted changes → commit → unpushed branch → push ──
+        // ── Pre-PR checks: uncommitted changes → commit, then verify before continuing ──
 
         // Step 1: Check for uncommitted changes
         const uncommitted = (await gitService.getStagedChanges()).length + (await gitService.getUnstagedChanges()).length;
@@ -2190,8 +2190,18 @@ export async function activate(context: vscode.ExtensionContext) {
             `You have ${uncommitted} uncommitted change${uncommitted !== 1 ? 's' : ''}. Commit before creating a PR?`,
             'Commit & Continue', 'Cancel'
           );
-          if (action !== 'Commit & Continue') { return; }
+          if (action !== 'Commit & Continue') {
+            vscode.window.showInformationMessage('PR creation cancelled.');
+            return;
+          }
           await vscode.commands.executeCommand('lakebaseSync.commit');
+
+          // Verify the commit actually succeeded before continuing
+          const stillUncommitted = (await gitService.getStagedChanges()).length + (await gitService.getUnstagedChanges()).length;
+          if (stillUncommitted > 0) {
+            vscode.window.showWarningMessage('Commit was not completed. PR creation cancelled.');
+            return;
+          }
         }
 
         // Step 2: Check if branch has any commits vs main
@@ -2210,24 +2220,11 @@ export async function activate(context: vscode.ExtensionContext) {
           }
         } catch { /* ignore — branch may not have diverged from main yet */ }
 
-        // Step 3: Check if branch is pushed — offer to push if not
+        // Step 3: Push is handled by gitService.createPullRequest() — no separate dialog needed.
+        // Just inform the user if the branch hasn't been pushed yet.
         const hasUpstream = await gitService.hasUpstream();
         if (!hasUpstream) {
-          const action = await vscode.window.showInformationMessage(
-            `Branch "${currentBranch}" hasn't been pushed yet. Push to GitHub?`,
-            'Push & Continue', 'Cancel'
-          );
-          if (action !== 'Push & Continue') { return; }
-          await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: `Pushing ${currentBranch}...` },
-            async () => {
-              const root = getWorkspaceRoot();
-              if (root) {
-                const { exec: execUtil } = require('./utils/exec');
-                await execUtil(`git push -u origin "${currentBranch}"`, root);
-              }
-            }
-          );
+          vscode.window.showInformationMessage(`Branch "${currentBranch}" will be pushed to GitHub as part of PR creation.`);
         }
 
         // Pre-flight: sync CI secrets in the background (non-blocking — never prevents PR creation)

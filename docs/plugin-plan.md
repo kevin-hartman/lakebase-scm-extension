@@ -435,7 +435,7 @@ lakebase-scm-extension/
 | 6 | Remaining Cleanup | Partially complete | v0.4.0 (#57 partial) |
 | 7 | Deploy to Databricks Apps | Future | — |
 
-**Current state:** v0.4.3
+**Current state:** v0.4.4
 
 ### v0.4.0 changelog:
 - **Create New Project wizard** — 10-step flow: project name → parent dir → GitHub auth gate → repo name → visibility → language (Java/Python/Node.js) → runner type (self-hosted/GitHub-hosted) → Databricks workspace + auth gate → Lakebase project name → execute. Cascading defaults, cleanup on failure, opens project folder.
@@ -463,6 +463,10 @@ lakebase-scm-extension/
 - **Node.js knexfile.js** — Reads `DATABASE_URL` (preferred) or builds connection from `DB_USERNAME`/`DB_PASSWORD`/`LAKEBASE_HOST`. No more `SPRING_DATASOURCE_*` in Node.js templates.
 - **Schema diff fallback** — Replaced `flyway:info` version comparison with language-independent `psql` table comparison for the pg_dump fallback path.
 - **Phase 7 planned** — Deploy to Databricks Apps (deliverables 58–65): deploy command, `app.yaml`/`databricks.yml` generation, OAuth M2M via `databricks-sdk`, database resource config, frontend build integration.
+
+### v0.4.4 changelog:
+- **Fix PR flow silent abort** — `createPullRequest` command no longer silently exits when the push dialog is dismissed. Removed the separate "Push to GitHub?" blocking dialog — `gitService.createPullRequest()` already handles pushing internally, so the dialog was redundant and fragile. Added post-commit verification: after the commit step, re-checks for uncommitted changes and stops with a clear message if the commit wasn't completed. Added cancellation feedback at every early-return point.
+- **Template: `maybe_npm_install` helper** — `post-checkout.sh` now auto-runs `npm install` in `client/` when `node_modules` is missing, so branch switches are fully self-contained for projects with a React client.
 
 ### v0.4.3 changelog:
 - **Fix stale runner auto-reconfigure** — `setupRunner` now verifies the runner is registered on GitHub before reusing the `.runner` config. If stale (removed from GitHub side), it deletes credentials and re-runs `config.sh` with a fresh token automatically.

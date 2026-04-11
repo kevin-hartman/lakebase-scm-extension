@@ -2,7 +2,7 @@
   "name": "lakebase-scm-extension",
   "displayName": "Lakebase SCM Extension",
   "description": "Unified visibility into code and database branch changes for Databricks Lakebase",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "publisher": "databricks-field-eng",
   "icon": "resources/icons/extension-icon.png",
   "repository": {
@@ -470,15 +470,42 @@
       }
     ],
     "submenus": [
-      { "id": "lakebaseSync.commitMenu", "label": "Commit" },
-      { "id": "lakebaseSync.changesMenu", "label": "Changes" },
-      { "id": "lakebaseSync.pullPushMenu", "label": "Pull, Push" },
-      { "id": "lakebaseSync.branchMenu", "label": "Branch" },
-      { "id": "lakebaseSync.stashMenu", "label": "Stash" },
-      { "id": "lakebaseSync.tagsMenu", "label": "Tags" },
-      { "id": "lakebaseSync.remoteMenu", "label": "Remote" },
-      { "id": "lakebaseSync.worktreeMenu", "label": "Worktrees" },
-      { "id": "lakebaseSync.lakebaseMenu", "label": "Lakebase" }
+      {
+        "id": "lakebaseSync.commitMenu",
+        "label": "Commit"
+      },
+      {
+        "id": "lakebaseSync.changesMenu",
+        "label": "Changes"
+      },
+      {
+        "id": "lakebaseSync.pullPushMenu",
+        "label": "Pull, Push"
+      },
+      {
+        "id": "lakebaseSync.branchMenu",
+        "label": "Branch"
+      },
+      {
+        "id": "lakebaseSync.stashMenu",
+        "label": "Stash"
+      },
+      {
+        "id": "lakebaseSync.tagsMenu",
+        "label": "Tags"
+      },
+      {
+        "id": "lakebaseSync.remoteMenu",
+        "label": "Remote"
+      },
+      {
+        "id": "lakebaseSync.worktreeMenu",
+        "label": "Worktrees"
+      },
+      {
+        "id": "lakebaseSync.lakebaseMenu",
+        "label": "Lakebase"
+      }
     ],
     "menus": {
       "scm/title": [
@@ -594,77 +621,246 @@
         }
       ],
       "lakebaseSync.commitMenu": [
-        { "command": "lakebaseSync.commit", "group": "1_commit@1" },
-        { "command": "lakebaseSync.commitStaged", "group": "1_commit@2" },
-        { "command": "lakebaseSync.commitAll", "group": "1_commit@3" },
-        { "command": "lakebaseSync.undoLastCommit", "group": "1_commit@4" },
-        { "command": "lakebaseSync.abortRebase", "group": "1_commit@5", "when": "lakebaseSync.isRebasing" },
-        { "command": "lakebaseSync.commitAmend", "group": "2_amend@1" },
-        { "command": "lakebaseSync.commitStagedAmend", "group": "2_amend@2" },
-        { "command": "lakebaseSync.commitAllAmend", "group": "2_amend@3" },
-        { "command": "lakebaseSync.commitSignedOff", "group": "3_signed@1" },
-        { "command": "lakebaseSync.commitStagedSignedOff", "group": "3_signed@2" },
-        { "command": "lakebaseSync.commitAllSignedOff", "group": "3_signed@3" }
+        {
+          "command": "lakebaseSync.commit",
+          "group": "1_commit@1"
+        },
+        {
+          "command": "lakebaseSync.commitStaged",
+          "group": "1_commit@2"
+        },
+        {
+          "command": "lakebaseSync.commitAll",
+          "group": "1_commit@3"
+        },
+        {
+          "command": "lakebaseSync.undoLastCommit",
+          "group": "1_commit@4"
+        },
+        {
+          "command": "lakebaseSync.abortRebase",
+          "group": "1_commit@5",
+          "when": "lakebaseSync.isRebasing"
+        },
+        {
+          "command": "lakebaseSync.commitAmend",
+          "group": "2_amend@1"
+        },
+        {
+          "command": "lakebaseSync.commitStagedAmend",
+          "group": "2_amend@2"
+        },
+        {
+          "command": "lakebaseSync.commitAllAmend",
+          "group": "2_amend@3"
+        },
+        {
+          "command": "lakebaseSync.commitSignedOff",
+          "group": "3_signed@1"
+        },
+        {
+          "command": "lakebaseSync.commitStagedSignedOff",
+          "group": "3_signed@2"
+        },
+        {
+          "command": "lakebaseSync.commitAllSignedOff",
+          "group": "3_signed@3"
+        }
       ],
       "lakebaseSync.changesMenu": [
-        { "command": "lakebaseSync.stageAll", "group": "1_changes@1", "title": "Stage All Changes" },
-        { "command": "lakebaseSync.unstageAll", "group": "1_changes@2", "title": "Unstage All Changes" },
-        { "command": "lakebaseSync.discardAllChanges", "group": "1_changes@3", "title": "Discard All Changes" }
+        {
+          "command": "lakebaseSync.stageAll",
+          "group": "1_changes@1",
+          "title": "Stage All Changes"
+        },
+        {
+          "command": "lakebaseSync.unstageAll",
+          "group": "1_changes@2",
+          "title": "Unstage All Changes"
+        },
+        {
+          "command": "lakebaseSync.discardAllChanges",
+          "group": "1_changes@3",
+          "title": "Discard All Changes"
+        }
       ],
       "lakebaseSync.pullPushMenu": [
-        { "command": "lakebaseSync.sync", "group": "1_sync@1" },
-        { "command": "lakebaseSync.pull", "group": "2_pull@1" },
-        { "command": "lakebaseSync.pullRebase", "group": "2_pull@2" },
-        { "command": "lakebaseSync.pullFrom", "group": "2_pull@3" },
-        { "command": "lakebaseSync.push", "group": "3_push@1" },
-        { "command": "lakebaseSync.pushTo", "group": "3_push@2" },
-        { "command": "lakebaseSync.fetch", "group": "4_fetch@1" },
-        { "command": "lakebaseSync.fetchPrune", "group": "4_fetch@2" },
-        { "command": "lakebaseSync.fetchAll", "group": "4_fetch@3" }
+        {
+          "command": "lakebaseSync.sync",
+          "group": "1_sync@1"
+        },
+        {
+          "command": "lakebaseSync.pull",
+          "group": "2_pull@1"
+        },
+        {
+          "command": "lakebaseSync.pullRebase",
+          "group": "2_pull@2"
+        },
+        {
+          "command": "lakebaseSync.pullFrom",
+          "group": "2_pull@3"
+        },
+        {
+          "command": "lakebaseSync.push",
+          "group": "3_push@1"
+        },
+        {
+          "command": "lakebaseSync.pushTo",
+          "group": "3_push@2"
+        },
+        {
+          "command": "lakebaseSync.fetch",
+          "group": "4_fetch@1"
+        },
+        {
+          "command": "lakebaseSync.fetchPrune",
+          "group": "4_fetch@2"
+        },
+        {
+          "command": "lakebaseSync.fetchAll",
+          "group": "4_fetch@3"
+        }
       ],
       "lakebaseSync.branchMenu": [
-        { "command": "lakebaseSync.mergeBranch", "group": "1_merge@1" },
-        { "command": "lakebaseSync.rebaseBranch", "group": "1_merge@2" },
-        { "command": "lakebaseSync.createUnifiedBranch", "group": "2_create@1" },
-        { "command": "lakebaseSync.createBranchFrom", "group": "2_create@2" },
-        { "command": "lakebaseSync.renameBranch", "group": "3_manage@1" },
-        { "command": "lakebaseSync.deleteBranch", "group": "3_manage@2" },
-        { "command": "lakebaseSync.deleteRemoteBranch", "group": "3_manage@3" },
-        { "command": "lakebaseSync.publishBranch", "group": "4_publish@1" }
+        {
+          "command": "lakebaseSync.mergeBranch",
+          "group": "1_merge@1"
+        },
+        {
+          "command": "lakebaseSync.rebaseBranch",
+          "group": "1_merge@2"
+        },
+        {
+          "command": "lakebaseSync.createUnifiedBranch",
+          "group": "2_create@1"
+        },
+        {
+          "command": "lakebaseSync.createBranchFrom",
+          "group": "2_create@2"
+        },
+        {
+          "command": "lakebaseSync.renameBranch",
+          "group": "3_manage@1"
+        },
+        {
+          "command": "lakebaseSync.deleteBranch",
+          "group": "3_manage@2"
+        },
+        {
+          "command": "lakebaseSync.deleteRemoteBranch",
+          "group": "3_manage@3"
+        },
+        {
+          "command": "lakebaseSync.publishBranch",
+          "group": "4_publish@1"
+        }
       ],
       "lakebaseSync.stashMenu": [
-        { "command": "lakebaseSync.stash", "group": "1_stash@1" },
-        { "command": "lakebaseSync.stashIncludeUntracked", "group": "1_stash@2" },
-        { "command": "lakebaseSync.stashStaged", "group": "1_stash@3" },
-        { "command": "lakebaseSync.stashApplyLatest", "group": "2_apply@1" },
-        { "command": "lakebaseSync.stashApply", "group": "2_apply@2" },
-        { "command": "lakebaseSync.stashPopLatest", "group": "3_pop@1" },
-        { "command": "lakebaseSync.stashPop", "group": "3_pop@2" },
-        { "command": "lakebaseSync.stashDrop", "group": "4_drop@1" },
-        { "command": "lakebaseSync.stashDropAll", "group": "4_drop@2" },
-        { "command": "lakebaseSync.viewStash", "group": "5_view@1" }
+        {
+          "command": "lakebaseSync.stash",
+          "group": "1_stash@1"
+        },
+        {
+          "command": "lakebaseSync.stashIncludeUntracked",
+          "group": "1_stash@2"
+        },
+        {
+          "command": "lakebaseSync.stashStaged",
+          "group": "1_stash@3"
+        },
+        {
+          "command": "lakebaseSync.stashApplyLatest",
+          "group": "2_apply@1"
+        },
+        {
+          "command": "lakebaseSync.stashApply",
+          "group": "2_apply@2"
+        },
+        {
+          "command": "lakebaseSync.stashPopLatest",
+          "group": "3_pop@1"
+        },
+        {
+          "command": "lakebaseSync.stashPop",
+          "group": "3_pop@2"
+        },
+        {
+          "command": "lakebaseSync.stashDrop",
+          "group": "4_drop@1"
+        },
+        {
+          "command": "lakebaseSync.stashDropAll",
+          "group": "4_drop@2"
+        },
+        {
+          "command": "lakebaseSync.viewStash",
+          "group": "5_view@1"
+        }
       ],
       "lakebaseSync.tagsMenu": [
-        { "command": "lakebaseSync.createTag", "group": "1_tags@1" },
-        { "command": "lakebaseSync.deleteTag", "group": "1_tags@2" },
-        { "command": "lakebaseSync.deleteRemoteTag", "group": "1_tags@3" }
+        {
+          "command": "lakebaseSync.createTag",
+          "group": "1_tags@1"
+        },
+        {
+          "command": "lakebaseSync.deleteTag",
+          "group": "1_tags@2"
+        },
+        {
+          "command": "lakebaseSync.deleteRemoteTag",
+          "group": "1_tags@3"
+        }
       ],
       "lakebaseSync.remoteMenu": [
-        { "command": "lakebaseSync.addRemote", "group": "1_remote@1" },
-        { "command": "lakebaseSync.removeRemote", "group": "1_remote@2" }
+        {
+          "command": "lakebaseSync.addRemote",
+          "group": "1_remote@1"
+        },
+        {
+          "command": "lakebaseSync.removeRemote",
+          "group": "1_remote@2"
+        }
       ],
       "lakebaseSync.worktreeMenu": [
-        { "command": "lakebaseSync.createWorktree", "group": "1_worktree@1" },
-        { "command": "lakebaseSync.listWorktrees", "group": "1_worktree@2" },
-        { "command": "lakebaseSync.removeWorktree", "group": "1_worktree@3" }
+        {
+          "command": "lakebaseSync.createWorktree",
+          "group": "1_worktree@1"
+        },
+        {
+          "command": "lakebaseSync.listWorktrees",
+          "group": "1_worktree@2"
+        },
+        {
+          "command": "lakebaseSync.removeWorktree",
+          "group": "1_worktree@3"
+        }
       ],
       "lakebaseSync.lakebaseMenu": [
-        { "command": "lakebaseSync.healthCheck", "group": "1_lakebase@1" },
-        { "command": "lakebaseSync.openInConsole", "group": "1_lakebase@2" },
-        { "command": "lakebaseSync.showBranchDiff", "group": "1_lakebase@3" },
-        { "command": "lakebaseSync.showPrSchemaDiff", "group": "2_pr@1" },
-        { "command": "lakebaseSync.mergePullRequest", "group": "2_pr@2" },
-        { "command": "lakebaseSync.refreshPrStatus", "group": "2_pr@3" }
+        {
+          "command": "lakebaseSync.healthCheck",
+          "group": "1_lakebase@1"
+        },
+        {
+          "command": "lakebaseSync.openInConsole",
+          "group": "1_lakebase@2"
+        },
+        {
+          "command": "lakebaseSync.showBranchDiff",
+          "group": "1_lakebase@3"
+        },
+        {
+          "command": "lakebaseSync.showPrSchemaDiff",
+          "group": "2_pr@1"
+        },
+        {
+          "command": "lakebaseSync.mergePullRequest",
+          "group": "2_pr@2"
+        },
+        {
+          "command": "lakebaseSync.refreshPrStatus",
+          "group": "2_pr@3"
+        }
       ],
       "scm/resourceGroup/context": [
         {
