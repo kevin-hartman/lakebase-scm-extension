@@ -445,10 +445,6 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
           }
         }
 
-        // On feature branches, skip unchanged tables — only show diffs
-        // On main/production, show all tables in white
-        if (status === 'unchanged' && !lakebaseBranch.isDefault) { return null; }
-
         if (status === 'new') {
           item.iconPath = new vscode.ThemeIcon('diff-added', new vscode.ThemeColor('charts.green'));
           item.description = `new · ${colCount} columns`;
@@ -456,6 +452,7 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
           item.iconPath = new vscode.ThemeIcon('diff-modified', new vscode.ThemeColor('charts.yellow'));
           item.description = `modified · ${colCount} columns`;
         } else {
+          // unchanged — always shown on production; on feature branches included below if no diffs
           item.iconPath = new vscode.ThemeIcon('symbol-class', new vscode.ThemeColor('foreground'));
           item.description = colCount > 0 ? `${colCount} columns` : '';
         }
@@ -467,9 +464,10 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
         );
         item.command = this.makeTableCommand(table.name, status === 'new' ? 'new' : status === 'modified' ? 'modified' : 'unchanged');
         return item;
-      }).filter((item): item is BranchItem => item !== null);
+      });
 
       // Tables removed on this branch (exist on production but not on branch)
+      const removedItems: BranchItem[] = [];
       if (prodSchema !== undefined && !lakebaseBranch.isDefault) {
         const branchSet = new Set(filtered.map(t => t.name));
         for (const [name] of prodSchema) {
@@ -478,11 +476,19 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
             item.iconPath = new vscode.ThemeIcon('diff-removed', new vscode.ThemeColor('charts.red'));
             item.description = 'removed';
             item.command = this.makeTableCommand(name, 'removed');
-            items.push(item);
+            removedItems.push(item);
           }
         }
       }
 
+      const diffItems = [...items.filter(i => i.description?.toString().startsWith('new') || i.description?.toString().startsWith('modified')), ...removedItems];
+
+      if (diffItems.length > 0) {
+        // There are schema changes — show only diffs (new/modified/removed)
+        return diffItems;
+      }
+
+      // No schema changes vs production — show all tables so the branch is browseable
       if (items.length === 0) {
         const emptyItem = new BranchItem(undefined, undefined, 'detail', 'No tables');
         emptyItem.iconPath = new vscode.ThemeIcon('info');
