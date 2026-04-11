@@ -426,10 +426,13 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
         } catch { /* can't reach production — skip diff */ }
       }
 
+      type TableStatus = 'new' | 'modified' | 'unchanged';
+      const statusMap = new Map<string, TableStatus>();
+
       const items: BranchItem[] = filtered.map(table => {
         const item = new BranchItem(undefined, undefined, 'detail', table.name);
         const colCount = table.columns.length;
-        let status: 'new' | 'modified' | 'unchanged' = 'unchanged';
+        let status: TableStatus = 'unchanged';
 
         if (prodSchema !== undefined && !lakebaseBranch.isDefault) {
           const prodCols = prodSchema.get(table.name);
@@ -444,6 +447,8 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
             }
           }
         }
+
+        statusMap.set(table.name, status);
 
         if (status === 'new') {
           item.iconPath = new vscode.ThemeIcon('diff-added', new vscode.ThemeColor('charts.green'));
@@ -481,7 +486,10 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
         }
       }
 
-      const diffItems = [...items.filter(i => i.description?.toString().startsWith('new') || i.description?.toString().startsWith('modified')), ...removedItems];
+      const diffItems = [...items.filter(i => {
+        const s = statusMap.get(i.label as string);
+        return s === 'new' || s === 'modified';
+      }), ...removedItems];
 
       if (diffItems.length > 0) {
         // There are schema changes — show only diffs (new/modified/removed)
