@@ -1,9 +1,17 @@
 """SQLAlchemy database engine and session, configured from environment variables."""
 
 import os
+from pathlib import Path
 from urllib.parse import quote_plus
+
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
+
+# Load .env from repo root so DATABASE_URL is available regardless of how the
+# process is started (uvicorn directly, pytest, etc.).  override=False means
+# explicitly-set env vars (CI secrets, Docker --env) always win.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 
 def _build_url() -> str:
