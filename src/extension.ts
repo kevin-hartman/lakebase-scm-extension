@@ -1963,7 +1963,7 @@ export async function activate(context: vscode.ExtensionContext) {
             if (root) {
               try {
                 const { syncCiSecrets } = require('./utils/ciSecrets');
-                await syncCiSecrets(root, 'CI merge', 3600);
+                await syncCiSecrets(root);
               } catch { /* non-fatal */ }
             }
 
@@ -2264,7 +2264,7 @@ export async function activate(context: vscode.ExtensionContext) {
         if (root) {
           try {
             const { syncCiSecrets } = require('./utils/ciSecrets');
-            await syncCiSecrets(root, 'GitHub Actions CI', 86400);
+            await syncCiSecrets(root);
           } catch {
             // Non-fatal — CI may still work with existing secrets
           }

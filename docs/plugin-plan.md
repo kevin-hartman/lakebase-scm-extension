@@ -474,6 +474,17 @@ lakebase-scm-extension/
 - **Register refreshRunner command** — Was declared in `package.json` but missing from `extension.ts`; CI Runner view refresh button now works.
 - **Docs updated** — README reflects v0.4.3, uv in prerequisites, language-aware CI, Deploy to Databricks Apps in roadmap. Plan updated with multi-language template structure, 10-step wizard, current extension file tree. Removed completed plan docs.
 
+### v0.4.6 changelog:
+- **Service principal auth for CI/CD** — New `setup-ci-auth.sh` script creates a Databricks service principal with OAuth M2M credentials and syncs them to GitHub repo secrets. Credentials don't expire, eliminating the PAT expiry problem that caused silent CI failures.
+- **Scaffolding runs SP auth automatically** — `syncCiSecrets()` now runs `setup-ci-auth.sh` during project creation (step 8), falling back to PAT if SP creation fails on restricted workspaces.
+- **merge.yml: fail-loud and no duplicate runs** — Migration job runs on `push` to main only; cleanup job runs on `pull_request: closed` only. Each merge fires exactly one of each. Auth failures now `exit 1` with `::error::` annotations instead of silently exiting 0.
+- **merge.yml: no commit message parsing for cleanup** — Cleanup job uses PR event data directly (`github.event.pull_request.head.ref`), eliminating the squash-merge branch name parsing bug.
+- **pr.yml: service principal auth support** — CI branch creation step accepts `DATABRICKS_CLIENT_ID` + `DATABRICKS_CLIENT_SECRET` (preferred) or `DATABRICKS_TOKEN` (legacy). Verifies auth before proceeding.
+- **Updated set-repo-secrets.sh and pre-push.sh** — Both scripts support SP and PAT credential sets. SP auth auto-removes the old `DATABRICKS_TOKEN` secret.
+- **Deprecated create-token-and-sync-secrets.sh** — Added deprecation notice pointing to `setup-ci-auth.sh`.
+- **Deleted stale pre-refactor template copies** — Removed `templates/project/{.env.example,.github,.gitignore,scripts,src}` (pre-`common/` + language overlay leftovers).
+- **Added branch lifecycle integration test** — `test/integration/branchLifecycle.test.ts` covering create, idempotent create, list, delete, and recreate.
+
 ### v0.4.5 changelog:
 - **Post-merge branch tree auto-refresh** — After merging a PR, the extension polls `listBranches()` every 15s for up to 2 minutes, refreshing the branch tree as CI cleans up the `ci-pr-*` and feature Lakebase branches. Eliminates stale "db only" entries in Other Branches without manual refresh.
 - **Local merge branch tree refresh** — Added missing `branchTreeProvider.refresh()` call after the local merge command deletes a Lakebase branch.

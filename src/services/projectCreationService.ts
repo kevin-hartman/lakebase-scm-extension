@@ -151,12 +151,12 @@ export class ProjectCreationService {
     const language = input.language || 'java';
     await this.scaffoldService.deployGitignore(projectDir, language);
 
-    // Step 8: Set GitHub secrets (before push so merge.yml has them on first run)
-    report('Syncing CI secrets...');
+    // Step 8: Set up CI auth (service principal preferred, PAT fallback)
+    report('Setting up CI auth (service principal)...');
     try {
-      await syncCiSecrets(projectDir, 'GitHub Actions CI', 86400);
-    } catch {
-      // Non-fatal — user can run set-repo-secrets.sh manually
+      await syncCiSecrets(projectDir);
+    } catch (err: any) {
+      report(`Warning: CI auth setup failed (${err.message}). Run ./scripts/setup-ci-auth.sh manually.`);
     }
 
     // Step 9: Deploy runner (self-hosted only — before push so merge.yml has a runner)

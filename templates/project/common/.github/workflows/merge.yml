@@ -1,6 +1,13 @@
 # On merge to main: run migrations on production, delete ci-pr-* and merged feature branch.
 # Language-aware: detects Java/Flyway, Python/Alembic, or Node.js/Knex.
-# Branch cleanup runs in a separate job so it always runs on merge even if migrations fail.
+#
+# Job design:
+#   - migrate-production: runs on push to main (triggered by both PR merges and direct pushes)
+#   - cleanup-lakebase-branches: runs only on pull_request closed+merged (has PR context for branch names)
+# Each merge event triggers exactly one of each — no duplicate runs.
+#
+# Auth: prefers service principal (DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET) over PAT.
+# Run ./scripts/setup-ci-auth.sh to set up service principal auth (recommended).
 name: Merge
 
 on:
@@ -9,10 +16,14 @@ on:
   pull_request:
     types: [closed]
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
-  merge-to-main:
+  migrate-production:
     runs-on: self-hosted
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -78,38 +89,77 @@ jobs:
             databricks -v
           fi
 
-      # Resolve production (default) Lakebase branch URL and credentials so Flyway can run without separate production DB secrets.
+      # Authenticate to Databricks. Prefers service principal (OAuth M2M) over PAT.
+      # Service principal credentials don't expire — PATs do.
+      # Run ./scripts/setup-ci-auth.sh to set up service principal auth.
+      - name: Authenticate Databricks
+        id: db-auth
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          if [ -z "$DATABRICKS_HOST" ]; then
+            echo "::error::DATABRICKS_HOST secret not set. Add it in repo Settings → Secrets."
+            exit 1
+          fi
+          echo "DATABRICKS_HOST=$DATABRICKS_HOST" >> $GITHUB_ENV
+
+          if [ -n "$DATABRICKS_CLIENT_ID" ] && [ -n "$DATABRICKS_CLIENT_SECRET" ]; then
+            echo "DATABRICKS_CLIENT_ID=$DATABRICKS_CLIENT_ID" >> $GITHUB_ENV
+            echo "DATABRICKS_CLIENT_SECRET=$DATABRICKS_CLIENT_SECRET" >> $GITHUB_ENV
+            AUTH_METHOD="service-principal"
+          elif [ -n "$DATABRICKS_TOKEN" ]; then
+            echo "DATABRICKS_TOKEN=$DATABRICKS_TOKEN" >> $GITHUB_ENV
+            echo "::warning::Using PAT auth — PATs expire. Switch to service principal: ./scripts/setup-ci-auth.sh"
+            AUTH_METHOD="pat"
+          else
+            echo "::error::No Databricks credentials found. Run ./scripts/setup-ci-auth.sh to configure service principal auth."
+            exit 1
+          fi
+
+          if ! databricks current-user me -o json >/dev/null 2>&1; then
+            echo "::error::Databricks authentication failed ($AUTH_METHOD). Credentials may be expired or invalid."
+            [ "$AUTH_METHOD" = "pat" ] && echo "::error::PAT tokens expire. Run ./scripts/setup-ci-auth.sh to switch to service principal auth."
+            exit 1
+          fi
+          echo "auth_method=$AUTH_METHOD" >> $GITHUB_OUTPUT
+          echo "Databricks authenticated via $AUTH_METHOD."
+
+      # Resolve production (default) Lakebase branch URL and credentials.
       - name: Resolve production DB credentials (Lakebase)
         id: prod-db
         env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST || '' }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN || '' }}
-          LAKEBASE_PROJECT_ID: ${{ secrets.LAKEBASE_PROJECT_ID || '' }}
+          LAKEBASE_PROJECT_ID: ${{ secrets.LAKEBASE_PROJECT_ID }}
         run: |
-          if [ -z "$LAKEBASE_PROJECT_ID" ] || [ -z "$DATABRICKS_HOST" ] || [ -z "$DATABRICKS_TOKEN" ]; then
-            echo "Lakebase secrets not set; production credentials not resolved. Set DATABRICKS_HOST, DATABRICKS_TOKEN, LAKEBASE_PROJECT_ID for automatic production Flyway."
-            exit 0
+          if [ -z "$LAKEBASE_PROJECT_ID" ]; then
+            echo "::error::LAKEBASE_PROJECT_ID secret not set. Add it in repo Settings → Secrets."
+            exit 1
           fi
-          if ! command -v databricks >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
-            echo "databricks or jq not found; skipping resolve."
-            exit 0
-          fi
-          export DATABRICKS_HOST DATABRICKS_TOKEN
           PROJ_PATH="projects/${LAKEBASE_PROJECT_ID}"
           DB_NAME="databricks_postgres"
-          # Extract both full name and uid of the default branch.
-          # Use .name (full resource path) for API calls — uid may differ from branch name segment.
-          DEFAULT_NAME="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null | jq -r '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[] | select((.status.default == true) or (.is_default == true)) | .name' | head -1)"
-          DEFAULT_UID="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null | jq -r '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[] | select((.status.default == true) or (.is_default == true)) | (.uid // .id // (if .name then (.name | split("/") | last) else empty end))' | head -1)"
-          if [ -z "$DEFAULT_UID" ]; then
-            DEFAULT_NAME="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null | jq -r '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[0] | .name')"
-            DEFAULT_UID="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null | jq -r '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[0] | (.uid // .id // (if .name then (.name | split("/") | last) else empty end))')"
+
+          # Find default Lakebase branch
+          LIST_RAW="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>&1)"
+          BRANCHES="$(echo "$LIST_RAW" | jq -c 'if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end' 2>/dev/null)" || BRANCHES="[]"
+
+          DEFAULT_NAME="$(echo "$BRANCHES" | jq -r '.[] | select((.status.default == true) or (.is_default == true)) | .name' 2>/dev/null | head -1)"
+          DEFAULT_UID="$(echo "$BRANCHES" | jq -r '.[] | select((.status.default == true) or (.is_default == true)) | (.uid // .id // (if .name then (.name | split("/") | last) else empty end))' 2>/dev/null | head -1)"
+          if [ -z "$DEFAULT_UID" ] && [ "$(echo "$BRANCHES" | jq -r 'length' 2>/dev/null)" -ge 1 ] 2>/dev/null; then
+            DEFAULT_NAME="$(echo "$BRANCHES" | jq -r '.[0] | .name' 2>/dev/null)"
+            DEFAULT_UID="$(echo "$BRANCHES" | jq -r '.[0] | (.uid // .id // (if .name then (.name | split("/") | last) else empty end))' 2>/dev/null)"
           fi
           if [ -z "$DEFAULT_UID" ]; then
-            echo "Could not find default Lakebase branch."
-            exit 0
+            echo "::error::Could not find default Lakebase branch. Check LAKEBASE_PROJECT_ID and Databricks auth."
+            echo "list-branches output: $LIST_RAW"
+            exit 1
           fi
+          echo "Default branch: uid=$DEFAULT_UID name=$DEFAULT_NAME"
+
           BRANCH_PATH="${DEFAULT_NAME:-${PROJ_PATH}/branches/${DEFAULT_UID}}"
+
+          # Get or create endpoint
           HOST="$(databricks postgres list-endpoints "$BRANCH_PATH" -o json 2>/dev/null | jq -r '.[0].status.hosts.host // empty')"
           if [ -z "$HOST" ]; then
             databricks postgres create-endpoint "$BRANCH_PATH" "primary" --json '{"spec": {"endpoint_type": "ENDPOINT_TYPE_READ_WRITE", "autoscaling_limit_min_cu": 2, "autoscaling_limit_max_cu": 4}}' 2>/dev/null || true
@@ -121,15 +171,17 @@ jobs:
             HOST="$(databricks postgres list-endpoints "$BRANCH_PATH" -o json 2>/dev/null | jq -r '.[0].status.hosts.host // empty')"
           fi
           if [ -z "$HOST" ]; then
-            echo "Could not get production endpoint host."
-            exit 0
+            echo "::error::Could not get production endpoint host."
+            exit 1
           fi
+
           TOKEN="$(databricks postgres generate-database-credential "${BRANCH_PATH}/endpoints/primary" -o json 2>/dev/null | jq -r '.token // empty')"
           EMAIL="$(databricks current-user me -o json 2>/dev/null | jq -r '.userName // .emails[0].value // empty')"
           if [ -z "$TOKEN" ] || [ -z "$EMAIL" ]; then
-            echo "Could not generate production credential."
-            exit 0
+            echo "::error::Could not generate production database credential."
+            exit 1
           fi
+
           JDBC_URL="jdbc:postgresql://${HOST}:5432/${DB_NAME}?sslmode=require"
           # Generic vars
           echo "DB_USERNAME=${EMAIL}" >> $GITHUB_ENV
@@ -156,8 +208,8 @@ jobs:
           SPRING_DATASOURCE_PASSWORD: ${{ env.SPRING_DATASOURCE_PASSWORD || secrets.SPRING_DATASOURCE_PASSWORD || '' }}
         run: |
           if [ -z "$DATABASE_URL" ] && [ -z "$SPRING_DATASOURCE_URL" ]; then
-            echo "No database credentials set; skip production migrate."
-            exit 0
+            echo "::error::No database credentials available after auth step. This should not happen."
+            exit 1
           fi
           LANG="${{ steps.detect-lang.outputs.lang }}"
           echo "Running migrations on production ($LANG)..."
@@ -185,7 +237,7 @@ jobs:
           DB_PASSWORD: ${{ env.DB_PASSWORD }}
         run: |
           if [ -z "$DATABASE_URL" ]; then
-            echo "No database URL; skipping verification."
+            echo "::warning::No DATABASE_URL; skipping schema verification."
             exit 0
           fi
           if ! command -v psql >/dev/null 2>&1; then
@@ -194,7 +246,6 @@ jobs:
           fi
 
           # Parse postgresql:// URL into psql connection params
-          # Strip credentials from URL to extract host/port/db
           URL_NO_SCHEME="${DATABASE_URL#postgresql://}"
           URL_AFTER_AT="${URL_NO_SCHEME#*@}"
           PG_HOST="$(echo "$URL_AFTER_AT" | sed -n 's|\([^:/]*\).*|\1|p')"
@@ -277,10 +328,11 @@ jobs:
 
           echo "Schema verification passed. All $(echo "$EXPECTED_TABLES" | wc -l | tr -d ' ') expected tables exist on production."
 
-  # Separate job so branch cleanup always runs on merge, even when merge-to-main (e.g. Flyway) fails.
+  # Separate job: branch cleanup runs only on PR merge (not direct pushes to main).
+  # Uses PR event data directly — no commit message parsing needed.
   cleanup-lakebase-branches:
     runs-on: self-hosted
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main')
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -295,51 +347,78 @@ jobs:
             curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sudo sh || true
             export PATH="/usr/local/bin:$PATH"
             if ! command -v databricks >/dev/null 2>&1; then
-              echo "::warning::Databricks CLI not available; branch cleanup will skip delete. Install databricks CLI on the runner or ensure it is on PATH."
+              echo "::error::Databricks CLI not available. Install on the runner."
+              exit 1
             else
               databricks -v
             fi
           fi
 
+      - name: Authenticate Databricks (cleanup job)
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          if [ -z "$DATABRICKS_HOST" ]; then
+            echo "::error::DATABRICKS_HOST secret not set."
+            exit 1
+          fi
+          echo "DATABRICKS_HOST=$DATABRICKS_HOST" >> $GITHUB_ENV
+
+          if [ -n "$DATABRICKS_CLIENT_ID" ] && [ -n "$DATABRICKS_CLIENT_SECRET" ]; then
+            echo "DATABRICKS_CLIENT_ID=$DATABRICKS_CLIENT_ID" >> $GITHUB_ENV
+            echo "DATABRICKS_CLIENT_SECRET=$DATABRICKS_CLIENT_SECRET" >> $GITHUB_ENV
+            AUTH_METHOD="service-principal"
+          elif [ -n "$DATABRICKS_TOKEN" ]; then
+            echo "DATABRICKS_TOKEN=$DATABRICKS_TOKEN" >> $GITHUB_ENV
+            echo "::warning::Using PAT auth — PATs expire. Switch to service principal: ./scripts/setup-ci-auth.sh"
+            AUTH_METHOD="pat"
+          else
+            echo "::error::No Databricks credentials found. Run ./scripts/setup-ci-auth.sh"
+            exit 1
+          fi
+
+          if ! databricks current-user me -o json >/dev/null 2>&1; then
+            echo "::error::Databricks authentication failed ($AUTH_METHOD)."
+            exit 1
+          fi
+          echo "Databricks authenticated via $AUTH_METHOD."
+
       - name: Delete CI and feature DB branches (Lakebase)
         env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST || '' }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN || '' }}
-          LAKEBASE_PROJECT_ID: ${{ secrets.LAKEBASE_PROJECT_ID || '' }}
-          COMMIT_MSG: ${{ github.event.head_commit.message }}
-          PR_NUM_EVENT: ${{ github.event.pull_request.number }}
-          HEAD_REF_EVENT: ${{ github.event.pull_request.head.ref }}
+          LAKEBASE_PROJECT_ID: ${{ secrets.LAKEBASE_PROJECT_ID }}
         run: |
-          if [ -z "$LAKEBASE_PROJECT_ID" ] || [ -z "$DATABRICKS_HOST" ] || [ -z "$DATABRICKS_TOKEN" ]; then
-            echo "Lakebase: secrets not set; skipping branch deletion."
-            exit 0
+          if [ -z "$LAKEBASE_PROJECT_ID" ]; then
+            echo "::error::LAKEBASE_PROJECT_ID secret not set."
+            exit 1
           fi
-          if ! command -v databricks >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
-            echo "Lakebase: databricks or jq not found; skipping branch deletion."
-            exit 0
-          fi
-          # (1) Formulaic: ci-pr-<PR_NUM>. (2) Merged branch name from event.
-          PR_NUM="${PR_NUM_EVENT:-}"
-          HEAD_REF="${HEAD_REF_EVENT:-}"
-          if [ -z "$PR_NUM" ] && [ "${{ github.event_name }}" = "push" ] && [ -n "${COMMIT_MSG:-}" ]; then
-            FIRST_LINE="$(echo "$COMMIT_MSG" | head -1)"
-            PR_NUM="$(echo "$FIRST_LINE" | sed -n 's/.*[Mm]erge pull request #\([0-9]*\).*/\1/p')"
-            [ -z "$PR_NUM" ] && PR_NUM="$(echo "$FIRST_LINE" | sed -n 's/.*(#\([0-9]*\)).*/\1/p')"
-            HEAD_REF="$(echo "$FIRST_LINE" | sed -n 's/.*[Ff]rom [^/]*\/\([^ )*]*\).*/\1/p')"
-            [ -z "$HEAD_REF" ] && HEAD_REF="$(echo "$FIRST_LINE" | sed -n 's/.*from [^/]*\/\([^ ]*\).*/\1/p')"
-          fi
+
+          PR_NUM="${{ github.event.pull_request.number }}"
+          HEAD_REF="${{ github.event.pull_request.head.ref }}"
+
+          # Sanitize feature branch name to match Lakebase naming convention
           FEATURE_BRANCH=""
-          [ -n "$HEAD_REF" ] && FEATURE_BRANCH="$(echo "$HEAD_REF" | sed 's/\//-/g' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-63)"
-          echo "event=${{ github.event_name }} PR_NUM=${PR_NUM:-none} HEAD_REF=${HEAD_REF:-none} FEATURE_BRANCH=${FEATURE_BRANCH:-none}"
+          if [ -n "$HEAD_REF" ]; then
+            FEATURE_BRANCH="$(echo "$HEAD_REF" | sed 's/\//-/g' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-63)"
+          fi
+
+          echo "PR_NUM=${PR_NUM} HEAD_REF=${HEAD_REF} FEATURE_BRANCH=${FEATURE_BRANCH:-none}"
+
           ARGS=""
           [ -n "$PR_NUM" ] && ARGS="ci-pr-${PR_NUM}"
           if [ -n "$FEATURE_BRANCH" ] && [ "$FEATURE_BRANCH" != "main" ] && [ "$FEATURE_BRANCH" != "master" ]; then
             ARGS="${ARGS:+$ARGS }${FEATURE_BRANCH}"
           fi
+
           if [ -z "$ARGS" ]; then
-            echo "No branch names to delete (PR_NUM or merged branch not resolved)."
+            echo "::warning::No branch names resolved from PR event."
             exit 0
           fi
-          ./scripts/delete-lakebase-branches.sh $ARGS || true
-          echo "Lakebase branch cleanup step finished."
-          exit 0
+
+          echo "Deleting Lakebase branches: $ARGS"
+          if ! ./scripts/delete-lakebase-branches.sh $ARGS; then
+            echo "::warning::Some Lakebase branches could not be deleted (may already be gone)."
+          fi
+          echo "Lakebase branch cleanup finished."
