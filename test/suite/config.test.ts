@@ -88,7 +88,7 @@ describe('Config Utilities', () => {
   });
 
   describe('updateEnvConnection', () => {
-    it('writes connection info to .env and application-local.properties', () => {
+    it('writes connection info to .env with generic vars', () => {
       const tmp = path.join('/tmp', `ws-${Date.now()}`);
       fs.mkdirSync(tmp, { recursive: true });
       fs.writeFileSync(path.join(tmp, '.env'), 'LAKEBASE_PROJECT_ID=proj123\n');
@@ -105,11 +105,32 @@ describe('Config Utilities', () => {
         const envContent = fs.readFileSync(path.join(tmp, '.env'), 'utf-8');
         assert.ok(envContent.includes('LAKEBASE_HOST=ep-test.cloud.databricks.com'));
         assert.ok(envContent.includes('LAKEBASE_BRANCH_ID=feature-x'));
-        assert.ok(envContent.includes('SPRING_DATASOURCE_USERNAME=user@test.com'));
-        assert.ok(envContent.includes('SPRING_DATASOURCE_PASSWORD=tok123'));
-        assert.ok(envContent.includes('jdbc:postgresql://ep-test.cloud.databricks.com:5432/databricks_postgres'));
+        assert.ok(envContent.includes('DATABASE_URL=postgresql://'));
+        assert.ok(envContent.includes('DB_USERNAME=user@test.com'));
+        assert.ok(envContent.includes('DB_PASSWORD=tok123'));
         // Preserves existing keys
         assert.ok(envContent.includes('LAKEBASE_PROJECT_ID=proj123'));
+        // Spring vars NOT in .env (only in application-local.properties for Java)
+        assert.ok(!envContent.includes('SPRING_DATASOURCE_'));
+      } finally {
+        fs.rmSync(tmp, { recursive: true });
+      }
+    });
+
+    it('writes application-local.properties for Java projects', () => {
+      const tmp = path.join('/tmp', `ws-${Date.now()}`);
+      fs.mkdirSync(tmp, { recursive: true });
+      fs.writeFileSync(path.join(tmp, '.env'), '');
+      fs.writeFileSync(path.join(tmp, 'pom.xml'), '<project/>');
+      (vscode.workspace as any).workspaceFolders = [{ uri: { fsPath: tmp } }];
+
+      try {
+        updateEnvConnection({
+          host: 'ep-test.cloud.databricks.com',
+          branchId: 'feature-x',
+          username: 'user@test.com',
+          password: 'tok123',
+        });
 
         const propsContent = fs.readFileSync(path.join(tmp, 'application-local.properties'), 'utf-8');
         assert.ok(propsContent.includes('spring.datasource.url='));

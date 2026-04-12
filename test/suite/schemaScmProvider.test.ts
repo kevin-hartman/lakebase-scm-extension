@@ -107,27 +107,20 @@ describe('SchemaScmProvider (Unified Repo)', () => {
     });
   });
 
-  describe('refresh — schema changes', () => {
-    it('shows lakebase schema when uncommitted migration files exist', async () => {
+  describe('refresh — schema changes (live DB diff)', () => {
+    it('shows empty lakebase when no lakebaseService provided', async () => {
       gitStub.getStagedChanges.resolves([]);
       gitStub.getUnstagedChanges.resolves([
         { status: 'added', path: 'src/main/resources/db/migration/V6__create_users.sql' },
       ]);
-      gitStub.listMigrationsOnBranch.resolves(['V1__init.sql']);
-      migrationStub.listMigrations.returns([
-        { version: '1', description: 'init', filename: 'V1__init.sql', fullPath: '/fake/V1' },
-        { version: '6', description: 'users', filename: 'V6__create_users.sql', fullPath: '/fake/V6' },
-      ]);
-      migrationStub.parseMigrationSchemaChanges.returns([
-        { type: 'created', tableName: 'users', columns: [], migration: {} as any },
-      ]);
 
+      // No lakebaseService → live DB diff not available → Lakebase group empty
       provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any);
       await new Promise(r => setTimeout(r, 100));
-      assert.ok(migrationStub.parseMigrationSchemaChanges.called);
+      assert.strictEqual(migrationStub.parseMigrationSchemaChanges.called, false);
     });
 
-    it('shows empty lakebase when no uncommitted migration files', async () => {
+    it('shows empty lakebase when no migration files in working tree', async () => {
       gitStub.getStagedChanges.resolves([]);
       gitStub.getUnstagedChanges.resolves([
         { status: 'modified', path: 'src/App.java' },

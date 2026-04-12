@@ -243,40 +243,25 @@ describe('LakebaseService', () => {
   });
 
   describe('getConsoleUrl', () => {
-    it('builds URL with host and project ID', () => {
+    it('builds URL with host and project ID', async () => {
       service.setHostOverride('https://workspace.databricks.com');
-      // getConfig reads lakebaseProjectId from settings or .env
-      const tmp = require('path').join('/tmp', `console-test-${Date.now()}`);
-      require('fs').mkdirSync(tmp, { recursive: true });
-      require('fs').writeFileSync(require('path').join(tmp, '.env'), 'LAKEBASE_PROJECT_ID=proj-abc\n');
-      (vscode.workspace as any).workspaceFolders = [{ uri: { fsPath: tmp } }];
+      sinon.stub(service, 'getProjectUid').resolves('proj-abc');
 
-      try {
-        const url = service.getConsoleUrl();
-        assert.strictEqual(url, 'https://workspace.databricks.com/lakebase/projects/proj-abc');
-      } finally {
-        require('fs').rmSync(tmp, { recursive: true });
-      }
+      const url = await service.getConsoleUrl();
+      assert.strictEqual(url, 'https://workspace.databricks.com/lakebase/projects/proj-abc');
     });
 
-    it('appends branch UID when provided', () => {
+    it('appends branch UID when provided', async () => {
       service.setHostOverride('https://workspace.databricks.com');
-      const tmp = require('path').join('/tmp', `console-test-${Date.now()}`);
-      require('fs').mkdirSync(tmp, { recursive: true });
-      require('fs').writeFileSync(require('path').join(tmp, '.env'), 'LAKEBASE_PROJECT_ID=proj-abc\n');
-      (vscode.workspace as any).workspaceFolders = [{ uri: { fsPath: tmp } }];
+      sinon.stub(service, 'getProjectUid').resolves('proj-abc');
 
-      try {
-        const url = service.getConsoleUrl('br-feature-x');
-        assert.strictEqual(url, 'https://workspace.databricks.com/lakebase/projects/proj-abc/branches/br-feature-x');
-      } finally {
-        require('fs').rmSync(tmp, { recursive: true });
-      }
+      const url = await service.getConsoleUrl('br-feature-x');
+      assert.strictEqual(url, 'https://workspace.databricks.com/lakebase/projects/proj-abc/branches/br-feature-x');
     });
 
-    it('returns empty string when host not configured', () => {
+    it('returns empty string when host not configured', async () => {
       (vscode.workspace as any).workspaceFolders = undefined;
-      assert.strictEqual(service.getConsoleUrl(), '');
+      assert.strictEqual(await service.getConsoleUrl(), '');
     });
   });
 });

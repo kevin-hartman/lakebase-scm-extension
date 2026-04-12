@@ -97,88 +97,47 @@ describe('Branch Review — full branch scope', () => {
     });
   });
 
-  describe('Lakebase group — shows schema for uncommitted migration files', () => {
-    it('shows schema changes when uncommitted migration files exist', async () => {
-      // Simulate uncommitted migration files in working tree
+  describe('Lakebase group — live database diff (requires lakebaseService)', () => {
+    it('shows empty lakebase group when no lakebaseService provided', async () => {
       gitStub.getStagedChanges.resolves([]);
       gitStub.getUnstagedChanges.resolves([
         { status: 'added', path: 'src/main/resources/db/migration/V6__create_orders.sql' },
-        { status: 'added', path: 'src/main/resources/db/migration/V7__create_order_items.sql' },
       ]);
 
-      gitStub.listMigrationsOnBranch.resolves([
-        'V1__init.sql', 'V2__book.sql', 'V3__product.sql', 'V4__customer.sql', 'V5__cart.sql',
-      ]);
-      migrationStub.listMigrations.returns([
-        { version: '1', description: 'init', filename: 'V1__init.sql', fullPath: '/fake/V1__init.sql' },
-        { version: '6', description: 'create orders', filename: 'V6__create_orders.sql', fullPath: '/fake/V6__create_orders.sql' },
-        { version: '7', description: 'create order items', filename: 'V7__create_order_items.sql', fullPath: '/fake/V7__create_order_items.sql' },
-      ]);
-      migrationStub.parseMigrationSchemaChanges.returns([
-        { type: 'created', tableName: 'orders', columns: [{ name: 'id', dataType: 'bigint' }], migration: {} as any },
-        { type: 'created', tableName: 'order_item', columns: [{ name: 'id', dataType: 'bigint' }], migration: {} as any },
-      ]);
-
+      // No lakebaseService → Lakebase group stays empty (live DB diff not available)
       provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any);
       await new Promise(r => setTimeout(r, 150));
 
-      assert.ok(migrationStub.parseMigrationSchemaChanges.called);
-    });
-
-    it('shows nothing when no uncommitted migration files', async () => {
-      gitStub.getStagedChanges.resolves([]);
-      gitStub.getUnstagedChanges.resolves([
-        { status: 'modified', path: 'src/App.java' },
-      ]);
-
-      provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any);
-      await new Promise(r => setTimeout(r, 150));
-
-      // No migration changes → no schema parsing
+      // Migration file parsing is no longer used — schema comes from live DB diff
       assert.strictEqual(migrationStub.parseMigrationSchemaChanges.called, false);
     });
 
-    it('shows nothing when working tree is clean (all committed)', async () => {
+    it('shows empty lakebase group when working tree is clean', async () => {
       gitStub.getStagedChanges.resolves([]);
       gitStub.getUnstagedChanges.resolves([]);
-
-      gitStub.listMigrationsOnBranch.resolves(['V1__init.sql']);
-      migrationStub.listMigrations.returns([
-        { version: '1', description: 'init', filename: 'V1__init.sql', fullPath: '/fake/V1__init.sql' },
-      ]);
 
       provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any);
       await new Promise(r => setTimeout(r, 150));
 
-      // No new migrations — parseMigrationSchemaChanges should not be called
       assert.strictEqual(migrationStub.parseMigrationSchemaChanges.called, false);
     });
   });
 
-  describe('Combined view — uncommitted code + migration schema', () => {
-    it('shows uncommitted code changes and schema from uncommitted migrations', async () => {
+  describe('Combined view — code changes + live DB schema', () => {
+    it('shows unstaged code changes; lakebase group empty without lakebaseService', async () => {
       gitStub.getStagedChanges.resolves([]);
       gitStub.getUnstagedChanges.resolves([
         { status: 'added', path: 'src/model/Order.java' },
         { status: 'added', path: 'src/controller/OrderController.java' },
-        { status: 'added', path: 'src/main/resources/db/migration/V6__create_orders.sql' },
         { status: 'modified', path: 'pom.xml' },
-      ]);
-
-      gitStub.listMigrationsOnBranch.resolves(['V1__init.sql']);
-      migrationStub.listMigrations.returns([
-        { version: '1', description: 'init', filename: 'V1__init.sql', fullPath: '/fake/V1' },
-        { version: '6', description: 'orders', filename: 'V6__create_orders.sql', fullPath: '/fake/V6' },
-      ]);
-      migrationStub.parseMigrationSchemaChanges.returns([
-        { type: 'created', tableName: 'orders', columns: [], migration: {} as any },
       ]);
 
       provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any);
       await new Promise(r => setTimeout(r, 150));
 
       assert.ok(gitStub.getUnstagedChanges.called);
-      assert.ok(migrationStub.parseMigrationSchemaChanges.called);
+      // No lakebaseService → no DB diff → no migration parsing
+      assert.strictEqual(migrationStub.parseMigrationSchemaChanges.called, false);
     });
   });
 });

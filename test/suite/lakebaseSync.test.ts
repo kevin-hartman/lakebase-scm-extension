@@ -313,8 +313,8 @@ describe('LakebaseService — getConsoleUrl', () => {
   });
   afterEach(() => sinon.restore());
 
-  it('returns empty when no host', () => {
+  it('returns empty when no host', async () => {
     (vscode.workspace as any).workspaceFolders = undefined;
-    assert.strictEqual(service.getConsoleUrl(), '');
+    assert.strictEqual(await service.getConsoleUrl(), '');
   });
 });

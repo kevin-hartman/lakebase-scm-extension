@@ -271,7 +271,9 @@ No schema changes (in sync)
         createdAt: Date.now(),
       });
 
-      // Set up lakebase stubs to fail (so we get an error result, proving cache was bypassed)
+      // Primary path (queryBranchSchema) needs getDefaultBranch to throw so fallback is used
+      lakebaseStub.getDefaultBranch.rejects(new Error('not reachable'));
+      // Fallback: getEndpoint returns undefined → error result (proves cache was bypassed)
       lakebaseStub.getEndpoint.resolves(undefined);
 
       // Write .env so branchId resolves

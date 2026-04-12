@@ -474,6 +474,23 @@ lakebase-scm-extension/
 - **Register refreshRunner command** — Was declared in `package.json` but missing from `extension.ts`; CI Runner view refresh button now works.
 - **Docs updated** — README reflects v0.4.3, uv in prerequisites, language-aware CI, Deploy to Databricks Apps in roadmap. Plan updated with multi-language template structure, 10-step wizard, current extension file tree. Removed completed plan docs.
 
+### v0.4.8 changelog:
+- **Service principal CI/CD auth** — New `setup-ci-auth.sh` creates a Databricks service principal with OAuth M2M credentials (don't expire). Scaffolding runs it automatically. Replaces PAT-based auth that caused silent CI failures.
+- **merge.yml: fail-loud, no duplicate runs** — Migration job on `push`, cleanup job on `pull_request: closed`. Auth failures exit 1 with `::error::`. Cleanup uses PR event data directly (no squash-merge parsing bug).
+- **pr.yml: service principal auth support** — Accepts `DATABRICKS_CLIENT_ID`/`SECRET` (preferred) or `DATABRICKS_TOKEN` (legacy). Verifies auth before proceeding.
+- **Renamed FlywayService → SchemaMigrationService** — Language-agnostic name. 22 files updated, unused `migrate()` deleted.
+- **Language-aware migration detection** — Auto-detects Python/Alembic, Java/Flyway, Node.js/Knex from marker files. Correct migration path, file pattern, and parser per language.
+- **Lakebase Changes uses live database diff** — Queries actual Lakebase branch tables and diffs against production (same as branch tree). Language-agnostic, no migration file parsing.
+- **Alembic migration parser** — `op.create_table`, `op.drop_table`, `op.add_column` from Python migration files.
+- **Branch tree inline icons** — Create (diff-added), delete (trash), console (link-external), branch diff, refresh, and run tests (beaker) icons on branch and database detail rows. Db-only branches get console + diff + trash. "No Lakebase branch" row shows create icon.
+- **Run Tests command** — Beaker icon on current branch row. Runs `refresh-token.sh` → `run-tests.sh` (which applies pending migrations then runs tests).
+- **Language-aware migration commands** — `Run Migrations` and branch-switch migration use `refresh-token.sh` + correct tool per language (Alembic/Flyway/Knex).
+- **run-tests.sh applies pending migrations** — Detects language and runs Alembic/Flyway/Knex upgrade before test runner.
+- **Deleted stale pre-refactor template copies** — Removed `templates/project/{.env.example,.github,.gitignore,scripts,src}`.
+- **Added branch lifecycle integration test** — `test/integration/branchLifecycle.test.ts`.
+- **Fixed 9 pre-existing test failures** — `getConsoleUrl` async/await, `schemaDiffService` cache bypass stub, `updateEnvConnection` Spring-specific assertions, SCM provider schema tests updated for live DB diff.
+- **328 tests passing, 0 failing.**
+
 ### v0.4.7 changelog:
 - **Language-aware migration detection** — Lakebase Changes group now works for Python/Alembic and Node.js/Knex projects, not just Java/Flyway. Auto-detects project language from marker files (`pyproject.toml` → Alembic, `pom.xml` → Flyway, `package.json` → Knex) and uses the correct migration path, file pattern, and parser.
 - **Lakebase Changes shows committed-but-unmerged schema changes** — Previously only showed uncommitted migration files. Now compares branch migrations against main regardless of commit status, matching how the Code group behaves.
