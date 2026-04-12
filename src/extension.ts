@@ -1622,6 +1622,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
         schemaScmProvider.refresh();
         statusBarProvider.refresh();
+        branchTreeProvider.refresh();
       } catch (err: any) {
         vscode.window.showErrorMessage(`Merge failed: ${err.message}`);
       }
@@ -1984,6 +1985,33 @@ export async function activate(context: vscode.ExtensionContext) {
         statusBarProvider.refresh();
         branchTreeProvider.refresh();
         schemaScmProvider.refresh();
+
+        // Poll for Lakebase branch cleanup by CI workflow
+        const ciBranch = `ci-pr-${pr.number}`;
+        const featureBranch = lakebaseService.sanitizeBranchName(pr.headBranch);
+        let pollCount = 0;
+        const maxPolls = 8; // ~2 minutes at 15s intervals
+        const pollTimer = setInterval(async () => {
+          pollCount++;
+          try {
+            const branches = await lakebaseService.listBranches();
+            const branchIds = new Set(branches.map(b => b.branchId));
+            const ciGone = !branchIds.has(ciBranch);
+            const featureGone = !branchIds.has(featureBranch);
+            if (ciGone && featureGone) {
+              clearInterval(pollTimer);
+              branchTreeProvider.refresh();
+            } else if (pollCount >= maxPolls) {
+              clearInterval(pollTimer);
+              branchTreeProvider.refresh(); // Final refresh with whatever state exists
+            } else if (ciGone || featureGone) {
+              branchTreeProvider.refresh(); // Partial cleanup, update the tree
+            }
+          } catch {
+            // Lakebase API error — skip this poll
+            if (pollCount >= maxPolls) { clearInterval(pollTimer); }
+          }
+        }, 15_000);
       } catch (err: any) {
         vscode.window.showErrorMessage(`Merge failed: ${err.message}`);
       }

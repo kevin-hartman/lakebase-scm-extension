@@ -474,6 +474,12 @@ lakebase-scm-extension/
 - **Register refreshRunner command** — Was declared in `package.json` but missing from `extension.ts`; CI Runner view refresh button now works.
 - **Docs updated** — README reflects v0.4.3, uv in prerequisites, language-aware CI, Deploy to Databricks Apps in roadmap. Plan updated with multi-language template structure, 10-step wizard, current extension file tree. Removed completed plan docs.
 
+### v0.4.5 changelog:
+- **Post-merge branch tree auto-refresh** — After merging a PR, the extension polls `listBranches()` every 15s for up to 2 minutes, refreshing the branch tree as CI cleans up the `ci-pr-*` and feature Lakebase branches. Eliminates stale "db only" entries in Other Branches without manual refresh.
+- **Local merge branch tree refresh** — Added missing `branchTreeProvider.refresh()` call after the local merge command deletes a Lakebase branch.
+- **Fix language detection on self-hosted runners** — CI workflows (`pr.yml`, `merge.yml`) now use `git ls-files --error-unmatch` instead of `[ -f ]` to detect project language. Prevents stale files from previous repos on self-hosted runners from poisoning detection (e.g., leftover `pom.xml` causing a Python project to be detected as Java).
+- **Python dev loop integration tests** — 4-scenario end-to-end test suite (`test/integration/python-devloop/`) covering CREATE TABLE, CREATE TABLE with FK, ALTER TABLE, and DROP TABLE via Alembic/FastAPI/pytest. Runs in ~9 minutes. Complements the existing Java e-commerce 8-scenario suite.
+
 ### Known issues / tech debt:
 - Existing projects created before v0.4.0 need manual workflow update (replace `actions/setup-java` with local JDK step) for self-hosted runners.
 - Runner zombie processes can still occur if the extension crashes mid-operation.

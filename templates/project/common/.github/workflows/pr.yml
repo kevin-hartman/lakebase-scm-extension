@@ -27,11 +27,12 @@ jobs:
       - name: Detect project language
         id: detect-lang
         run: |
-          if [ -f pom.xml ]; then
+          # Use git ls-files to check tracked marker files (avoids stale files on self-hosted runners)
+          if git ls-files --error-unmatch pom.xml >/dev/null 2>&1; then
             echo "lang=java" >> $GITHUB_OUTPUT
-          elif [ -f pyproject.toml ] || [ -f requirements.txt ]; then
+          elif git ls-files --error-unmatch pyproject.toml >/dev/null 2>&1 || git ls-files --error-unmatch requirements.txt >/dev/null 2>&1; then
             echo "lang=python" >> $GITHUB_OUTPUT
-          elif [ -f package.json ]; then
+          elif git ls-files --error-unmatch package.json >/dev/null 2>&1; then
             echo "lang=nodejs" >> $GITHUB_OUTPUT
           else
             echo "::error::Cannot detect project language. Expected pom.xml, pyproject.toml, or package.json in repo root."
