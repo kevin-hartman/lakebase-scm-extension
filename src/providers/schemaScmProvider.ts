@@ -4,7 +4,7 @@ import { SchemaMigrationService } from '../services/schemaMigrationService';
 import { SchemaDiffService, SchemaDiffResult } from '../services/schemaDiffService';
 import { LakebaseService } from '../services/lakebaseService';
 import { isMainBranch } from '../utils/theme';
-import { getConfig, getEnvConfig, getWorkspaceRoot } from '../utils/config';
+import { getConfig, getWorkspaceRoot } from '../utils/config';
 
 /**
  * Content provider that resolves file contents at the merge-base with main.
@@ -193,46 +193,40 @@ export class SchemaScmProvider {
       this.codeGroup!.resourceStates = [];
     }
 
-    // --- Lakebase: live database diff (branch vs production) ---
-    // Same approach as branchTreeProvider.getTableList() — queries actual Lakebase tables.
+    // --- Lakebase: schema changes from uncommitted migration files (matches Code group lifecycle) ---
+    // Clears after commit, just like Code clears after commit. Branch tree shows full branch-vs-production diff.
     let schemaItems: vscode.SourceControlResourceState[] = [];
     try {
-      const envConfig = getEnvConfig();
-      const branchId = envConfig.LAKEBASE_BRANCH_ID;
-      if (branchId) {
-        const branchSchema = await this.lakebaseService.queryBranchSchema(branchId);
-        const defaultBranch = await this.lakebaseService.getDefaultBranch();
-        if (defaultBranch) {
-          const prodTables = await this.lakebaseService.queryBranchSchema(defaultBranch.uid);
-          const prodMap = new Map<string, string[]>();
-          for (const t of prodTables) {
-            prodMap.set(t.name, t.columns.map(c => `${c.name}:${c.dataType}`).sort());
-          }
+      const config = getConfig();
+      const staged = this.stagedGroup!.resourceStates;
+      const unstaged = this.codeGroup!.resourceStates;
+      const allPaths = [
+        ...staged.map(r => r.resourceUri.fsPath),
+        ...unstaged.map(r => r.resourceUri.fsPath),
+      ];
+      const hasMigrationChanges = allPaths.some(p =>
+        p.includes(config.migrationPath) && config.migrationPattern.test(p.split('/').pop() || '')
+      );
 
-          const branchSet = new Set<string>();
-          for (const table of branchSchema) {
-            if (table.name === 'flyway_schema_history' || table.name === 'alembic_version') { continue; }
-            branchSet.add(table.name);
-            const prodCols = prodMap.get(table.name);
-            if (!prodCols) {
-              schemaItems.push(this.makeSchemaResource(table.name, 'created'));
-            } else {
-              const branchCols = table.columns.map(c => `${c.name}:${c.dataType}`).sort();
-              if (JSON.stringify(branchCols) !== JSON.stringify(prodCols)) {
-                schemaItems.push(this.makeSchemaResource(table.name, 'modified'));
-              }
-            }
-          }
-          // Tables removed on this branch
-          for (const [name] of prodMap) {
-            if (name === 'flyway_schema_history' || name === 'alembic_version') { continue; }
-            if (!branchSet.has(name)) {
-              schemaItems.push(this.makeSchemaResource(name, 'removed'));
-            }
+      if (hasMigrationChanges) {
+        const mainMigrations = await this.gitService.listMigrationsOnBranch('main', config.migrationPath, config.migrationPattern);
+        const mainSet = new Set(mainMigrations);
+        const branchMigrations = this.migrationService.listMigrations();
+        const newMigrations = branchMigrations.filter(m => !mainSet.has(m.filename));
+
+        if (newMigrations.length > 0) {
+          const schemaChanges = this.migrationService.parseMigrationSchemaChanges(newMigrations);
+          const tableMap = new Map<string, { type: string; tableName: string }>();
+          for (const change of schemaChanges) { tableMap.set(change.tableName, change); }
+          for (const change of tableMap.values()) {
+            schemaItems.push(this.makeSchemaResource(
+              change.tableName,
+              change.type as 'created' | 'modified' | 'removed'
+            ));
           }
         }
       }
-    } catch { /* Lakebase not reachable — leave empty */ }
+    } catch { /* ignore */ }
 
     this.lakebaseGroup!.resourceStates = schemaItems;
 
