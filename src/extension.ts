@@ -174,8 +174,12 @@ export async function activate(context: vscode.ExtensionContext) {
     updateBadge();
     branchTreeProvider.refresh();
     graphWebviewProvider.refresh();
+    statusBarProvider.refresh();
     // Second refresh after a short delay to catch async Lakebase data
-    setTimeout(() => branchTreeProvider.refresh(), 2000);
+    setTimeout(() => {
+      branchTreeProvider.refresh();
+      statusBarProvider.refresh();
+    }, 2000);
   });
   updateBadge();
 
