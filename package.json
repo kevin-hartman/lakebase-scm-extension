@@ -95,7 +95,8 @@
       },
       {
         "command": "lakebaseSync.deleteBranch",
-        "title": "Delete Branch..."
+        "title": "Delete Lakebase Branch",
+        "icon": "$(git-branch-delete)"
       },
       {
         "command": "lakebaseSync.refreshCredentials",
@@ -288,7 +289,8 @@
       },
       {
         "command": "lakebaseSync.deleteBranch",
-        "title": "Delete Branch..."
+        "title": "Delete Lakebase Branch",
+        "icon": "$(git-branch-delete)"
       },
       {
         "command": "lakebaseSync.renameBranch",
@@ -956,6 +958,16 @@
           "command": "lakebaseSync.reviewBranch",
           "when": "view == lakebaseChanges",
           "group": "navigation@5"
+        },
+        {
+          "command": "lakebaseSync.createBranch",
+          "when": "view == lakebaseChanges && lakebaseSync.onFeatureBranch",
+          "group": "navigation@6"
+        },
+        {
+          "command": "lakebaseSync.deleteBranch",
+          "when": "view == lakebaseChanges && lakebaseSync.onFeatureBranch",
+          "group": "navigation@7"
         },
         {
           "command": "lakebaseSync.pull",
