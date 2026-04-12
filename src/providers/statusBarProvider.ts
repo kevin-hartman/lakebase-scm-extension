@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { GitService } from '../services/gitService';
 import { LakebaseService, LakebaseBranch } from '../services/lakebaseService';
-import { FlywayService } from '../services/flywayService';
+import { SchemaMigrationService } from '../services/schemaMigrationService';
 import { isMainBranch } from '../utils/theme';
 
 type SyncState = 'synced' | 'pending' | 'error' | 'loading' | 'unavailable' | 'auth_error';
@@ -10,18 +10,18 @@ export class StatusBarProvider {
   private dbItem: vscode.StatusBarItem;
   private gitService: GitService;
   private lakebaseService: LakebaseService;
-  private flywayService: FlywayService;
+  private migrationService: SchemaMigrationService;
   private currentLakebaseBranch: LakebaseBranch | undefined;
   private _suppressRefresh = false;
 
   constructor(
     gitService: GitService,
     lakebaseService: LakebaseService,
-    flywayService: FlywayService
+    migrationService: SchemaMigrationService
   ) {
     this.gitService = gitService;
     this.lakebaseService = lakebaseService;
-    this.flywayService = flywayService;
+    this.migrationService = migrationService;
 
     this.dbItem = vscode.window.createStatusBarItem(
       vscode.StatusBarAlignment.Left,
@@ -61,7 +61,7 @@ export class StatusBarProvider {
       }
 
       this.currentLakebaseBranch = lbBranch;
-      const migrationVersion = this.flywayService.getLatestVersion() || '?';
+      const migrationVersion = this.migrationService.getLatestVersion() || '?';
 
       if (lbBranch) {
         const state: SyncState = lbBranch.state === 'READY' ? 'synced' : 'pending';

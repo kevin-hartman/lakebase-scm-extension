@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
-import { FlywayService } from '../../src/services/flywayService';
+import { SchemaMigrationService } from '../../src/services/schemaMigrationService';
 import { GitService } from '../../src/services/gitService';
 import { SchemaDiffService, SchemaDiffResult } from '../../src/services/schemaDiffService';
 import { SchemaScmProvider } from '../../src/providers/schemaScmProvider';
@@ -11,7 +11,7 @@ import { SchemaDiffProvider } from '../../src/providers/schemaDiffProvider';
 
 describe('Branch Review — full branch scope', () => {
   let gitStub: sinon.SinonStubbedInstance<GitService>;
-  let flywayStub: sinon.SinonStubbedInstance<FlywayService>;
+  let migrationStub: sinon.SinonStubbedInstance<SchemaMigrationService>;
   let schemaDiffStub: sinon.SinonStubbedInstance<SchemaDiffService>;
   let provider: SchemaScmProvider;
 
@@ -27,10 +27,10 @@ describe('Branch Review — full branch scope', () => {
     gitStub.listMigrationsOnBranch.resolves([]);
     (gitStub as any).onBranchChanged = new (vscode as any).EventEmitter().event;
 
-    flywayStub = sinon.createStubInstance(FlywayService);
-    flywayStub.listMigrations.returns([]);
-    flywayStub.watchMigrations.returns({ dispose: () => {} });
-    flywayStub.parseMigrationSchemaChanges.returns([]);
+    migrationStub = sinon.createStubInstance(SchemaMigrationService);
+    migrationStub.listMigrations.returns([]);
+    migrationStub.watchMigrations.returns({ dispose: () => {} });
+    migrationStub.parseMigrationSchemaChanges.returns([]);
 
     schemaDiffStub = sinon.createStubInstance(SchemaDiffService);
   });
@@ -63,7 +63,7 @@ describe('Branch Review — full branch scope', () => {
       ]);
       schemaDiffStub.compareBranchSchemas.resolves(makeDiff());
 
-      provider = new SchemaScmProvider(gitStub as any, flywayStub as any, schemaDiffStub as any);
+      provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any);
       await new Promise(r => setTimeout(r, 150));
 
       assert.ok(gitStub.getUnstagedChanges.called);
@@ -74,7 +74,7 @@ describe('Branch Review — full branch scope', () => {
       gitStub.getUnstagedChanges.resolves([]);
       schemaDiffStub.compareBranchSchemas.resolves(makeDiff());
 
-      provider = new SchemaScmProvider(gitStub as any, flywayStub as any, schemaDiffStub as any);
+      provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any);
       await new Promise(r => setTimeout(r, 150));
 
       assert.ok(gitStub.getUnstagedChanges.called);
@@ -89,7 +89,7 @@ describe('Branch Review — full branch scope', () => {
       ]);
       schemaDiffStub.compareBranchSchemas.resolves(makeDiff());
 
-      provider = new SchemaScmProvider(gitStub as any, flywayStub as any, schemaDiffStub as any);
+      provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any);
       await new Promise(r => setTimeout(r, 150));
 
       assert.ok(gitStub.getStagedChanges.called);
@@ -109,20 +109,20 @@ describe('Branch Review — full branch scope', () => {
       gitStub.listMigrationsOnBranch.resolves([
         'V1__init.sql', 'V2__book.sql', 'V3__product.sql', 'V4__customer.sql', 'V5__cart.sql',
       ]);
-      flywayStub.listMigrations.returns([
+      migrationStub.listMigrations.returns([
         { version: '1', description: 'init', filename: 'V1__init.sql', fullPath: '/fake/V1__init.sql' },
         { version: '6', description: 'create orders', filename: 'V6__create_orders.sql', fullPath: '/fake/V6__create_orders.sql' },
         { version: '7', description: 'create order items', filename: 'V7__create_order_items.sql', fullPath: '/fake/V7__create_order_items.sql' },
       ]);
-      flywayStub.parseMigrationSchemaChanges.returns([
+      migrationStub.parseMigrationSchemaChanges.returns([
         { type: 'created', tableName: 'orders', columns: [{ name: 'id', dataType: 'bigint' }], migration: {} as any },
         { type: 'created', tableName: 'order_item', columns: [{ name: 'id', dataType: 'bigint' }], migration: {} as any },
       ]);
 
-      provider = new SchemaScmProvider(gitStub as any, flywayStub as any, schemaDiffStub as any);
+      provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any);
       await new Promise(r => setTimeout(r, 150));
 
-      assert.ok(flywayStub.parseMigrationSchemaChanges.called);
+      assert.ok(migrationStub.parseMigrationSchemaChanges.called);
     });
 
     it('shows nothing when no uncommitted migration files', async () => {
@@ -131,11 +131,11 @@ describe('Branch Review — full branch scope', () => {
         { status: 'modified', path: 'src/App.java' },
       ]);
 
-      provider = new SchemaScmProvider(gitStub as any, flywayStub as any, schemaDiffStub as any);
+      provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any);
       await new Promise(r => setTimeout(r, 150));
 
       // No migration changes → no schema parsing
-      assert.strictEqual(flywayStub.parseMigrationSchemaChanges.called, false);
+      assert.strictEqual(migrationStub.parseMigrationSchemaChanges.called, false);
     });
 
     it('shows nothing when working tree is clean (all committed)', async () => {
@@ -143,15 +143,15 @@ describe('Branch Review — full branch scope', () => {
       gitStub.getUnstagedChanges.resolves([]);
 
       gitStub.listMigrationsOnBranch.resolves(['V1__init.sql']);
-      flywayStub.listMigrations.returns([
+      migrationStub.listMigrations.returns([
         { version: '1', description: 'init', filename: 'V1__init.sql', fullPath: '/fake/V1__init.sql' },
       ]);
 
-      provider = new SchemaScmProvider(gitStub as any, flywayStub as any, schemaDiffStub as any);
+      provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any);
       await new Promise(r => setTimeout(r, 150));
 
       // No new migrations — parseMigrationSchemaChanges should not be called
-      assert.strictEqual(flywayStub.parseMigrationSchemaChanges.called, false);
+      assert.strictEqual(migrationStub.parseMigrationSchemaChanges.called, false);
     });
   });
 
@@ -166,19 +166,19 @@ describe('Branch Review — full branch scope', () => {
       ]);
 
       gitStub.listMigrationsOnBranch.resolves(['V1__init.sql']);
-      flywayStub.listMigrations.returns([
+      migrationStub.listMigrations.returns([
         { version: '1', description: 'init', filename: 'V1__init.sql', fullPath: '/fake/V1' },
         { version: '6', description: 'orders', filename: 'V6__create_orders.sql', fullPath: '/fake/V6' },
       ]);
-      flywayStub.parseMigrationSchemaChanges.returns([
+      migrationStub.parseMigrationSchemaChanges.returns([
         { type: 'created', tableName: 'orders', columns: [], migration: {} as any },
       ]);
 
-      provider = new SchemaScmProvider(gitStub as any, flywayStub as any, schemaDiffStub as any);
+      provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any);
       await new Promise(r => setTimeout(r, 150));
 
       assert.ok(gitStub.getUnstagedChanges.called);
-      assert.ok(flywayStub.parseMigrationSchemaChanges.called);
+      assert.ok(migrationStub.parseMigrationSchemaChanges.called);
     });
   });
 });
@@ -186,7 +186,7 @@ describe('Branch Review — full branch scope', () => {
 describe('Branch Diff webview — migration fallback', () => {
   let schemaDiffStub: sinon.SinonStubbedInstance<SchemaDiffService>;
   let gitStub: sinon.SinonStubbedInstance<GitService>;
-  let flywayStub: sinon.SinonStubbedInstance<FlywayService>;
+  let migrationStub: sinon.SinonStubbedInstance<SchemaMigrationService>;
   let diffProvider: SchemaDiffProvider;
 
   beforeEach(() => {
@@ -197,11 +197,11 @@ describe('Branch Diff webview — migration fallback', () => {
     gitStub.getChangedFiles.resolves([]);
     gitStub.listMigrationsOnBranch.resolves([]);
 
-    flywayStub = sinon.createStubInstance(FlywayService);
-    flywayStub.listMigrations.returns([]);
-    flywayStub.parseMigrationSchemaChanges.returns([]);
+    migrationStub = sinon.createStubInstance(SchemaMigrationService);
+    migrationStub.listMigrations.returns([]);
+    migrationStub.parseMigrationSchemaChanges.returns([]);
 
-    diffProvider = new SchemaDiffProvider(schemaDiffStub as any, gitStub as any, flywayStub as any);
+    diffProvider = new SchemaDiffProvider(schemaDiffStub as any, gitStub as any, migrationStub as any);
   });
 
   afterEach(() => {
@@ -228,17 +228,17 @@ describe('Branch Diff webview — migration fallback', () => {
 
     // Branch has V6 not on main
     gitStub.listMigrationsOnBranch.resolves(['V1__init.sql']);
-    flywayStub.listMigrations.returns([
+    migrationStub.listMigrations.returns([
       { version: '1', description: 'init', filename: 'V1__init.sql', fullPath: '/fake/V1' },
       { version: '6', description: 'orders', filename: 'V6__create_orders.sql', fullPath: '/fake/V6' },
     ]);
-    flywayStub.parseMigrationSchemaChanges.returns([
+    migrationStub.parseMigrationSchemaChanges.returns([
       { type: 'created', tableName: 'orders', columns: [{ name: 'id', dataType: 'bigint' }], migration: {} as any },
     ]);
 
     await diffProvider.showDiff(false, []);
 
-    assert.ok(flywayStub.parseMigrationSchemaChanges.called);
+    assert.ok(migrationStub.parseMigrationSchemaChanges.called);
   });
 
   it('does not supplement when pg_dump found real differences', async () => {
@@ -250,28 +250,28 @@ describe('Branch Diff webview — migration fallback', () => {
     await diffProvider.showDiff(false, []);
 
     // Migration fallback should not be triggered
-    assert.strictEqual(flywayStub.parseMigrationSchemaChanges.called, false);
+    assert.strictEqual(migrationStub.parseMigrationSchemaChanges.called, false);
   });
 
   it('does not supplement when no new migrations exist', async () => {
     schemaDiffStub.getCachedDiff.returns(makeDiff({ inSync: true }));
     gitStub.listMigrationsOnBranch.resolves(['V1__init.sql']);
-    flywayStub.listMigrations.returns([
+    migrationStub.listMigrations.returns([
       { version: '1', description: 'init', filename: 'V1__init.sql', fullPath: '/fake/V1' },
     ]);
 
     await diffProvider.showDiff(false, []);
 
-    assert.strictEqual(flywayStub.parseMigrationSchemaChanges.called, false);
+    assert.strictEqual(migrationStub.parseMigrationSchemaChanges.called, false);
   });
 });
 
-describe('FlywayService — parseMigrationSchemaChanges', () => {
-  let service: FlywayService;
+describe('SchemaMigrationService — parseMigrationSchemaChanges', () => {
+  let service: SchemaMigrationService;
   let tmpDir: string;
 
   beforeEach(() => {
-    service = new FlywayService();
+    service = new SchemaMigrationService();
     tmpDir = path.join('/tmp', `flyway-parse-test-${Date.now()}`);
     fs.mkdirSync(tmpDir, { recursive: true });
   });

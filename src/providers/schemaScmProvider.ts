@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { GitService, GitFileChange, PullRequestInfo } from '../services/gitService';
-import { FlywayService } from '../services/flywayService';
+import { SchemaMigrationService } from '../services/schemaMigrationService';
 import { SchemaDiffService, SchemaDiffResult } from '../services/schemaDiffService';
 import { LakebaseService } from '../services/lakebaseService';
 import { isMainBranch } from '../utils/theme';
@@ -40,7 +40,7 @@ export class SchemaScmProvider {
   readonly onDidRefresh: vscode.Event<void> = this._onDidRefresh.event;
 
   private gitService: GitService;
-  private flywayService: FlywayService;
+  private migrationService: SchemaMigrationService;
   private schemaDiffService: SchemaDiffService;
   private lakebaseService: LakebaseService;
   private baseContentProvider: vscode.Disposable;
@@ -53,12 +53,12 @@ export class SchemaScmProvider {
 
   constructor(
     gitService: GitService,
-    flywayService: FlywayService,
+    migrationService: SchemaMigrationService,
     schemaDiffService: SchemaDiffService,
     lakebaseService?: LakebaseService
   ) {
     this.gitService = gitService;
-    this.flywayService = flywayService;
+    this.migrationService = migrationService;
     this.schemaDiffService = schemaDiffService;
     this.lakebaseService = lakebaseService!;
 
@@ -67,8 +67,8 @@ export class SchemaScmProvider {
       new GitBaseContentProvider(gitService)
     );
 
-    this.lastMigrationFiles = this.flywayService.listMigrations().map(m => m.filename);
-    this.migrationWatcher = this.flywayService.watchMigrations(() => this.onMigrationChange());
+    this.lastMigrationFiles = this.migrationService.listMigrations().map(m => m.filename);
+    this.migrationWatcher = this.migrationService.watchMigrations(() => this.onMigrationChange());
 
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (root) {
@@ -289,7 +289,7 @@ export class SchemaScmProvider {
 
     // --- Schema Migrations group: list all migrations ---
     const migrationItems: vscode.SourceControlResourceState[] = [];
-    const migrations = this.flywayService.listMigrations();
+    const migrations = this.migrationService.listMigrations();
     for (const mig of migrations) {
       migrationItems.push({
         resourceUri: vscode.Uri.parse(`lakebase-prod://migration/V${mig.version}`),
@@ -726,7 +726,7 @@ export class SchemaScmProvider {
   }
 
   private async onMigrationChange(): Promise<void> {
-    const currentFiles = this.flywayService.listMigrations().map(m => m.filename);
+    const currentFiles = this.migrationService.listMigrations().map(m => m.filename);
     const previousSet = new Set(this.lastMigrationFiles);
     const added = currentFiles.filter(f => !previousSet.has(f));
     const removed = this.lastMigrationFiles.filter(f => !new Set(currentFiles).has(f));

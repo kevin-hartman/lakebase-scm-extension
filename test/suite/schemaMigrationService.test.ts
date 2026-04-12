@@ -2,14 +2,14 @@ import { strict as assert } from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { FlywayService } from '../../src/services/flywayService';
+import { SchemaMigrationService } from '../../src/services/schemaMigrationService';
 
-describe('FlywayService', () => {
-  let service: FlywayService;
+describe('SchemaMigrationService', () => {
+  let service: SchemaMigrationService;
   let tmpDir: string;
 
   beforeEach(() => {
-    service = new FlywayService();
+    service = new SchemaMigrationService();
     tmpDir = path.join('/tmp', `flyway-test-${Date.now()}`);
     fs.mkdirSync(path.join(tmpDir, 'src/main/resources/db/migration'), { recursive: true });
     (vscode.workspace as any).workspaceFolders = [{ uri: { fsPath: tmpDir } }];

@@ -2,7 +2,7 @@
  * R3 Integration Test: Migration Schema Detection Parity
  *
  * Phase 1: Execute the OLD code (inline SQL parsing in graphWebview + per-site migration diff)
- * Phase 2: Execute the NEW code (FlywayService.parseSql + getNewMigrationChanges)
+ * Phase 2: Execute the NEW code (SchemaMigrationService.parseSql + getNewMigrationChanges)
  * Compare: Results must be identical
  *
  * Tests against a real repo with migration SQL files.
@@ -14,7 +14,7 @@ import { strict as assert } from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
 import { GitService } from '../../src/services/gitService';
-import { FlywayService } from '../../src/services/flywayService';
+import { SchemaMigrationService } from '../../src/services/schemaMigrationService';
 
 const cp = require('child_process');
 const timestamp = Date.now().toString(36);
@@ -103,7 +103,7 @@ function oldParseSql(sql: string): Array<{name: string; status: string; columns:
 // ── OLD code: migration diff pattern (copied from extension.ts/schemaScmProvider.ts) ──
 
 function oldGetNewMigrationChanges(repoDir: string, migPath: string): Array<{type: string; tableName: string; columns: Array<{name: string; dataType: string}>}> {
-  const flywayService = new FlywayService();
+  const migrationService = new SchemaMigrationService();
   const mainMigs = cp.execSync(`git ls-tree -r --name-only main -- "${migPath}"`, { cwd: repoDir, timeout: 5000 })
     .toString().split('\n').filter(Boolean).map((f: string) => path.basename(f));
   const mainSet = new Set(mainMigs);
@@ -115,7 +115,7 @@ function oldGetNewMigrationChanges(repoDir: string, migPath: string): Array<{typ
     fullPath: path.join(fullMigDir, f),
   }));
   const newMigrations = allMigrations.filter(m => !mainSet.has(m.filename));
-  return flywayService.parseMigrationSchemaChanges(newMigrations);
+  return migrationService.parseMigrationSchemaChanges(newMigrations);
 }
 
 describe('R3 Migration Schema Detection — Parity Test', function () {
@@ -171,12 +171,12 @@ describe('R3 Migration Schema Detection — Parity Test', function () {
     });
   });
 
-  // ── Phase 2: NEW code (FlywayService.parseMigrationSchemaChanges) ──
+  // ── Phase 2: NEW code (SchemaMigrationService.parseMigrationSchemaChanges) ──
 
-  describe('Phase 2: NEW code (FlywayService.parseMigrationSchemaChanges)', () => {
+  describe('Phase 2: NEW code (SchemaMigrationService.parseMigrationSchemaChanges)', () => {
     it('parses V2 migration: CREATE TABLE orders + order_items + ALTER users', () => {
-      const flywayService = new FlywayService();
-      const changes = flywayService.parseMigrationSchemaChanges([{
+      const migrationService = new SchemaMigrationService();
+      const changes = migrationService.parseMigrationSchemaChanges([{
         filename: 'V2__create_orders_and_alter_users.sql', version: '2',
         description: 'create orders and alter users',
         fullPath: path.join(repo.dir, migPath, 'V2__create_orders_and_alter_users.sql'),
@@ -189,8 +189,8 @@ describe('R3 Migration Schema Detection — Parity Test', function () {
     });
 
     it('parses V3 migration: DROP TABLE', () => {
-      const flywayService = new FlywayService();
-      const changes = flywayService.parseMigrationSchemaChanges([{
+      const migrationService = new SchemaMigrationService();
+      const changes = migrationService.parseMigrationSchemaChanges([{
         filename: 'V3__drop_temp_table.sql', version: '3',
         description: 'drop temp table',
         fullPath: path.join(repo.dir, migPath, 'V3__drop_temp_table.sql'),
@@ -199,8 +199,8 @@ describe('R3 Migration Schema Detection — Parity Test', function () {
     });
 
     it('parses V1 migration: CREATE TABLE users with columns', () => {
-      const flywayService = new FlywayService();
-      const changes = flywayService.parseMigrationSchemaChanges([{
+      const migrationService = new SchemaMigrationService();
+      const changes = migrationService.parseMigrationSchemaChanges([{
         filename: 'V1__create_users_table.sql', version: '1',
         description: 'create users table',
         fullPath: path.join(repo.dir, migPath, 'V1__create_users_table.sql'),
@@ -236,8 +236,8 @@ describe('R3 Migration Schema Detection — Parity Test', function () {
       const sql = fs.readFileSync(path.join(repo.dir, migPath, 'V2__create_orders_and_alter_users.sql'), 'utf-8');
       const oldTables = oldParseSql(sql).map(t => t.name).sort();
 
-      const flywayService = new FlywayService();
-      const newChanges = flywayService.parseMigrationSchemaChanges([{
+      const migrationService = new SchemaMigrationService();
+      const newChanges = migrationService.parseMigrationSchemaChanges([{
         filename: 'V2__create_orders_and_alter_users.sql', version: '2',
         description: '', fullPath: path.join(repo.dir, migPath, 'V2__create_orders_and_alter_users.sql'),
       }]);
@@ -250,8 +250,8 @@ describe('R3 Migration Schema Detection — Parity Test', function () {
       const sql = fs.readFileSync(path.join(repo.dir, migPath, 'V2__create_orders_and_alter_users.sql'), 'utf-8');
       const oldStatuses = oldParseSql(sql).map(t => ({ name: t.name, status: t.status.toLowerCase() })).sort((a, b) => a.name.localeCompare(b.name));
 
-      const flywayService = new FlywayService();
-      const newStatuses = flywayService.parseMigrationSchemaChanges([{
+      const migrationService = new SchemaMigrationService();
+      const newStatuses = migrationService.parseMigrationSchemaChanges([{
         filename: 'V2__create_orders_and_alter_users.sql', version: '2',
         description: '', fullPath: path.join(repo.dir, migPath, 'V2__create_orders_and_alter_users.sql'),
       }]).map(c => ({ name: c.tableName, status: c.type })).sort((a, b) => a.name.localeCompare(b.name));
@@ -263,8 +263,8 @@ describe('R3 Migration Schema Detection — Parity Test', function () {
       const sql = fs.readFileSync(path.join(repo.dir, migPath, 'V1__create_users_table.sql'), 'utf-8');
       const oldCols = oldParseSql(sql)[0].columns.map(c => c.name).sort();
 
-      const flywayService = new FlywayService();
-      const newCols = flywayService.parseMigrationSchemaChanges([{
+      const migrationService = new SchemaMigrationService();
+      const newCols = migrationService.parseMigrationSchemaChanges([{
         filename: 'V1__create_users_table.sql', version: '1',
         description: '', fullPath: path.join(repo.dir, migPath, 'V1__create_users_table.sql'),
       }])[0].columns.map(c => c.name).sort();
@@ -277,8 +277,8 @@ describe('R3 Migration Schema Detection — Parity Test', function () {
       const oldAlter = oldParseSql(sql).find(t => t.name === 'users');
       const oldCol = oldAlter!.columns[0].name;
 
-      const flywayService = new FlywayService();
-      const newAlter = flywayService.parseMigrationSchemaChanges([{
+      const migrationService = new SchemaMigrationService();
+      const newAlter = migrationService.parseMigrationSchemaChanges([{
         filename: 'V2__create_orders_and_alter_users.sql', version: '2',
         description: '', fullPath: path.join(repo.dir, migPath, 'V2__create_orders_and_alter_users.sql'),
       }]).find(c => c.tableName === 'users');
@@ -291,8 +291,8 @@ describe('R3 Migration Schema Detection — Parity Test', function () {
       const sql = fs.readFileSync(path.join(repo.dir, migPath, 'V3__drop_temp_table.sql'), 'utf-8');
       const oldDrop = oldParseSql(sql).find(t => t.status === 'REMOVED');
 
-      const flywayService = new FlywayService();
-      const newDrop = flywayService.parseMigrationSchemaChanges([{
+      const migrationService = new SchemaMigrationService();
+      const newDrop = migrationService.parseMigrationSchemaChanges([{
         filename: 'V3__drop_temp_table.sql', version: '3',
         description: '', fullPath: path.join(repo.dir, migPath, 'V3__drop_temp_table.sql'),
       }]).find(c => c.type === 'removed');

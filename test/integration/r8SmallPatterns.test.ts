@@ -3,7 +3,7 @@
  *
  * R8a: isMainBranch utility (15 inline checks → 1 function)
  * R8b: Status icon/color constants (inline literals → shared maps)
- * R8c: CREATE TABLE parsing (schemaDiffService + flywayService → shared)
+ * R8c: CREATE TABLE parsing (schemaDiffService + migrationService → shared)
  *
  * Run: npm run test:integration -- --grep "R8"
  */
@@ -12,7 +12,7 @@ import { strict as assert } from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
 import { exec } from '../../src/utils/exec';
-import { FlywayService } from '../../src/services/flywayService';
+import { SchemaMigrationService } from '../../src/services/schemaMigrationService';
 import { GitService } from '../../src/services/gitService';
 
 const cp = require('child_process');
@@ -188,20 +188,20 @@ describe('R8 Small Patterns — Parity + Live', function () {
   // ── R8c: CREATE TABLE parsing ────────────────────────────────────
 
   describe('R8c: CREATE TABLE parsing', () => {
-    describe('Phase 1: FlywayService.parseSql (already consolidated in R3)', () => {
+    describe('Phase 1: SchemaMigrationService.parseSql (already consolidated in R3)', () => {
       it('parses CREATE TABLE', () => {
         const sql = 'CREATE TABLE IF NOT EXISTS accounts (id BIGSERIAL PRIMARY KEY, email VARCHAR(255));';
-        const changes = FlywayService.parseSql(sql);
+        const changes = SchemaMigrationService.parseSql(sql);
         assert.ok(changes.some(c => c.tableName === 'accounts' && c.type === 'created'));
       });
       it('parses ALTER TABLE', () => {
         const sql = 'ALTER TABLE accounts ADD COLUMN name VARCHAR(100);';
-        const changes = FlywayService.parseSql(sql);
+        const changes = SchemaMigrationService.parseSql(sql);
         assert.ok(changes.some(c => c.tableName === 'accounts' && c.type === 'modified'));
       });
       it('parses DROP TABLE', () => {
         const sql = 'DROP TABLE IF EXISTS temp_data;';
-        const changes = FlywayService.parseSql(sql);
+        const changes = SchemaMigrationService.parseSql(sql);
         assert.ok(changes.some(c => c.tableName === 'temp_data' && c.type === 'removed'));
       });
     });
@@ -213,7 +213,7 @@ describe('R8 Small Patterns — Parity + Live', function () {
           `git show "${sha}:src/main/resources/db/migration/V2__alter_accounts.sql"`,
           { cwd: repoDir }
         );
-        const changes = FlywayService.parseSql(sql);
+        const changes = SchemaMigrationService.parseSql(sql);
         assert.ok(changes.some(c => c.tableName === 'accounts' && c.type === 'modified'), 'ALTER accounts');
         assert.ok(changes.some(c => c.tableName === 'sessions' && c.type === 'created'), 'CREATE sessions');
         assert.ok(changes.some(c => c.tableName === 'temp_data' && c.type === 'removed'), 'DROP temp_data');
@@ -222,13 +222,13 @@ describe('R8 Small Patterns — Parity + Live', function () {
       it('parseMigrationSchemaChanges from disk produces same results', () => {
         git('checkout feature/r8');
         try {
-          const flywayService = new FlywayService();
+          const migrationService = new SchemaMigrationService();
           const v2Path = path.join(repoDir, 'src/main/resources/db/migration/V2__alter_accounts.sql');
-          const fromFile = flywayService.parseMigrationSchemaChanges([{
+          const fromFile = migrationService.parseMigrationSchemaChanges([{
             filename: 'V2__alter_accounts.sql', version: '2',
             description: '', fullPath: v2Path,
           }]);
-          const fromSql = FlywayService.parseSql(fs.readFileSync(v2Path, 'utf-8'));
+          const fromSql = SchemaMigrationService.parseSql(fs.readFileSync(v2Path, 'utf-8'));
           assert.strictEqual(fromFile.length, fromSql.length, 'Same number of changes');
           for (let i = 0; i < fromFile.length; i++) {
             assert.strictEqual(fromFile[i].tableName, fromSql[i].tableName, `Same table at ${i}`);

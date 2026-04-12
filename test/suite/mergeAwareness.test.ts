@@ -3,7 +3,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { SchemaScmProvider } from '../../src/providers/schemaScmProvider';
 import { GitService } from '../../src/services/gitService';
-import { FlywayService } from '../../src/services/flywayService';
+import { SchemaMigrationService } from '../../src/services/schemaMigrationService';
 import { SchemaDiffService, SchemaDiffResult } from '../../src/services/schemaDiffService';
 import { LakebaseService, LakebaseBranch } from '../../src/services/lakebaseService';
 
@@ -13,7 +13,7 @@ const originalExec = cpModule.exec;
 describe('Merge Awareness — main branch view', () => {
   let provider: SchemaScmProvider;
   let gitStub: sinon.SinonStubbedInstance<GitService>;
-  let flywayStub: sinon.SinonStubbedInstance<FlywayService>;
+  let migrationStub: sinon.SinonStubbedInstance<SchemaMigrationService>;
   let schemaDiffStub: sinon.SinonStubbedInstance<SchemaDiffService>;
   let lakebaseStub: sinon.SinonStubbedInstance<LakebaseService>;
 
@@ -31,9 +31,9 @@ describe('Merge Awareness — main branch view', () => {
     (gitStub as any).onBranchChanged = new (vscode as any).EventEmitter().event;
     (gitStub as any).getPullRequest = sinon.stub().resolves(undefined);
 
-    flywayStub = sinon.createStubInstance(FlywayService);
-    flywayStub.listMigrations.returns([]);
-    flywayStub.watchMigrations.returns({ dispose: () => {} });
+    migrationStub = sinon.createStubInstance(SchemaMigrationService);
+    migrationStub.listMigrations.returns([]);
+    migrationStub.watchMigrations.returns({ dispose: () => {} });
 
     schemaDiffStub = sinon.createStubInstance(SchemaDiffService);
 
@@ -58,7 +58,7 @@ describe('Merge Awareness — main branch view', () => {
       lakebaseStub.getDefaultBranch.resolves(makeBranch('br-prod-123', 'READY', true));
       lakebaseStub.getConsoleUrl.returns('https://workspace.databricks.com/lakebase/projects/p1/branches/br-prod-123');
 
-      provider = new SchemaScmProvider(gitStub as any, flywayStub as any, schemaDiffStub as any, lakebaseStub as any);
+      provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any, lakebaseStub as any);
       await new Promise(r => setTimeout(r, 150));
 
       assert.ok(lakebaseStub.getDefaultBranch.called);
@@ -67,7 +67,7 @@ describe('Merge Awareness — main branch view', () => {
     it('handles missing default branch gracefully', async () => {
       lakebaseStub.getDefaultBranch.resolves(undefined);
 
-      provider = new SchemaScmProvider(gitStub as any, flywayStub as any, schemaDiffStub as any, lakebaseStub as any);
+      provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any, lakebaseStub as any);
       await new Promise(r => setTimeout(r, 150));
 
       // Should not throw
@@ -77,7 +77,7 @@ describe('Merge Awareness — main branch view', () => {
     it('handles Lakebase API failure gracefully', async () => {
       lakebaseStub.getDefaultBranch.rejects(new Error('auth failed'));
 
-      provider = new SchemaScmProvider(gitStub as any, flywayStub as any, schemaDiffStub as any, lakebaseStub as any);
+      provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any, lakebaseStub as any);
       await new Promise(r => setTimeout(r, 150));
 
       assert.ok(true);
@@ -86,24 +86,24 @@ describe('Merge Awareness — main branch view', () => {
 
   describe('Schema Migrations group', () => {
     it('lists all migration files on main', async () => {
-      flywayStub.listMigrations.returns([
+      migrationStub.listMigrations.returns([
         { version: '1', description: 'init', filename: 'V1__init.sql', fullPath: '/fake/root/db/V1__init.sql' },
         { version: '2', description: 'create book', filename: 'V2__create_book.sql', fullPath: '/fake/root/db/V2__create_book.sql' },
         { version: '3', description: 'create product', filename: 'V3__create_product.sql', fullPath: '/fake/root/db/V3__create_product.sql' },
       ]);
       lakebaseStub.getDefaultBranch.resolves(makeBranch('prod', 'READY', true));
 
-      provider = new SchemaScmProvider(gitStub as any, flywayStub as any, schemaDiffStub as any, lakebaseStub as any);
+      provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any, lakebaseStub as any);
       await new Promise(r => setTimeout(r, 150));
 
-      assert.ok(flywayStub.listMigrations.called);
+      assert.ok(migrationStub.listMigrations.called);
     });
 
     it('shows empty when no migrations', async () => {
-      flywayStub.listMigrations.returns([]);
+      migrationStub.listMigrations.returns([]);
       lakebaseStub.getDefaultBranch.resolves(makeBranch('prod', 'READY', true));
 
-      provider = new SchemaScmProvider(gitStub as any, flywayStub as any, schemaDiffStub as any, lakebaseStub as any);
+      provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any, lakebaseStub as any);
       await new Promise(r => setTimeout(r, 150));
 
       // Migrations group is hideWhenEmpty=true, so it hides
@@ -134,11 +134,11 @@ describe('Merge Awareness — main branch view', () => {
         }
       };
 
-      flywayStub.listMigrations.returns([]);
+      migrationStub.listMigrations.returns([]);
       lakebaseStub.getDefaultBranch.resolves(makeBranch('prod', 'READY', true));
       lakebaseStub.getConsoleUrl.returns('');
 
-      provider = new SchemaScmProvider(gitStub as any, flywayStub as any, schemaDiffStub as any, lakebaseStub as any);
+      provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any, lakebaseStub as any);
       await new Promise(r => setTimeout(r, 200));
 
       // The merge log was read
@@ -170,10 +170,10 @@ describe('Merge Awareness — main branch view', () => {
         }
       };
 
-      flywayStub.listMigrations.returns([]);
+      migrationStub.listMigrations.returns([]);
       lakebaseStub.getDefaultBranch.resolves(makeBranch('prod', 'READY', true));
 
-      provider = new SchemaScmProvider(gitStub as any, flywayStub as any, schemaDiffStub as any, lakebaseStub as any);
+      provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any, lakebaseStub as any);
       await new Promise(r => setTimeout(r, 150));
 
       // Merges group hideWhenEmpty=true, so it hides
@@ -187,7 +187,7 @@ describe('Merge Awareness — main branch view', () => {
       gitStub.getCurrentBranch.resolves('feature-x');
       gitStub.getAheadBehind.resolves({ ahead: 0, behind: 0, upstream: '' });
 
-      provider = new SchemaScmProvider(gitStub as any, flywayStub as any, schemaDiffStub as any, lakebaseStub as any);
+      provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any, lakebaseStub as any);
       await new Promise(r => setTimeout(r, 150));
 
       // On feature branch, migrations and merges groups should not be populated
@@ -199,7 +199,7 @@ describe('Merge Awareness — main branch view', () => {
     it('PR group is empty and polling stopped on main', async () => {
       lakebaseStub.getDefaultBranch.resolves(makeBranch('prod', 'READY', true));
 
-      provider = new SchemaScmProvider(gitStub as any, flywayStub as any, schemaDiffStub as any, lakebaseStub as any);
+      provider = new SchemaScmProvider(gitStub as any, migrationStub as any, schemaDiffStub as any, lakebaseStub as any);
       await new Promise(r => setTimeout(r, 150));
 
       // hasPR context should be false

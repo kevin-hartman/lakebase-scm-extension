@@ -1,5 +1,5 @@
 /**
- * R3 Live Integration Test: FlywayService.parseSql through refactored call sites
+ * R3 Live Integration Test: SchemaMigrationService.parseSql through refactored call sites
  *
  * Scenarios that exercise the consolidated migration parsing:
  * 1. graphWebview fetchSchema: parse SQL from git show at a commit
@@ -14,7 +14,7 @@ import { strict as assert } from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
 import { exec } from '../../src/utils/exec';
-import { FlywayService } from '../../src/services/flywayService';
+import { SchemaMigrationService } from '../../src/services/schemaMigrationService';
 import { GitService } from '../../src/services/gitService';
 
 const cp = require('child_process');
@@ -32,7 +32,7 @@ function git(cmd: string): string {
   return cp.execSync(`git ${cmd}`, { cwd: repoDir, timeout: 15000 }).toString().trim();
 }
 
-describe('R3 Live Integration — FlywayService.parseSql through service layer', function () {
+describe('R3 Live Integration — SchemaMigrationService.parseSql through service layer', function () {
   this.timeout(120000);
 
   before(async function () {
@@ -74,10 +74,10 @@ describe('R3 Live Integration — FlywayService.parseSql through service layer',
   // ── Scenario 1: Parse SQL from git show (graphWebview fetchSchema) ──
 
   describe('Scenario 1: Parse SQL from git show at a commit', () => {
-    it('retrieves V2 SQL from feature commit and parses with FlywayService.parseSql', async () => {
+    it('retrieves V2 SQL from feature commit and parses with SchemaMigrationService.parseSql', async () => {
       const sha = git('log --oneline feature/inventory -1 | cut -d" " -f1');
       const sql = await exec(`git show "${sha}:${migPath}/V2__create_inventory.sql"`, { cwd: repoDir });
-      const changes = FlywayService.parseSql(sql);
+      const changes = SchemaMigrationService.parseSql(sql);
 
       assert.ok(changes.some(c => c.tableName === 'inventory' && c.type === 'created'), 'inventory CREATED');
       assert.ok(changes.some(c => c.tableName === 'warehouse_locations' && c.type === 'created'), 'warehouse_locations CREATED');
@@ -94,7 +94,7 @@ describe('R3 Live Integration — FlywayService.parseSql through service layer',
     it('retrieves V3 SQL and parses DROP TABLE', async () => {
       const sha = git('log --oneline feature/inventory -1 | cut -d" " -f1');
       const sql = await exec(`git show "${sha}:${migPath}/V3__drop_legacy.sql"`, { cwd: repoDir });
-      const changes = FlywayService.parseSql(sql);
+      const changes = SchemaMigrationService.parseSql(sql);
 
       assert.ok(changes.some(c => c.tableName === 'legacy_products' && c.type === 'removed'), 'legacy_products REMOVED');
       assert.ok(changes.some(c => c.tableName === 'temp_import' && c.type === 'removed'), 'temp_import REMOVED');
@@ -128,14 +128,14 @@ describe('R3 Live Integration — FlywayService.parseSql through service layer',
     it('parses new migrations with parseMigrationSchemaChanges', () => {
       git('checkout feature/inventory');
       try {
-        const flywayService = new FlywayService();
+        const migrationService = new SchemaMigrationService();
         const fullMigDir = path.join(repoDir, migPath);
         const newMigs = ['V2__create_inventory.sql', 'V3__drop_legacy.sql'].map(f => ({
           filename: f, version: f.match(/^V(\d+)/)?.[1] || '',
           description: f.replace(/^V\d+__/, '').replace('.sql', ''),
           fullPath: path.join(fullMigDir, f),
         }));
-        const changes = flywayService.parseMigrationSchemaChanges(newMigs);
+        const changes = migrationService.parseMigrationSchemaChanges(newMigs);
 
         assert.ok(changes.some(c => c.tableName === 'inventory' && c.type === 'created'));
         assert.ok(changes.some(c => c.tableName === 'products' && c.type === 'modified'));
@@ -169,7 +169,7 @@ describe('R3 Live Integration — FlywayService.parseSql through service layer',
 
       for (const migFile of ['V2__create_inventory.sql', 'V3__drop_legacy.sql']) {
         const sql = await exec(`git show "${sha}:${migPath}/${migFile}"`, { cwd: repoDir });
-        allChanges.push(...FlywayService.parseSql(sql));
+        allChanges.push(...SchemaMigrationService.parseSql(sql));
       }
 
       const tables = allChanges.map(c => c.tableName).sort();
@@ -187,13 +187,13 @@ describe('R3 Live Integration — FlywayService.parseSql through service layer',
     it('same tables from parseSql(git show) and parseMigrationSchemaChanges(file)', async () => {
       git('checkout feature/inventory');
       try {
-        const flywayService = new FlywayService();
+        const migrationService = new SchemaMigrationService();
         const fullMigDir = path.join(repoDir, migPath);
         const v2Path = path.join(fullMigDir, 'V2__create_inventory.sql');
         const sql = fs.readFileSync(v2Path, 'utf-8');
 
-        const fromParseSql = FlywayService.parseSql(sql).map(c => c.tableName).sort();
-        const fromFile = flywayService.parseMigrationSchemaChanges([{
+        const fromParseSql = SchemaMigrationService.parseSql(sql).map(c => c.tableName).sort();
+        const fromFile = migrationService.parseMigrationSchemaChanges([{
           filename: 'V2__create_inventory.sql', version: '2',
           description: '', fullPath: v2Path,
         }]).map(c => c.tableName).sort();
@@ -207,13 +207,13 @@ describe('R3 Live Integration — FlywayService.parseSql through service layer',
     it('same column names from both methods', () => {
       git('checkout feature/inventory');
       try {
-        const flywayService = new FlywayService();
+        const migrationService = new SchemaMigrationService();
         const fullMigDir = path.join(repoDir, migPath);
         const v2Path = path.join(fullMigDir, 'V2__create_inventory.sql');
         const sql = fs.readFileSync(v2Path, 'utf-8');
 
-        const psInv = FlywayService.parseSql(sql).find(c => c.tableName === 'inventory')!;
-        const fInv = flywayService.parseMigrationSchemaChanges([{
+        const psInv = SchemaMigrationService.parseSql(sql).find(c => c.tableName === 'inventory')!;
+        const fInv = migrationService.parseMigrationSchemaChanges([{
           filename: 'V2__create_inventory.sql', version: '2',
           description: '', fullPath: v2Path,
         }]).find(c => c.tableName === 'inventory')!;

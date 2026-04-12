@@ -4,7 +4,7 @@ import { getWorkspaceRoot } from '../utils/config';
 import { LakebaseService, LakebaseBranch } from '../services/lakebaseService';
 import { GitService } from '../services/gitService';
 import { GraphService } from '../services/graphService';
-import { FlywayService } from '../services/flywayService';
+import { SchemaMigrationService } from '../services/schemaMigrationService';
 import { buildDiffTuples, sortMigrationsToEnd, DiffTuple } from '../utils/diffBuilder';
 
 interface Commit {
@@ -237,7 +237,7 @@ export class GraphWebviewProvider implements vscode.WebviewViewProvider {
                 for (const mf of migFiles) {
                   try {
                     const sql = await this.gitService.getFileAtRef(msg.sha, mf.path);
-                    const changes = FlywayService.parseSql(sql);
+                    const changes = SchemaMigrationService.parseSql(sql);
                     for (const c of changes) {
                       if (seen.has(c.tableName)) {
                         // Merge columns into existing table entry (e.g. ALTER on already-seen table)

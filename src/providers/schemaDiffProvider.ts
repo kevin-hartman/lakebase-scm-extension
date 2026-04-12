@@ -1,20 +1,20 @@
 import * as vscode from 'vscode';
 import { SchemaDiffService, SchemaDiffResult, SchemaObject } from '../services/schemaDiffService';
 import { GitService, GitFileChange } from '../services/gitService';
-import { FlywayService } from '../services/flywayService';
+import { SchemaMigrationService } from '../services/schemaMigrationService';
 import { getConfig } from '../utils/config';
 
 export class SchemaDiffProvider {
   private schemaDiffService: SchemaDiffService;
   private gitService: GitService | undefined;
-  private flywayService: FlywayService | undefined;
+  private migrationService: SchemaMigrationService | undefined;
   private panel: vscode.WebviewPanel | undefined;
   private tablePanels: Map<string, vscode.WebviewPanel> = new Map();
 
-  constructor(schemaDiffService: SchemaDiffService, gitService?: GitService, flywayService?: FlywayService) {
+  constructor(schemaDiffService: SchemaDiffService, gitService?: GitService, migrationService?: SchemaMigrationService) {
     this.schemaDiffService = schemaDiffService;
     this.gitService = gitService;
-    this.flywayService = flywayService;
+    this.migrationService = migrationService;
   }
 
   async showDiff(forceRefresh: boolean = false, fileChanges: GitFileChange[] = [], branchId?: string): Promise<void> {
@@ -43,16 +43,16 @@ export class SchemaDiffProvider {
     }
 
     // If pg_dump shows in-sync, supplement with migration file analysis
-    if (diff.inSync && !diff.error && this.gitService && this.flywayService) {
+    if (diff.inSync && !diff.error && this.gitService && this.migrationService) {
       try {
         const config = getConfig();
         const mainMigrations = await this.gitService.listMigrationsOnBranch('main', config.migrationPath);
         const mainSet = new Set(mainMigrations);
-        const branchMigrations = this.flywayService.listMigrations();
+        const branchMigrations = this.migrationService.listMigrations();
         const newMigrations = branchMigrations.filter(m => !mainSet.has(m.filename));
 
         if (newMigrations.length > 0) {
-          const schemaChanges = this.flywayService.parseMigrationSchemaChanges(newMigrations);
+          const schemaChanges = this.migrationService.parseMigrationSchemaChanges(newMigrations);
           const tableMap = new Map<string, { type: string; tableName: string; columns: Array<{ name: string; dataType: string }> }>();
           for (const change of schemaChanges) { tableMap.set(change.tableName, change); }
 

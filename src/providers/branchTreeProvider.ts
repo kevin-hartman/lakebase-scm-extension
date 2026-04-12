@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { GitService, GitBranchInfo } from '../services/gitService';
 import { LakebaseService, LakebaseBranch } from '../services/lakebaseService';
-import { FlywayService } from '../services/flywayService';
+import { SchemaMigrationService } from '../services/schemaMigrationService';
 import { SchemaDiffService } from '../services/schemaDiffService';
 import { isMainBranch } from '../utils/theme';
 import { getConfig } from '../utils/config';
@@ -31,7 +31,7 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
 
   private gitService: GitService;
   private lakebaseService: LakebaseService;
-  private flywayService: FlywayService;
+  private migrationService: SchemaMigrationService;
   private schemaDiffService: SchemaDiffService;
   private cachedData: BranchItem[] = [];
   private _suppressRefresh = false;
@@ -39,12 +39,12 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
   constructor(
     gitService: GitService,
     lakebaseService: LakebaseService,
-    flywayService: FlywayService,
+    migrationService: SchemaMigrationService,
     schemaDiffService?: SchemaDiffService
   ) {
     this.gitService = gitService;
     this.lakebaseService = lakebaseService;
-    this.flywayService = flywayService;
+    this.migrationService = migrationService;
     this.schemaDiffService = schemaDiffService!;
 
     this.gitService.onBranchChanged(() => this.refresh());
@@ -565,7 +565,7 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
     }
 
     // Fallback: parse migration files, compare against main to determine diff status
-    const allMigrations = this.flywayService.listMigrations();
+    const allMigrations = this.migrationService.listMigrations();
     if (allMigrations.length > 0) {
       // Find which migrations are new on this branch (not on main)
       const config = getConfig();
@@ -578,7 +578,7 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
       const newMigrations = allMigrations.filter(m => !mainMigrationSet.has(m.filename));
 
       // Parse all migrations for the full table inventory with columns
-      const allChanges = this.flywayService.parseMigrationSchemaChanges(allMigrations);
+      const allChanges = this.migrationService.parseMigrationSchemaChanges(allMigrations);
       const allTables = new Map<string, { type: string; columns: Array<{ name: string; dataType: string }> }>();
       for (const c of allChanges) {
         const existing = allTables.get(c.tableName);
@@ -587,7 +587,7 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
       }
 
       // Parse only new migrations to identify what changed on this branch
-      const newChanges = this.flywayService.parseMigrationSchemaChanges(newMigrations);
+      const newChanges = this.migrationService.parseMigrationSchemaChanges(newMigrations);
       const changedTables = new Map<string, string>();
       for (const c of newChanges) { changedTables.set(c.tableName, c.type); }
 

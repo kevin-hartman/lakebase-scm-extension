@@ -181,8 +181,8 @@ describe('R6 DiffService — Live Integration', function () {
         `git show "${featureSha}:src/main/resources/db/migration/V2__add_t2.sql"`,
         { cwd: repoDir }
       );
-      const { FlywayService } = require('../../src/services/flywayService');
-      const changes = FlywayService.parseSql(sql);
+      const { SchemaMigrationService } = require('../../src/services/schemaMigrationService');
+      const changes = SchemaMigrationService.parseSql(sql);
       assert.ok(changes.some((c: any) => c.tableName === 't2' && c.type === 'created'));
       assert.ok(changes.some((c: any) => c.tableName === 't1' && c.type === 'modified'));
     });

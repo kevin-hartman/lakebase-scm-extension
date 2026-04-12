@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { GitService } from './gitService';
-import { FlywayService } from './flywayService';
+import { SchemaMigrationService } from './schemaMigrationService';
 import { getWorkspaceRoot } from '../utils/config';
 
 export type DiffTuple = [vscode.Uri, vscode.Uri | undefined, vscode.Uri | undefined];
@@ -19,7 +19,7 @@ type PaneMode = 'single' | 'two';
 export class DiffService {
   constructor(
     private gitService: GitService,
-    private flywayService: FlywayService,
+    private migrationService: SchemaMigrationService,
   ) {}
 
   /**
@@ -161,7 +161,7 @@ export class DiffService {
     for (const mf of [...migPaths]) {
       try {
         const sql = await this.gitService.getFileAtRef(sha, mf);
-        for (const tc of FlywayService.parseSql(sql)) {
+        for (const tc of SchemaMigrationService.parseSql(sql)) {
           if (tc.tableName === 'flyway_schema_history' || seen.has(tc.tableName)) { continue; }
           seen.add(tc.tableName);
           changes.push([

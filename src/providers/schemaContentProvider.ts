@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { LakebaseService } from '../services/lakebaseService';
 import { SchemaDiffService } from '../services/schemaDiffService';
-import { FlywayService } from '../services/flywayService';
+import { SchemaMigrationService } from '../services/schemaMigrationService';
 
 /**
  * Content provider that returns CREATE TABLE DDL for a table on a specific branch.
@@ -13,7 +13,7 @@ import { FlywayService } from '../services/flywayService';
 export class SchemaContentProvider implements vscode.TextDocumentContentProvider {
   constructor(
     private schemaDiffService: SchemaDiffService,
-    private flywayService?: FlywayService,
+    private migrationService?: SchemaMigrationService,
   ) {}
 
   async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
@@ -52,10 +52,10 @@ export class SchemaContentProvider implements vscode.TextDocumentContentProvider
     }
 
     // Fallback: parse migration files for table DDL
-    if (this.flywayService) {
-      const migrations = this.flywayService.listMigrations();
+    if (this.migrationService) {
+      const migrations = this.migrationService.listMigrations();
       if (migrations.length > 0) {
-        const changes = this.flywayService.parseMigrationSchemaChanges(migrations);
+        const changes = this.migrationService.parseMigrationSchemaChanges(migrations);
 
         if (side === 'production') {
           // Production side: only show DDL for tables that are MODIFIED (existed before)

@@ -104,7 +104,7 @@
       },
       {
         "command": "lakebaseSync.runMigrate",
-        "title": "Run Flyway Migrate"
+        "title": "Run Migrations"
       },
       {
         "command": "lakebaseSync.showMigrationHistory",
@@ -1286,7 +1286,7 @@
         "lakebaseSync.migrationPath": {
           "type": "string",
           "default": "src/main/resources/db/migration",
-          "description": "Path to Flyway migration files relative to workspace root"
+          "description": "Path to migration files relative to workspace root"
         },
         "lakebaseSync.showUnifiedRepo": {
           "type": "boolean",

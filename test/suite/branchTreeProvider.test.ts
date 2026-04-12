@@ -3,14 +3,14 @@ import * as sinon from 'sinon';
 import { BranchTreeProvider, BranchItem } from '../../src/providers/branchTreeProvider';
 import { GitService } from '../../src/services/gitService';
 import { LakebaseService, LakebaseBranch } from '../../src/services/lakebaseService';
-import { FlywayService } from '../../src/services/flywayService';
+import { SchemaMigrationService } from '../../src/services/schemaMigrationService';
 import * as vscode from 'vscode';
 
 describe('BranchTreeProvider', () => {
   let provider: BranchTreeProvider;
   let gitStub: sinon.SinonStubbedInstance<GitService>;
   let lakebaseStub: sinon.SinonStubbedInstance<LakebaseService>;
-  let flywayStub: sinon.SinonStubbedInstance<FlywayService>;
+  let migrationStub: sinon.SinonStubbedInstance<SchemaMigrationService>;
 
   beforeEach(() => {
     gitStub = sinon.createStubInstance(GitService);
@@ -21,8 +21,8 @@ describe('BranchTreeProvider', () => {
       name.replace(/\//g, '-').toLowerCase().replace(/[^a-z0-9-]/g, '-').substring(0, 63)
     );
 
-    flywayStub = sinon.createStubInstance(FlywayService);
-    provider = new BranchTreeProvider(gitStub as any, lakebaseStub as any, flywayStub as any);
+    migrationStub = sinon.createStubInstance(SchemaMigrationService);
+    provider = new BranchTreeProvider(gitStub as any, lakebaseStub as any, migrationStub as any);
   });
 
   afterEach(() => sinon.restore());

@@ -19,7 +19,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { GitService } from '../../src/services/gitService';
 import { LakebaseService } from '../../src/services/lakebaseService';
-import { FlywayService } from '../../src/services/flywayService';
+import { SchemaMigrationService } from '../../src/services/schemaMigrationService';
 
 const cp = require('child_process');
 
@@ -322,7 +322,7 @@ describe('Refactoring Phase Integration Tests', function () {
 
   describe('R3: Migration Schema Detection', () => {
     it('parseMigrationSchemaChanges detects CREATE TABLE', () => {
-      const flywayService = new FlywayService();
+      const migrationService = new SchemaMigrationService();
       const migDir = path.join(repoDir, 'src/main/resources/db/migration');
       const migrations = fs.readdirSync(migDir)
         .filter((f: string) => /^V\d+.*\.sql$/.test(f))
@@ -333,7 +333,7 @@ describe('Refactoring Phase Integration Tests', function () {
           description: f.replace(/^V\d+__/, '').replace('.sql', '').replace(/_/g, ' '),
           fullPath: path.join(migDir, f),
         }));
-      const changes = flywayService.parseMigrationSchemaChanges(migrations);
+      const changes = migrationService.parseMigrationSchemaChanges(migrations);
       assert.ok(changes.length >= 2, `Should find at least 2 tables, got ${changes.length}: ${changes.map(c => c.tableName).join(', ')}`);
       const product = changes.find((c: any) => c.tableName === 'product');
       assert.ok(product, 'Should find product table');
@@ -341,9 +341,9 @@ describe('Refactoring Phase Integration Tests', function () {
     });
 
     it('parseMigrationSchemaChanges detects ALTER TABLE', () => {
-      const flywayService = new FlywayService();
+      const migrationService = new SchemaMigrationService();
       const v2Path = path.join(repoDir, 'src/main/resources/db/migration/V2__create_orders_table.sql');
-      const changes = flywayService.parseMigrationSchemaChanges([{
+      const changes = migrationService.parseMigrationSchemaChanges([{
         filename: 'V2__create_orders_table.sql', version: '2',
         description: 'create orders table', fullPath: v2Path,
       }]);

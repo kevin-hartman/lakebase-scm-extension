@@ -17,7 +17,7 @@ export interface MigrationSchemaChange {
   migration?: MigrationFile;
 }
 
-export class FlywayService {
+export class SchemaMigrationService {
   listMigrations(): MigrationFile[] {
     const root = getWorkspaceRoot();
     if (!root) {
@@ -109,7 +109,7 @@ export class FlywayService {
     for (const mig of migrations) {
       if (!fs.existsSync(mig.fullPath)) { continue; }
       const content = fs.readFileSync(mig.fullPath, 'utf-8');
-      const parser = mig.filename.endsWith('.py') ? FlywayService.parseAlembic : FlywayService.parseSql;
+      const parser = mig.filename.endsWith('.py') ? SchemaMigrationService.parseAlembic : SchemaMigrationService.parseSql;
       for (const change of parser(content)) {
         changes.push({ ...change, migration: mig });
       }
@@ -157,30 +157,6 @@ export class FlywayService {
     }
 
     return changes;
-  }
-
-  /**
-   * Run Flyway migrate against the branch database.
-   * Uses ./scripts/flyway-migrate.sh if available, falls back to ./mvnw flyway:migrate.
-   * Requires .env with SPRING_DATASOURCE_URL/USERNAME/PASSWORD set (post-checkout hook does this).
-   * @param projectDir - The project root directory
-   * @param extraArgs - Additional maven arguments (optional)
-   */
-  static async migrate(projectDir: string, extraArgs?: string): Promise<string> {
-    const { exec } = require('../utils/exec');
-    const path = require('path');
-    const fs = require('fs');
-
-    const scriptPath = path.join(projectDir, 'scripts', 'flyway-migrate.sh');
-    const mvnwPath = path.join(projectDir, 'mvnw');
-
-    if (fs.existsSync(scriptPath)) {
-      return exec(`bash "${scriptPath}" ${extraArgs || ''}`, { cwd: projectDir, timeout: 120000 });
-    } else if (fs.existsSync(mvnwPath)) {
-      return exec(`bash -c 'set -a; source .env 2>/dev/null; set +a; ./mvnw flyway:migrate ${extraArgs || ''}'`, { cwd: projectDir, timeout: 120000 });
-    } else {
-      throw new Error('Neither scripts/flyway-migrate.sh nor mvnw found. Cannot run Flyway migrate.');
-    }
   }
 
   watchMigrations(callback: () => void): vscode.Disposable {

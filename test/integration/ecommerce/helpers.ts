@@ -29,7 +29,7 @@ import { GitService } from '../../../src/services/gitService';
 import { LakebaseService } from '../../../src/services/lakebaseService';
 import { ScaffoldService } from '../../../src/services/scaffoldService';
 import { ProjectCreationService, ProjectCreationInput } from '../../../src/services/projectCreationService';
-import { FlywayService } from '../../../src/services/flywayService';
+import { SchemaMigrationService } from '../../../src/services/schemaMigrationService';
 
 // ── Context shared across all scenarios ──────────────────────────────
 
@@ -542,9 +542,9 @@ export function verifyFileNotOnGitHub(ctx: ScenarioContext, filePath: string): b
 
 // ── Schema Parsing ───────────────────────────────────────────────────
 
-/** Parse migration SQL using FlywayService.parseSql and return schema changes */
+/** Parse migration SQL using SchemaMigrationService.parseSql and return schema changes */
 export function parseMigrationSql(sql: string) {
-  return FlywayService.parseSql(sql);
+  return SchemaMigrationService.parseSql(sql);
 }
 
 // ── Lakebase Branch Cleanup ──────────────────────────────────────────

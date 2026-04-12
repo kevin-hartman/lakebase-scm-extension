@@ -4,13 +4,13 @@ import * as vscode from 'vscode';
 import { StatusBarProvider } from '../../src/providers/statusBarProvider';
 import { GitService } from '../../src/services/gitService';
 import { LakebaseService, LakebaseBranch } from '../../src/services/lakebaseService';
-import { FlywayService } from '../../src/services/flywayService';
+import { SchemaMigrationService } from '../../src/services/schemaMigrationService';
 
 describe('StatusBarProvider', () => {
   let provider: StatusBarProvider;
   let gitStub: sinon.SinonStubbedInstance<GitService>;
   let lakebaseStub: sinon.SinonStubbedInstance<LakebaseService>;
-  let flywayStub: sinon.SinonStubbedInstance<FlywayService>;
+  let migrationStub: sinon.SinonStubbedInstance<SchemaMigrationService>;
 
   beforeEach(() => {
     gitStub = sinon.createStubInstance(GitService);
@@ -21,7 +21,7 @@ describe('StatusBarProvider', () => {
       name.replace(/\//g, '-').toLowerCase()
     );
 
-    flywayStub = sinon.createStubInstance(FlywayService);
+    migrationStub = sinon.createStubInstance(SchemaMigrationService);
   });
 
   afterEach(() => sinon.restore());
@@ -35,9 +35,9 @@ describe('StatusBarProvider', () => {
       gitStub.getCurrentBranch.resolves('feature-x');
       gitStub.getCachedBranch.returns('');
       lakebaseStub.getBranchByName.resolves(makeBranch('feature-x'));
-      flywayStub.getLatestVersion.returns('3');
+      migrationStub.getLatestVersion.returns('3');
 
-      provider = new StatusBarProvider(gitStub as any, lakebaseStub as any, flywayStub as any);
+      provider = new StatusBarProvider(gitStub as any, lakebaseStub as any, migrationStub as any);
       await provider.refresh();
 
       const lb = provider.getCurrentLakebaseBranch();
@@ -49,9 +49,9 @@ describe('StatusBarProvider', () => {
       gitStub.getCurrentBranch.resolves('orphan-branch');
       gitStub.getCachedBranch.returns('');
       lakebaseStub.getBranchByName.resolves(undefined);
-      flywayStub.getLatestVersion.returns(undefined);
+      migrationStub.getLatestVersion.returns(undefined);
 
-      provider = new StatusBarProvider(gitStub as any, lakebaseStub as any, flywayStub as any);
+      provider = new StatusBarProvider(gitStub as any, lakebaseStub as any, migrationStub as any);
       await provider.refresh();
 
       const lb = provider.getCurrentLakebaseBranch();
@@ -62,9 +62,9 @@ describe('StatusBarProvider', () => {
       gitStub.getCurrentBranch.resolves('main');
       gitStub.getCachedBranch.returns('');
       lakebaseStub.getDefaultBranch.resolves(makeBranch('production', 'READY', true));
-      flywayStub.getLatestVersion.returns('1');
+      migrationStub.getLatestVersion.returns('1');
 
-      provider = new StatusBarProvider(gitStub as any, lakebaseStub as any, flywayStub as any);
+      provider = new StatusBarProvider(gitStub as any, lakebaseStub as any, migrationStub as any);
       await provider.refresh();
 
       const lb = provider.getCurrentLakebaseBranch();
@@ -77,9 +77,9 @@ describe('StatusBarProvider', () => {
     it('prevents refresh when suppressed', async () => {
       gitStub.getCurrentBranch.resolves('main');
       lakebaseStub.listBranches.resolves([]);
-      flywayStub.getLatestVersion.returns(undefined);
+      migrationStub.getLatestVersion.returns(undefined);
 
-      provider = new StatusBarProvider(gitStub as any, lakebaseStub as any, flywayStub as any);
+      provider = new StatusBarProvider(gitStub as any, lakebaseStub as any, migrationStub as any);
       provider.suppressRefresh = true;
       await provider.refresh();
 
@@ -93,9 +93,9 @@ describe('StatusBarProvider', () => {
     it('disposes without error', () => {
       gitStub.getCurrentBranch.resolves('main');
       lakebaseStub.listBranches.resolves([]);
-      flywayStub.getLatestVersion.returns(undefined);
+      migrationStub.getLatestVersion.returns(undefined);
 
-      provider = new StatusBarProvider(gitStub as any, lakebaseStub as any, flywayStub as any);
+      provider = new StatusBarProvider(gitStub as any, lakebaseStub as any, migrationStub as any);
       assert.doesNotThrow(() => provider.dispose());
     });
   });

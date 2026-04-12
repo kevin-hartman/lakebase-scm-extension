@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { GitService } from './services/gitService';
 import { LakebaseService } from './services/lakebaseService';
-import { FlywayService } from './services/flywayService';
+import { SchemaMigrationService } from './services/schemaMigrationService';
 import { SchemaDiffService } from './services/schemaDiffService';
 import { StatusBarProvider } from './providers/statusBarProvider';
 import { BranchTreeProvider, BranchItem } from './providers/branchTreeProvider';
@@ -22,7 +22,7 @@ import { RunnerTreeProvider } from './providers/runnerTreeProvider';
 
 let gitService: GitService;
 let lakebaseService: LakebaseService;
-let flywayService: FlywayService;
+let migrationService: SchemaMigrationService;
 let schemaDiffService: SchemaDiffService;
 let statusBarProvider: StatusBarProvider;
 let branchTreeProvider: BranchTreeProvider;
@@ -72,9 +72,9 @@ export async function activate(context: vscode.ExtensionContext) {
   // Initialize services
   gitService = new GitService();
   lakebaseService = new LakebaseService();
-  flywayService = new FlywayService();
+  migrationService = new SchemaMigrationService();
   schemaDiffService = new SchemaDiffService(lakebaseService);
-  schemaDiffProvider = new SchemaDiffProvider(schemaDiffService, gitService, flywayService);
+  schemaDiffProvider = new SchemaDiffProvider(schemaDiffService, gitService, migrationService);
 
   await gitService.initialize();
 
@@ -100,16 +100,16 @@ export async function activate(context: vscode.ExtensionContext) {
   }
 
   // Initialize providers
-  statusBarProvider = new StatusBarProvider(gitService, lakebaseService, flywayService);
-  branchTreeProvider = new BranchTreeProvider(gitService, lakebaseService, flywayService, schemaDiffService);
+  statusBarProvider = new StatusBarProvider(gitService, lakebaseService, migrationService);
+  branchTreeProvider = new BranchTreeProvider(gitService, lakebaseService, migrationService, schemaDiffService);
 
   // Initialize SCM provider — compares actual Lakebase branch schemas
-  schemaScmProvider = new SchemaScmProvider(gitService, flywayService, schemaDiffService, lakebaseService);
+  schemaScmProvider = new SchemaScmProvider(gitService, migrationService, schemaDiffService, lakebaseService);
 
   // Register schema DDL content provider for multi-diff editor
   const schemaContentProvider = vscode.workspace.registerTextDocumentContentProvider(
     'lakebase-schema-content',
-    new SchemaContentProvider(schemaDiffService, flywayService)
+    new SchemaContentProvider(schemaDiffService, migrationService)
   );
 
   // Register commit content provider for graph review diffs
@@ -185,7 +185,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Watch migration files for status bar + tree updates
   // (SCM provider has its own migration watcher — don't duplicate)
-  const migrationWatcher = flywayService.watchMigrations(() => {
+  const migrationWatcher = migrationService.watchMigrations(() => {
     statusBarProvider.refresh();
     branchTreeProvider.refresh();
   });
@@ -383,7 +383,7 @@ export async function activate(context: vscode.ExtensionContext) {
       const lb = statusBarProvider.getCurrentLakebaseBranch();
 
       if (lb) {
-        const version = flywayService.getLatestVersion() || '?';
+        const version = migrationService.getLatestVersion() || '?';
         vscode.window.showInformationMessage(
           `Git: ${gitBranch} | DB: ${lb.branchId} (${lb.state}) | Migrations: V${version}`
         );
@@ -1034,7 +1034,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand('lakebaseSync.showMigrationHistory', async () => {
-      const migrations = flywayService.listMigrations();
+      const migrations = migrationService.listMigrations();
       if (migrations.length === 0) {
         vscode.window.showInformationMessage('No migration files found.');
         return;
@@ -1244,7 +1244,7 @@ export async function activate(context: vscode.ExtensionContext) {
             // 6. Run Flyway migrate (applies only migrations present on this branch)
             progress.report({ message: 'Applying migrations...' });
             schemaDiffService.clearCache(); // DB will change after Flyway runs
-            const migrationCount = flywayService.getMigrationCount();
+            const migrationCount = migrationService.getMigrationCount();
             if (migrationCount > 0) {
               const terminal = vscode.window.createTerminal({
                 name: `Flyway: ${targetGitBranch}`,
@@ -1340,10 +1340,10 @@ export async function activate(context: vscode.ExtensionContext) {
             const config = getConfig();
             const mainMigrations = await gitService.listMigrationsOnBranch('main', config.migrationPath);
             const mainSet = new Set(mainMigrations);
-            const branchMigrations = flywayService.listMigrations();
+            const branchMigrations = migrationService.listMigrations();
             const newMigrations = branchMigrations.filter(m => !mainSet.has(m.filename));
             if (newMigrations.length > 0) {
-              const schemaChanges = flywayService.parseMigrationSchemaChanges(newMigrations);
+              const schemaChanges = migrationService.parseMigrationSchemaChanges(newMigrations);
               const seen = new Set<string>();
               for (const change of schemaChanges) {
                 if (seen.has(change.tableName)) { continue; }
