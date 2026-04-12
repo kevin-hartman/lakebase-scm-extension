@@ -24,25 +24,34 @@ if [ -z "${DATABASE_URL:-}" ] && [ -n "${SPRING_DATASOURCE_URL:-}" ]; then
   export DATABASE_URL
 fi
 
-# Detect project language
+# Detect project language and run pending migrations before tests
 if [ -f "$REPO_ROOT/pom.xml" ]; then
   # Java / Maven — export SPRING_DATASOURCE_* for Maven/Spring
   if [ -z "${SPRING_DATASOURCE_URL:-}" ] && [ -n "${DATABASE_URL:-}" ]; then
-    # Derive SPRING_DATASOURCE_* from DATABASE_URL
     SPRING_DATASOURCE_URL="jdbc:$(echo "$DATABASE_URL" | sed 's|^postgresql://[^@]*@|postgresql://|')"
     SPRING_DATASOURCE_USERNAME="${DB_USERNAME:-}"
     SPRING_DATASOURCE_PASSWORD="${DB_PASSWORD:-}"
   fi
   export SPRING_DATASOURCE_URL SPRING_DATASOURCE_USERNAME SPRING_DATASOURCE_PASSWORD
+  echo "Running Flyway migrations..."
+  if [ -f "$REPO_ROOT/scripts/flyway-migrate.sh" ]; then
+    "$REPO_ROOT/scripts/flyway-migrate.sh"
+  else
+    ./mvnw -q flyway:migrate
+  fi
   ./mvnw test "$@"
 elif [ -f "$REPO_ROOT/requirements.txt" ] || [ -f "$REPO_ROOT/pyproject.toml" ]; then
-  # Python / pytest
+  # Python / Alembic + pytest
   if [ -d ".venv" ]; then
     source .venv/bin/activate
   fi
-  pytest "$@"
+  echo "Running Alembic migrations..."
+  uv run alembic upgrade head
+  uv run pytest "$@"
 elif [ -f "$REPO_ROOT/package.json" ]; then
-  # Node.js / Jest
+  # Node.js / Knex + Jest
+  echo "Running Knex migrations..."
+  npx knex migrate:latest
   npm test "$@"
 else
   echo "Could not detect project language. Expected pom.xml (Java), pyproject.toml/requirements.txt (Python), or package.json (Node.js)."
