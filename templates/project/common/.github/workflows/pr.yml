@@ -407,10 +407,8 @@ jobs:
               npm test
             fi
           else
-            echo "No CI branch URL; skipping DB tests."
-            if [ "$LANG" = "java" ]; then
-              ./mvnw -q test -DskipTests=true
-            fi
+            echo "::error::No CI branch URL — cannot run tests without a database. Check the 'Create CI database branch' step for details."
+            exit 1
           fi
 
       - name: Install PostgreSQL client (for schema dump)
