@@ -1093,7 +1093,7 @@
         },
         {
           "command": "lakebaseSync.deleteBranch",
-          "when": "view == lakebaseBranches && viewItem == dbItemBranch",
+          "when": "view == lakebaseBranches && viewItem =~ /^(dbItemBranch|dbOnlyBranch)$/",
           "group": "inline@2"
         },
         {

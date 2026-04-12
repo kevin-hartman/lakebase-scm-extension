@@ -233,6 +233,7 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
             );
             item.iconPath = new vscode.ThemeIcon('cloud', new vscode.ThemeColor('charts.blue'));
             item.description = lb.state;
+            item.contextValue = 'dbOnlyBranch';
             items.push(item);
           }
         }
