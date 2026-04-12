@@ -276,15 +276,8 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
       const lbState = lb?.state || 'no db branch';
       const lbName = lb ? (lb.isDefault ? 'default' : lb.branchId) : '';
       item.description = lbName ? `→ ${lbName} (${lbState})` : lbState;
-      // Inline icon context: create when no Lakebase branch, delete when it exists
-      if (isMain) {
-        item.contextValue = lb ? 'currentBranchDbDefault' : 'currentBranch';
-      } else {
-        item.contextValue = lb ? 'currentBranchDbExists' : 'currentBranchDbMissing';
-      }
     } else {
       item.description = lb?.state || '';
-      item.contextValue = lb ? 'branchDbExists' : 'branch';
     }
 
     return item;
@@ -317,7 +310,8 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
       }
     }
 
-    // Database — collapsible to show tables
+    // Database — collapsible to show tables; inline icons for delete/refresh/console
+    const isCurrent = parent.itemType === 'currentBranch';
     if (lb) {
       const dbLabel = lb.isDefault ? `production (${lb.state})` : `${lb.branchId} (${lb.state})`;
       const dbItem = new BranchItem(undefined, lb, 'tableList',
@@ -329,6 +323,8 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
       dbItem.tooltip = lb.isDefault
         ? 'Click to expand and see tables on production'
         : 'Click to expand and see tables in this Lakebase branch';
+      // Context for inline icons: delete, refresh, open in console
+      dbItem.contextValue = lb.isDefault ? 'dbItemDefault' : 'dbItemBranch';
       details.push(dbItem);
 
       if (lb.endpointHost) {
@@ -336,6 +332,12 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
         epItem.iconPath = new vscode.ThemeIcon('plug');
         details.push(epItem);
       }
+    } else if (isCurrent) {
+      const noDbItem = new BranchItem(undefined, undefined, 'detail', 'No Lakebase branch');
+      noDbItem.iconPath = new vscode.ThemeIcon('circle-slash', new vscode.ThemeColor('disabledForeground'));
+      // Context for inline create icon
+      noDbItem.contextValue = 'dbItemMissing';
+      details.push(noDbItem);
     } else {
       const noDbItem = new BranchItem(undefined, undefined, 'detail', 'No Lakebase branch');
       noDbItem.iconPath = new vscode.ThemeIcon('circle-slash', new vscode.ThemeColor('disabledForeground'));
