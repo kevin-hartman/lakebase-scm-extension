@@ -1031,8 +1031,8 @@ export async function activate(context: vscode.ExtensionContext) {
       const lang = detectLanguage(root);
       const cmds: Record<string, { name: string; cmd: string }> = {
         java:    { name: 'Flyway Migrate',   cmd: './scripts/flyway-migrate.sh' },
-        python:  { name: 'Alembic Migrate',  cmd: 'uv run alembic upgrade head' },
-        nodejs:  { name: 'Knex Migrate',     cmd: 'npx knex migrate:latest' },
+        python:  { name: 'Alembic Migrate',  cmd: './scripts/refresh-token.sh uv run alembic upgrade head' },
+        nodejs:  { name: 'Knex Migrate',     cmd: 'set -a; source .env 2>/dev/null; set +a; npx knex migrate:latest' },
         unknown: { name: 'Run Migrations',   cmd: './scripts/flyway-migrate.sh' },
       };
       const { name, cmd } = cmds[lang];
@@ -1257,8 +1257,8 @@ export async function activate(context: vscode.ExtensionContext) {
               const switchLang = detectLanguage(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
               const migCmds: Record<string, { name: string; cmd: string }> = {
                 java:    { name: `Flyway: ${targetGitBranch}`,   cmd: './scripts/flyway-migrate.sh' },
-                python:  { name: `Alembic: ${targetGitBranch}`,  cmd: 'uv run alembic upgrade head' },
-                nodejs:  { name: `Knex: ${targetGitBranch}`,     cmd: 'npx knex migrate:latest' },
+                python:  { name: `Alembic: ${targetGitBranch}`,  cmd: './scripts/refresh-token.sh uv run alembic upgrade head' },
+                nodejs:  { name: `Knex: ${targetGitBranch}`,     cmd: 'set -a; source .env 2>/dev/null; set +a; npx knex migrate:latest' },
                 unknown: { name: `Migrate: ${targetGitBranch}`,  cmd: './scripts/flyway-migrate.sh' },
               };
               const migCmd = migCmds[switchLang];
