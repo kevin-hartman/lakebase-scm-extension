@@ -1083,7 +1083,7 @@
       "view/item/context": [
         {
           "command": "lakebaseSync.createBranch",
-          "when": "view == lakebaseBranches && viewItem == dbItemMissing",
+          "when": "view == lakebaseBranches && viewItem =~ /^(dbItemMissing|currentBranchNoDb|branchNoDb)$/",
           "group": "inline@1"
         },
         {

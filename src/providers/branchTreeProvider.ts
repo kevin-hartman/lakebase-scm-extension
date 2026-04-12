@@ -277,8 +277,10 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
       const lbState = lb?.state || 'no db branch';
       const lbName = lb ? (lb.isDefault ? 'default' : lb.branchId) : '';
       item.description = lbName ? `→ ${lbName} (${lbState})` : lbState;
+      if (!lb && !isMain) { item.contextValue = 'currentBranchNoDb'; }
     } else {
       item.description = lb?.state || '';
+      if (!lb) { item.contextValue = 'branchNoDb'; }
     }
 
     return item;
