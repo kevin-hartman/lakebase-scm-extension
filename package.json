@@ -960,16 +960,6 @@
           "group": "navigation@5"
         },
         {
-          "command": "lakebaseSync.createBranch",
-          "when": "view == lakebaseChanges && lakebaseSync.onFeatureBranch",
-          "group": "navigation@6"
-        },
-        {
-          "command": "lakebaseSync.deleteBranch",
-          "when": "view == lakebaseChanges && lakebaseSync.onFeatureBranch",
-          "group": "navigation@7"
-        },
-        {
           "command": "lakebaseSync.pull",
           "when": "view == lakebaseChanges",
           "group": "1_top@1"
@@ -1092,23 +1082,23 @@
       ],
       "view/item/context": [
         {
-          "command": "lakebaseSync.refreshCredentials",
-          "when": "view == lakebaseBranches && viewItem == lakebaseDbBranch",
+          "command": "lakebaseSync.createBranch",
+          "when": "view == lakebaseBranches && viewItem == currentBranchDbMissing",
           "group": "inline@1"
         },
         {
-          "command": "lakebaseSync.deleteLakebaseBranch",
-          "when": "view == lakebaseBranches && viewItem == lakebaseDbBranch",
+          "command": "lakebaseSync.deleteBranch",
+          "when": "view == lakebaseBranches && viewItem == currentBranchDbExists",
+          "group": "inline@1"
+        },
+        {
+          "command": "lakebaseSync.refreshCredentials",
+          "when": "view == lakebaseBranches && viewItem == currentBranchDbExists",
           "group": "inline@2"
         },
         {
           "command": "lakebaseSync.refreshCredentials",
-          "when": "view == lakebaseBranches && viewItem == lakebaseDbDefault",
-          "group": "inline@1"
-        },
-        {
-          "command": "lakebaseSync.createLakebaseBranchForGit",
-          "when": "view == lakebaseBranches && viewItem == lakebaseDbMissing",
+          "when": "view == lakebaseBranches && viewItem == currentBranchDbDefault",
           "group": "inline@1"
         },
         {
@@ -1233,12 +1223,12 @@
         },
         {
           "command": "lakebaseSync.openInConsole",
-          "when": "view == lakebaseBranches && viewItem =~ /^(branch|currentBranch)$/",
+          "when": "view == lakebaseBranches && viewItem =~ /^(branch|currentBranch|branchDbExists|currentBranchDbExists|currentBranchDbDefault|currentBranchDbMissing)$/",
           "group": "inline"
         },
         {
           "command": "lakebaseSync.deleteBranch",
-          "when": "view == lakebaseBranches && viewItem == branch"
+          "when": "view == lakebaseBranches && viewItem =~ /^(branch|branchDbExists)$/"
         },
         {
           "command": "lakebaseSync.stageFile",

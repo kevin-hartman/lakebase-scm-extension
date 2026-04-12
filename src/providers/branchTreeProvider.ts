@@ -276,8 +276,15 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
       const lbState = lb?.state || 'no db branch';
       const lbName = lb ? (lb.isDefault ? 'default' : lb.branchId) : '';
       item.description = lbName ? `→ ${lbName} (${lbState})` : lbState;
+      // Inline icon context: create when no Lakebase branch, delete when it exists
+      if (isMain) {
+        item.contextValue = lb ? 'currentBranchDbDefault' : 'currentBranch';
+      } else {
+        item.contextValue = lb ? 'currentBranchDbExists' : 'currentBranchDbMissing';
+      }
     } else {
       item.description = lb?.state || '';
+      item.contextValue = lb ? 'branchDbExists' : 'branch';
     }
 
     return item;
