@@ -1092,9 +1092,19 @@
           "group": "inline@1"
         },
         {
+          "command": "lakebaseSync.openInConsole",
+          "when": "view == lakebaseBranches && viewItem == dbOnlyBranch",
+          "group": "inline@1"
+        },
+        {
+          "command": "lakebaseSync.showBranchDiff",
+          "when": "view == lakebaseBranches && viewItem == dbOnlyBranch",
+          "group": "inline@2"
+        },
+        {
           "command": "lakebaseSync.deleteBranch",
           "when": "view == lakebaseBranches && viewItem =~ /^(dbItemBranch|dbOnlyBranch)$/",
-          "group": "inline@2"
+          "group": "inline@3"
         },
         {
           "command": "lakebaseSync.refreshCredentials",
