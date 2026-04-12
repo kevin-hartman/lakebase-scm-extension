@@ -49,6 +49,20 @@ The wizard walks through 10 steps:
 
 After creation, the extension offers to open the new project folder.
 
+### Grant Lakebase Permissions to the CI Service Principal
+
+During project creation (step 10), the extension creates a Databricks **service principal** for CI/CD and syncs its credentials to GitHub secrets. However, the service principal also needs **Can Manage** permission on the Lakebase project — there is no CLI or API for this, so it must be done manually in the UI.
+
+**When:** Immediately after project creation completes — before you open your first pull request. The PR workflow creates a Lakebase CI branch, which requires this permission.
+
+**Where:** In your Databricks workspace:
+1. Navigate to **Lakebase** in the left sidebar
+2. Click your project (the name matches your repo name)
+3. Click **Permissions**
+4. Add the service principal **CI/CD - \<your-repo-name\>** with **Can Manage**
+
+If you skip this step, PR workflows will run but skip all database tests (you'll see "No CI branch URL; skipping DB tests" in the workflow log).
+
 ### Language Templates
 
 | Language | Framework | Migration Tool | Package Manager | Test Framework |
