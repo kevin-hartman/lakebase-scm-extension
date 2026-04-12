@@ -13,7 +13,7 @@ import { MigrationsTreeProvider } from './providers/migrationsTree';
 import { PullRequestTreeProvider } from './providers/pullRequestTree';
 import { MergesTreeProvider } from './providers/mergesTree';
 import { GraphWebviewProvider } from './providers/graphWebview';
-import { getConfig, getWorkspaceRoot } from './utils/config';
+import { getConfig, getWorkspaceRoot, detectLanguage } from './utils/config';
 import { isMainBranch } from './utils/theme';
 import { buildDiffTuples, DiffTuple } from './utils/diffBuilder';
 import { ProjectCreationService, PROJECT_CREATION_PROMPTS } from './services/projectCreationService';
@@ -1026,11 +1026,19 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand('lakebaseSync.runMigrate', async () => {
-      // Clear schema cache — database will change after Flyway runs
       schemaDiffService.clearCache();
-      const terminal = vscode.window.createTerminal('Flyway Migrate');
+      const root = getWorkspaceRoot();
+      const lang = detectLanguage(root);
+      const cmds: Record<string, { name: string; cmd: string }> = {
+        java:    { name: 'Flyway Migrate',   cmd: './scripts/flyway-migrate.sh' },
+        python:  { name: 'Alembic Migrate',  cmd: 'uv run alembic upgrade head' },
+        nodejs:  { name: 'Knex Migrate',     cmd: 'npx knex migrate:latest' },
+        unknown: { name: 'Run Migrations',   cmd: './scripts/flyway-migrate.sh' },
+      };
+      const { name, cmd } = cmds[lang];
+      const terminal = vscode.window.createTerminal(name);
       terminal.show();
-      terminal.sendText('./scripts/flyway-migrate.sh');
+      terminal.sendText(cmd);
     }),
 
     vscode.commands.registerCommand('lakebaseSync.showMigrationHistory', async () => {
@@ -1109,7 +1117,7 @@ export async function activate(context: vscode.ExtensionContext) {
         { label: 'Delete Tag...', command: 'lakebaseSync.deleteTag' },
         { label: '', kind: vscode.QuickPickItemKind.Separator, command: '' },
         { label: 'Refresh Credentials', command: 'lakebaseSync.refreshCredentials' },
-        { label: 'Run Migrate', command: 'lakebaseSync.runMigrate' },
+        { label: 'Run Migrations', command: 'lakebaseSync.runMigrate' },
         { label: 'Branch Diff Summary', command: 'lakebaseSync.showBranchDiff' },
         { label: 'Connect Workspace...', command: 'lakebaseSync.connectWorkspace' },
         { label: 'Health Check', command: 'lakebaseSync.healthCheck' },
@@ -1241,17 +1249,25 @@ export async function activate(context: vscode.ExtensionContext) {
               return;
             }
 
-            // 6. Run Flyway migrate (applies only migrations present on this branch)
+            // 6. Run migrations (language-aware)
             progress.report({ message: 'Applying migrations...' });
-            schemaDiffService.clearCache(); // DB will change after Flyway runs
+            schemaDiffService.clearCache();
             const migrationCount = migrationService.getMigrationCount();
             if (migrationCount > 0) {
+              const switchLang = detectLanguage(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+              const migCmds: Record<string, { name: string; cmd: string }> = {
+                java:    { name: `Flyway: ${targetGitBranch}`,   cmd: './scripts/flyway-migrate.sh' },
+                python:  { name: `Alembic: ${targetGitBranch}`,  cmd: 'uv run alembic upgrade head' },
+                nodejs:  { name: `Knex: ${targetGitBranch}`,     cmd: 'npx knex migrate:latest' },
+                unknown: { name: `Migrate: ${targetGitBranch}`,  cmd: './scripts/flyway-migrate.sh' },
+              };
+              const migCmd = migCmds[switchLang];
               const terminal = vscode.window.createTerminal({
-                name: `Flyway: ${targetGitBranch}`,
+                name: migCmd.name,
                 cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
               });
               terminal.show(true);
-              terminal.sendText('./scripts/flyway-migrate.sh');
+              terminal.sendText(migCmd.cmd);
             }
 
             vscode.window.showInformationMessage(
