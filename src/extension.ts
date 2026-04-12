@@ -1041,6 +1041,13 @@ export async function activate(context: vscode.ExtensionContext) {
       terminal.sendText(cmd);
     }),
 
+    vscode.commands.registerCommand('lakebaseSync.runTests', async () => {
+      const root = getWorkspaceRoot();
+      const terminal = vscode.window.createTerminal('Run Tests');
+      terminal.show();
+      terminal.sendText('./scripts/run-tests.sh');
+    }),
+
     vscode.commands.registerCommand('lakebaseSync.showMigrationHistory', async () => {
       const migrations = migrationService.listMigrations();
       if (migrations.length === 0) {
@@ -1118,6 +1125,7 @@ export async function activate(context: vscode.ExtensionContext) {
         { label: '', kind: vscode.QuickPickItemKind.Separator, command: '' },
         { label: 'Refresh Credentials', command: 'lakebaseSync.refreshCredentials' },
         { label: 'Run Migrations', command: 'lakebaseSync.runMigrate' },
+        { label: 'Run Tests', command: 'lakebaseSync.runTests' },
         { label: 'Branch Diff Summary', command: 'lakebaseSync.showBranchDiff' },
         { label: 'Connect Workspace...', command: 'lakebaseSync.connectWorkspace' },
         { label: 'Health Check', command: 'lakebaseSync.healthCheck' },

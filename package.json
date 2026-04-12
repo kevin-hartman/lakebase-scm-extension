@@ -108,6 +108,11 @@
         "title": "Run Migrations"
       },
       {
+        "command": "lakebaseSync.runTests",
+        "title": "Run Tests",
+        "icon": "$(beaker)"
+      },
+      {
         "command": "lakebaseSync.showMigrationHistory",
         "title": "Show Migration History"
       },
@@ -1220,6 +1225,11 @@
           "command": "lakebaseSync.showGitOutput",
           "when": "view == lakebaseBranches && viewItem == project",
           "group": "3_misc@1"
+        },
+        {
+          "command": "lakebaseSync.runTests",
+          "when": "view == lakebaseBranches && viewItem =~ /^(currentBranch|currentBranchNoDb)$/",
+          "group": "inline"
         },
         {
           "command": "lakebaseSync.showBranchDiff",
