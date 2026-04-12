@@ -96,12 +96,12 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN || '' }}
           LAKEBASE_PROJECT_ID: ${{ secrets.LAKEBASE_PROJECT_ID || '' }}
         run: |
-          # CLI auth: service principal (preferred) or PAT
+          # CLI auth: PAT/OAuth preferred (works for DB credentials), SP as fallback
           export DATABRICKS_HOST
-          if [ -n "$DATABRICKS_CLIENT_ID" ] && [ -n "$DATABRICKS_CLIENT_SECRET" ]; then
-            export DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
-          elif [ -n "$DATABRICKS_TOKEN" ]; then
+          if [ -n "$DATABRICKS_TOKEN" ]; then
             export DATABRICKS_TOKEN
+          elif [ -n "$DATABRICKS_CLIENT_ID" ] && [ -n "$DATABRICKS_CLIENT_SECRET" ]; then
+            export DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
           fi
           PR="${{ github.event.pull_request.number }}"
           BRANCH_NAME="ci-pr-${PR}"

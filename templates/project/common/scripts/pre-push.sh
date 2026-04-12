@@ -29,10 +29,10 @@ HAS_PAT="false"
 
 # Only sync if we have credentials and the project ID
 if [ -n "${DATABRICKS_HOST:-}" ] && [ -n "${LAKEBASE_PROJECT_ID:-}" ] && { [ "$HAS_SP" = "true" ] || [ "$HAS_PAT" = "true" ]; }; then
-  if "$SCRIPT_DIR/set-repo-secrets.sh"; then
-    echo "Pre-push: repository secrets synced."
+  if "$SCRIPT_DIR/create-token-and-sync-secrets.sh"; then
+    echo "Pre-push: token refreshed and secrets synced."
   fi
-  # If set-repo-secrets fails (e.g. no gh / no GITHUB_TOKEN), push continues anyway
+  # If token refresh fails, push continues anyway
 fi
 
 exit 0

@@ -51,21 +51,36 @@ if [ -z "${LAKEBASE_PROJECT_ID:-}" ]; then
   exit 1
 fi
 
-# Create token (CLI 0.205+). Use repo name in comment if available.
-REPO_NAME="$(basename "$(git remote get-url origin 2>/dev/null)" 2>/dev/null | sed 's/\.git$//')" || REPO_NAME="repo"
-COMMENT="GitHub Actions ($REPO_NAME)"
-LIFETIME_SECONDS="${TOKEN_LIFETIME_SECONDS:-2592000}"
-echo "Creating Databricks token (comment: $COMMENT, lifetime: ${LIFETIME_SECONDS}s)..."
-CREATE_OUT="$(databricks tokens create --comment "$COMMENT" --lifetime-seconds "$LIFETIME_SECONDS" -o json 2>&1)" || true
-TOKEN_VALUE="$(echo "$CREATE_OUT" | jq -r '.token_value // .token // empty' 2>/dev/null)" || true
+# Resolve CLI profile for this workspace
+PROFILE=""
+if [ -n "${DATABRICKS_CONFIG_PROFILE:-}" ]; then
+  PROFILE="--profile ${DATABRICKS_CONFIG_PROFILE}"
+elif grep -q "$(echo "$DATABRICKS_HOST" | sed 's|https://||; s|/$||')" ~/.databrickscfg 2>/dev/null; then
+  PROFILE="--profile $(grep -B1 "$(echo "$DATABRICKS_HOST" | sed 's|https://||; s|/$||')" ~/.databrickscfg 2>/dev/null | head -1 | tr -d '[]')"
+fi
+
+# Get OAuth token (preferred — works on all workspaces including those with PATs disabled)
+echo "Getting OAuth token..."
+TOKEN_VALUE="$(databricks auth token $PROFILE -o json 2>/dev/null | jq -r '.access_token // empty')" || true
+
+# Fallback: create a PAT (works on workspaces that allow PATs)
 if [ -z "$TOKEN_VALUE" ]; then
-  echo "Failed to create or parse token. Ensure you have run 'databricks auth login' and CLI supports 'tokens create' (0.205+)."
-  echo "Output: $CREATE_OUT"
+  echo "OAuth token not available. Trying PAT..."
+  REPO_NAME="$(basename "$(git remote get-url origin 2>/dev/null)" 2>/dev/null | sed 's/\.git$//')" || REPO_NAME="repo"
+  COMMENT="GitHub Actions ($REPO_NAME)"
+  LIFETIME_SECONDS="${TOKEN_LIFETIME_SECONDS:-2592000}"
+  CREATE_OUT="$(databricks tokens create --comment "$COMMENT" --lifetime-seconds "$LIFETIME_SECONDS" -o json 2>&1)" || true
+  TOKEN_VALUE="$(echo "$CREATE_OUT" | jq -r '.token_value // .token // empty' 2>/dev/null)" || true
+fi
+
+if [ -z "$TOKEN_VALUE" ]; then
+  echo "Failed to get OAuth token or create PAT. Run 'databricks auth login' first."
   exit 1
 fi
 
 export DATABRICKS_HOST
 export DATABRICKS_TOKEN="$TOKEN_VALUE"
 export LAKEBASE_PROJECT_ID
-echo "Token created. Syncing DATABRICKS_HOST, DATABRICKS_TOKEN, LAKEBASE_PROJECT_ID to GitHub repo secrets..."
+echo "Token synced. Syncing DATABRICKS_HOST, DATABRICKS_TOKEN, LAKEBASE_PROJECT_ID to GitHub repo secrets..."
+echo "Note: OAuth tokens are short-lived (~1h). The pre-push hook refreshes them automatically."
 exec "$SCRIPT_DIR/set-repo-secrets.sh"

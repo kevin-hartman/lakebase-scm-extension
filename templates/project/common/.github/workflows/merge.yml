@@ -6,7 +6,7 @@
 #   - cleanup-lakebase-branches: runs only on pull_request closed+merged (has PR context for branch names)
 # Each merge event triggers exactly one of each — no duplicate runs.
 #
-# Auth: prefers service principal (DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET) over PAT.
+# Auth: PAT/OAuth preferred (works for DB credentials), SP as fallback.
 # Run ./scripts/setup-ci-auth.sh to set up service principal auth (recommended).
 name: Merge
 
@@ -106,16 +106,15 @@ jobs:
           fi
           echo "DATABRICKS_HOST=$DATABRICKS_HOST" >> $GITHUB_ENV
 
-          if [ -n "$DATABRICKS_CLIENT_ID" ] && [ -n "$DATABRICKS_CLIENT_SECRET" ]; then
+          if [ -n "$DATABRICKS_TOKEN" ]; then
+            echo "DATABRICKS_TOKEN=$DATABRICKS_TOKEN" >> $GITHUB_ENV
+            AUTH_METHOD="oauth/pat"
+          elif [ -n "$DATABRICKS_CLIENT_ID" ] && [ -n "$DATABRICKS_CLIENT_SECRET" ]; then
             echo "DATABRICKS_CLIENT_ID=$DATABRICKS_CLIENT_ID" >> $GITHUB_ENV
             echo "DATABRICKS_CLIENT_SECRET=$DATABRICKS_CLIENT_SECRET" >> $GITHUB_ENV
             AUTH_METHOD="service-principal"
-          elif [ -n "$DATABRICKS_TOKEN" ]; then
-            echo "DATABRICKS_TOKEN=$DATABRICKS_TOKEN" >> $GITHUB_ENV
-            echo "::warning::Using PAT auth — PATs expire. Switch to service principal: ./scripts/setup-ci-auth.sh"
-            AUTH_METHOD="pat"
           else
-            echo "::error::No Databricks credentials found. Run ./scripts/setup-ci-auth.sh to configure service principal auth."
+            echo "::error::No Databricks credentials found. Run ./scripts/create-token-and-sync-secrets.sh"
             exit 1
           fi
 
