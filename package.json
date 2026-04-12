@@ -86,7 +86,7 @@
       {
         "command": "lakebaseSync.createBranch",
         "title": "Create Lakebase Branch",
-        "icon": "$(git-branch-create)"
+        "icon": "$(diff-added)"
       },
       {
         "command": "lakebaseSync.createUnifiedBranch",
