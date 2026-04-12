@@ -1,16 +1,7 @@
 #!/usr/bin/env bash
-# DEPRECATED: Use ./scripts/setup-ci-auth.sh instead (service principal auth — credentials don't expire).
-#
 # Create a Databricks PAT via CLI and sync it to GitHub repo secrets.
-# PATs expire based on workspace policy (often hours, not the requested 30 days).
-# For headless CI/CD, use setup-ci-auth.sh which creates a service principal.
-#
 # Prereq: run `databricks auth login` first. LAKEBASE_PROJECT_ID must be set (e.g. in .env).
 # Usage: ./scripts/create-token-and-sync-secrets.sh
-
-echo "WARNING: PAT auth is deprecated for CI/CD. PATs expire based on workspace policy."
-echo "         Use ./scripts/setup-ci-auth.sh instead (service principal — credentials don't expire)."
-echo ""
 
 set -e
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || true

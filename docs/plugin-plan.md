@@ -475,9 +475,9 @@ lakebase-scm-extension/
 - **Docs updated** — README reflects v0.4.3, uv in prerequisites, language-aware CI, Deploy to Databricks Apps in roadmap. Plan updated with multi-language template structure, 10-step wizard, current extension file tree. Removed completed plan docs.
 
 ### v0.4.8 changelog:
-- **Service principal CI/CD auth** — New `setup-ci-auth.sh` creates a Databricks service principal with OAuth M2M credentials (don't expire). Scaffolding runs it automatically. Replaces PAT-based auth that caused silent CI failures.
+- **CI/CD auth: PAT with fail-loud** — Service principal auth was attempted but reverted (SPs cannot generate Lakebase database credentials). CI/CD uses PAT auth via `create-token-and-sync-secrets.sh`. Workflows now fail hard with `::error::` on missing/expired credentials instead of silently skipping.
 - **merge.yml: fail-loud, no duplicate runs** — Migration job on `push`, cleanup job on `pull_request: closed`. Auth failures exit 1 with `::error::`. Cleanup uses PR event data directly (no squash-merge parsing bug).
-- **pr.yml: service principal auth support** — Accepts `DATABRICKS_CLIENT_ID`/`SECRET` (preferred) or `DATABRICKS_TOKEN` (legacy). Verifies auth before proceeding.
+- **pr.yml: auth verification** — Verifies `DATABRICKS_TOKEN` auth before proceeding. Fails with `::error::` on missing or expired credentials. No more silent test skipping.
 - **Renamed FlywayService → SchemaMigrationService** — Language-agnostic name. 22 files updated, unused `migrate()` deleted.
 - **Language-aware migration detection** — Auto-detects Python/Alembic, Java/Flyway, Node.js/Knex from marker files. Correct migration path, file pattern, and parser per language.
 - **Lakebase Changes uses live database diff** — Queries actual Lakebase branch tables and diffs against production (same as branch tree). Language-agnostic, no migration file parsing.
@@ -520,4 +520,5 @@ lakebase-scm-extension/
 - `GraphService.getCommits()` still uses `execSync` for batch git log (Phase 6 #57 remaining).
 - Health check commands (`databricks --version`, `gh --version`) use direct `execSync` — acceptable.
 - More Actions `...` opens a QuickPick at the top of the window — VS Code extension API does not support floating popups positioned near tree items.
+- Service principals cannot generate database credentials for Lakebase data plane access (`create-branch`/`delete-branch` works, but `generate-database-credential` produces tokens that fail `password authentication`). CI/CD uses PAT auth until this is resolved.
 - `lakebaseSync` prefix used for all command IDs, settings, context keys, and submenu IDs (457 occurrences across 11 files). Should be renamed to `lakebaseScm` to match the extension name "Lakebase SCM Extension". Breaking change — requires updating all `when` clauses, `registerCommand` calls, `contributes` entries, and user-facing settings simultaneously.

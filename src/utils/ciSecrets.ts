@@ -1,41 +1,16 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import { exec } from './exec';
 
 /**
- * Set up CI auth by creating a Databricks service principal and syncing
- * OAuth M2M credentials to GitHub repo secrets. Service principal credentials
- * don't expire, so CI workflows work headlessly without token refresh.
+ * Sync CI secrets (DATABRICKS_HOST, LAKEBASE_PROJECT_ID, DATABRICKS_TOKEN)
+ * to the GitHub repo for the current workspace.
  *
- * Falls back to PAT-based auth if service principal creation fails
- * (e.g. workspace doesn't allow SP creation).
- *
- * @param root - Workspace root directory (must contain .env and scripts/setup-ci-auth.sh)
+ * @param root - Workspace root directory (must contain .env)
+ * @param comment - Token comment (e.g. "GitHub Actions CI" or "CI merge")
+ * @param lifetimeSeconds - Token lifetime (e.g. 86400 for PR, 3600 for merge)
  */
-export async function syncCiSecrets(root: string): Promise<void> {
-  const scriptPath = path.join(root, 'scripts', 'setup-ci-auth.sh');
-
-  try {
-    await exec(`bash "${scriptPath}"`, { cwd: root, timeout: 60000 });
-    return; // Service principal auth configured successfully
-  } catch (err: any) {
-    // SP creation failed — fall back to PAT
-    const msg = err?.message || '';
-    if (msg.includes('Failed to create service principal') || msg.includes('account-level SP management')) {
-      // Expected failure on workspaces that restrict SP creation
-    }
-    // Fall through to PAT-based approach
-  }
-
-  // Fallback: PAT-based auth (deprecated — tokens expire)
-  await syncCiSecretsViaPat(root);
-}
-
-/**
- * Legacy PAT-based secret sync. Creates a short-lived Databricks PAT and
- * syncs it to GitHub repo secrets. PATs expire based on workspace policy.
- */
-async function syncCiSecretsViaPat(root: string): Promise<void> {
-  const fs = await import('fs');
+export async function syncCiSecrets(root: string, comment: string, lifetimeSeconds: number): Promise<void> {
   const envContent = fs.readFileSync(path.join(root, '.env'), 'utf-8');
   const getEnvVal = (key: string): string => {
     const match = envContent.match(new RegExp(`^${key}=(.+)$`, 'm'));
@@ -55,7 +30,7 @@ async function syncCiSecretsViaPat(root: string): Promise<void> {
   // Generate a fresh Databricks token for CI
   try {
     const tokenRaw = await exec(
-      `databricks tokens create --comment "GitHub Actions CI (PAT fallback)" --lifetime-seconds 2592000 -o json`,
+      `databricks tokens create --comment "${comment}" --lifetime-seconds ${lifetimeSeconds} -o json`,
       { cwd: root, timeout: 30000, env: { DATABRICKS_HOST: host } }
     );
     const token = JSON.parse(tokenRaw).token_value || JSON.parse(tokenRaw).token || '';
