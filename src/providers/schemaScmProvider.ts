@@ -4,7 +4,7 @@ import { FlywayService } from '../services/flywayService';
 import { SchemaDiffService, SchemaDiffResult } from '../services/schemaDiffService';
 import { LakebaseService } from '../services/lakebaseService';
 import { isMainBranch } from '../utils/theme';
-import { getConfig, getWorkspaceRoot } from '../utils/config';
+import { getConfig, getEnvConfig, getWorkspaceRoot } from '../utils/config';
 
 /**
  * Content provider that resolves file contents at the merge-base with main.
@@ -193,27 +193,46 @@ export class SchemaScmProvider {
       this.codeGroup!.resourceStates = [];
     }
 
-    // --- Lakebase: show schema changes from migration files that differ from main ---
+    // --- Lakebase: live database diff (branch vs production) ---
+    // Same approach as branchTreeProvider.getTableList() — queries actual Lakebase tables.
     let schemaItems: vscode.SourceControlResourceState[] = [];
     try {
-      const config = getConfig();
-      const mainMigrations = await this.gitService.listMigrationsOnBranch('main', config.migrationPath, config.migrationPattern);
-      const mainSet = new Set(mainMigrations);
-      const branchMigrations = this.flywayService.listMigrations();
-      const newMigrations = branchMigrations.filter(m => !mainSet.has(m.filename));
+      const envConfig = getEnvConfig();
+      const branchId = envConfig.LAKEBASE_BRANCH_ID;
+      if (branchId) {
+        const branchSchema = await this.lakebaseService.queryBranchSchema(branchId);
+        const defaultBranch = await this.lakebaseService.getDefaultBranch();
+        if (defaultBranch) {
+          const prodTables = await this.lakebaseService.queryBranchSchema(defaultBranch.uid);
+          const prodMap = new Map<string, string[]>();
+          for (const t of prodTables) {
+            prodMap.set(t.name, t.columns.map(c => `${c.name}:${c.dataType}`).sort());
+          }
 
-      if (newMigrations.length > 0) {
-        const schemaChanges = this.flywayService.parseMigrationSchemaChanges(newMigrations);
-        const tableMap = new Map<string, { type: string; tableName: string }>();
-        for (const change of schemaChanges) { tableMap.set(change.tableName, change); }
-        for (const change of tableMap.values()) {
-          schemaItems.push(this.makeSchemaResource(
-            change.tableName,
-            change.type as 'created' | 'modified' | 'removed'
-          ));
+          const branchSet = new Set<string>();
+          for (const table of branchSchema) {
+            if (table.name === 'flyway_schema_history' || table.name === 'alembic_version') { continue; }
+            branchSet.add(table.name);
+            const prodCols = prodMap.get(table.name);
+            if (!prodCols) {
+              schemaItems.push(this.makeSchemaResource(table.name, 'created'));
+            } else {
+              const branchCols = table.columns.map(c => `${c.name}:${c.dataType}`).sort();
+              if (JSON.stringify(branchCols) !== JSON.stringify(prodCols)) {
+                schemaItems.push(this.makeSchemaResource(table.name, 'modified'));
+              }
+            }
+          }
+          // Tables removed on this branch
+          for (const [name] of prodMap) {
+            if (name === 'flyway_schema_history' || name === 'alembic_version') { continue; }
+            if (!branchSet.has(name)) {
+              schemaItems.push(this.makeSchemaResource(name, 'removed'));
+            }
+          }
         }
       }
-    } catch { /* ignore */ }
+    } catch { /* Lakebase not reachable — leave empty */ }
 
     this.lakebaseGroup!.resourceStates = schemaItems;
 
