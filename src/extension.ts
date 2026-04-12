@@ -1042,10 +1042,9 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand('lakebaseSync.runTests', async () => {
-      const root = getWorkspaceRoot();
       const terminal = vscode.window.createTerminal('Run Tests');
       terminal.show();
-      terminal.sendText('./scripts/run-tests.sh');
+      terminal.sendText('./scripts/refresh-token.sh ./scripts/run-tests.sh');
     }),
 
     vscode.commands.registerCommand('lakebaseSync.showMigrationHistory', async () => {
