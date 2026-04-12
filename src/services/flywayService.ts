@@ -38,7 +38,7 @@ export class FlywayService {
     return files.map(f => {
       // Parse by language: Flyway V{version}__{desc}.sql, Alembic {hash}_{desc}.py, Knex {timestamp}_{desc}.js
       const flywayMatch = f.match(/^V(\d+(?:\.\d+)*)__(.+)\.sql$/i);
-      const alembicMatch = f.match(/^([0-9a-f]+)_(.+)\.py$/i);
+      const alembicMatch = f.match(/^([0-9a-f][\w]*)_(.+)\.py$/i);
       const knexMatch = f.match(/^(\d+)_(.+)\.(js|ts)$/i);
       const match = flywayMatch || alembicMatch || knexMatch;
       return {

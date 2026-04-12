@@ -72,7 +72,7 @@ export function detectLanguage(root?: string): ProjectLanguage {
 
 const MIGRATION_DEFAULTS: Record<ProjectLanguage, { path: string; pattern: RegExp; glob: string }> = {
   java:    { path: 'src/main/resources/db/migration', pattern: /^V\d+.*\.sql$/i,  glob: '*.sql' },
-  python:  { path: 'alembic/versions',                pattern: /^[0-9a-f_]+.*\.py$/i, glob: '*.py' },
+  python:  { path: 'alembic/versions',                pattern: /^[0-9a-f][\w]*.*\.py$/i, glob: '*.py' },
   nodejs:  { path: 'migrations',                      pattern: /^\d+.*\.(js|ts)$/i,   glob: '*.{js,ts}' },
   unknown: { path: 'src/main/resources/db/migration', pattern: /^V\d+.*\.sql$/i,  glob: '*.sql' },
 };
