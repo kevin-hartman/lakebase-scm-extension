@@ -1223,22 +1223,22 @@
         },
         {
           "command": "lakebaseSync.showBranchDiff",
-          "when": "view == lakebaseBranches && viewItem =~ /^(branch|currentBranch)$/",
+          "when": "view == lakebaseBranches && viewItem =~ /^(branch|currentBranch|branchNoDb|currentBranchNoDb)$/",
           "group": "inline"
         },
         {
           "command": "lakebaseSync.switchBranch",
-          "when": "view == lakebaseBranches && viewItem == branch",
+          "when": "view == lakebaseBranches && viewItem =~ /^(branch|branchNoDb)$/",
           "group": "inline"
         },
         {
           "command": "lakebaseSync.openInConsole",
-          "when": "view == lakebaseBranches && viewItem =~ /^(branch|currentBranch)$/",
+          "when": "view == lakebaseBranches && viewItem =~ /^(branch|currentBranch|branchNoDb|currentBranchNoDb)$/",
           "group": "inline"
         },
         {
           "command": "lakebaseSync.deleteBranch",
-          "when": "view == lakebaseBranches && viewItem == branch"
+          "when": "view == lakebaseBranches && viewItem =~ /^(branch|branchNoDb)$/"
         },
         {
           "command": "lakebaseSync.stageFile",
