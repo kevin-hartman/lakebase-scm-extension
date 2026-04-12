@@ -1410,7 +1410,8 @@ export async function activate(context: vscode.ExtensionContext) {
       try {
         await gitService.discardFile(relative);
         // Clear schema cache if a migration file was discarded
-        if (/V\d+.*\.sql$/i.test(relative)) { schemaDiffService.clearCache(); }
+        const cfg = getConfig();
+        if (cfg.migrationPattern.test(relative.split('/').pop() || relative)) { schemaDiffService.clearCache(); }
         schemaScmProvider.refresh();
       } catch (err: any) {
         vscode.window.showErrorMessage(`Failed to discard: ${err.message}`);

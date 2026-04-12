@@ -32,12 +32,15 @@ export class FlywayService {
     }
 
     const files = fs.readdirSync(migrationDir)
-      .filter(f => /^V\d+.*\.sql$/i.test(f))
+      .filter(f => config.migrationPattern.test(f))
       .sort();
 
     return files.map(f => {
-      // Parse Flyway naming: V{version}__{description}.sql
-      const match = f.match(/^V(\d+(?:\.\d+)*)__(.+)\.sql$/i);
+      // Parse by language: Flyway V{version}__{desc}.sql, Alembic {hash}_{desc}.py, Knex {timestamp}_{desc}.js
+      const flywayMatch = f.match(/^V(\d+(?:\.\d+)*)__(.+)\.sql$/i);
+      const alembicMatch = f.match(/^([0-9a-f]+)_(.+)\.py$/i);
+      const knexMatch = f.match(/^(\d+)_(.+)\.(js|ts)$/i);
+      const match = flywayMatch || alembicMatch || knexMatch;
       return {
         version: match ? match[1] : '?',
         description: match ? match[2].replace(/_/g, ' ') : f,
@@ -98,17 +101,59 @@ export class FlywayService {
   }
 
   /**
-   * Parse migration SQL files to extract schema changes (CREATE TABLE, ALTER TABLE, DROP TABLE).
-   * Returns objects representing what the migrations will do when applied.
+   * Parse migration files to extract schema changes.
+   * Supports SQL (Flyway/Knex), Python (Alembic op.create_table/drop_table/add_column).
    */
   parseMigrationSchemaChanges(migrations: MigrationFile[]): MigrationSchemaChange[] {
     const changes: MigrationSchemaChange[] = [];
     for (const mig of migrations) {
       if (!fs.existsSync(mig.fullPath)) { continue; }
-      const sql = fs.readFileSync(mig.fullPath, 'utf-8');
-      for (const change of FlywayService.parseSql(sql)) {
+      const content = fs.readFileSync(mig.fullPath, 'utf-8');
+      const parser = mig.filename.endsWith('.py') ? FlywayService.parseAlembic : FlywayService.parseSql;
+      for (const change of parser(content)) {
         changes.push({ ...change, migration: mig });
       }
+    }
+    return changes;
+  }
+
+  /** Parse Alembic Python migration files for op.create_table, op.drop_table, op.add_column */
+  static parseAlembic(py: string): MigrationSchemaChange[] {
+    const changes: MigrationSchemaChange[] = [];
+    let match;
+
+    // op.create_table('name', ...)
+    const createRegex = /op\.create_table\(\s*['"](\w+)['"]/g;
+    while ((match = createRegex.exec(py)) !== null) {
+      const tableName = match[1];
+      // Extract sa.Column('name', sa.Type) from the create_table block
+      const columns: Array<{ name: string; dataType: string }> = [];
+      const blockStart = match.index;
+      const blockEnd = py.indexOf(')', blockStart + match[0].length);
+      if (blockEnd > blockStart) {
+        const block = py.substring(blockStart, blockEnd);
+        const colRegex = /sa\.Column\(\s*['"](\w+)['"]\s*,\s*sa\.(\w+)/g;
+        let colMatch;
+        while ((colMatch = colRegex.exec(block)) !== null) {
+          columns.push({ name: colMatch[1], dataType: colMatch[2] });
+        }
+      }
+      changes.push({ type: 'created', tableName, columns });
+    }
+
+    // op.drop_table('name')
+    const dropRegex = /op\.drop_table\(\s*['"](\w+)['"]/g;
+    while ((match = dropRegex.exec(py)) !== null) {
+      changes.push({ type: 'removed', tableName: match[1], columns: [] });
+    }
+
+    // op.add_column('table', sa.Column('name', sa.Type))
+    const addColRegex = /op\.add_column\(\s*['"](\w+)['"]\s*,\s*sa\.Column\(\s*['"](\w+)['"]\s*,\s*sa\.(\w+)/g;
+    while ((match = addColRegex.exec(py)) !== null) {
+      changes.push({
+        type: 'modified', tableName: match[1],
+        columns: [{ name: match[2], dataType: match[3] }],
+      });
     }
 
     return changes;
@@ -145,7 +190,7 @@ export class FlywayService {
     }
 
     const config = getConfig();
-    const pattern = new vscode.RelativePattern(root, `${config.migrationPath}/*.sql`);
+    const pattern = new vscode.RelativePattern(root, `${config.migrationPath}/${config.migrationGlob}`);
     const watcher = vscode.workspace.createFileSystemWatcher(pattern);
 
     watcher.onDidCreate(callback);

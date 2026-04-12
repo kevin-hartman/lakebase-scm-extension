@@ -2,12 +2,20 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 
+export type ProjectLanguage = 'java' | 'python' | 'nodejs' | 'unknown';
+
 export interface LakebaseConfig {
   databricksHost: string;
   lakebaseProjectId: string;
   autoCreateBranch: boolean;
   autoRefreshCredentials: boolean;
   migrationPath: string;
+  /** Regex pattern for migration filenames (auto-detected from project language) */
+  migrationPattern: RegExp;
+  /** File glob for migration watcher (auto-detected from project language) */
+  migrationGlob: string;
+  /** Detected project language */
+  language: ProjectLanguage;
   showUnifiedRepo: boolean;
   productionReadOnly: boolean;
 }
@@ -53,6 +61,22 @@ export function parseEnvFile(filePath: string): EnvConfig {
   return config as EnvConfig;
 }
 
+/** Detect project language from marker files in workspace root */
+export function detectLanguage(root?: string): ProjectLanguage {
+  if (!root) { return 'unknown'; }
+  if (fs.existsSync(path.join(root, 'pom.xml'))) { return 'java'; }
+  if (fs.existsSync(path.join(root, 'pyproject.toml')) || fs.existsSync(path.join(root, 'requirements.txt'))) { return 'python'; }
+  if (fs.existsSync(path.join(root, 'package.json')) && !fs.existsSync(path.join(root, 'pom.xml'))) { return 'nodejs'; }
+  return 'unknown';
+}
+
+const MIGRATION_DEFAULTS: Record<ProjectLanguage, { path: string; pattern: RegExp; glob: string }> = {
+  java:    { path: 'src/main/resources/db/migration', pattern: /^V\d+.*\.sql$/i,  glob: '*.sql' },
+  python:  { path: 'alembic/versions',                pattern: /^[0-9a-f_]+.*\.py$/i, glob: '*.py' },
+  nodejs:  { path: 'migrations',                      pattern: /^\d+.*\.(js|ts)$/i,   glob: '*.{js,ts}' },
+  unknown: { path: 'src/main/resources/db/migration', pattern: /^V\d+.*\.sql$/i,  glob: '*.sql' },
+};
+
 export function getConfig(): LakebaseConfig {
   const wsConfig = vscode.workspace.getConfiguration('lakebaseSync');
   const root = getWorkspaceRoot();
@@ -63,12 +87,19 @@ export function getConfig(): LakebaseConfig {
     envConfig = parseEnvFile(envPath);
   }
 
+  const language = detectLanguage(root);
+  const defaults = MIGRATION_DEFAULTS[language];
+  const migrationPath = wsConfig.get('migrationPath', '') || defaults.path;
+
   return {
     databricksHost: wsConfig.get('databricksHost', '') || envConfig.DATABRICKS_HOST || '',
     lakebaseProjectId: wsConfig.get('lakebaseProjectId', '') || envConfig.LAKEBASE_PROJECT_ID || '',
     autoCreateBranch: wsConfig.get('autoCreateBranch', true),
     autoRefreshCredentials: wsConfig.get('autoRefreshCredentials', true),
-    migrationPath: wsConfig.get('migrationPath', 'src/main/resources/db/migration'),
+    migrationPath,
+    migrationPattern: defaults.pattern,
+    migrationGlob: defaults.glob,
+    language,
     showUnifiedRepo: wsConfig.get('showUnifiedRepo', true),
     productionReadOnly: wsConfig.get('productionReadOnly', true),
   };

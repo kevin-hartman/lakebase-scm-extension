@@ -193,39 +193,24 @@ export class SchemaScmProvider {
       this.codeGroup!.resourceStates = [];
     }
 
-    // --- Lakebase: only show schema changes from uncommitted migration files ---
-    // Branch-level schema diffs are shown via Review Branch only
+    // --- Lakebase: show schema changes from migration files that differ from main ---
     let schemaItems: vscode.SourceControlResourceState[] = [];
     try {
-      // Check for uncommitted (unstaged or staged) migration file changes
       const config = getConfig();
-      const staged = this.stagedGroup!.resourceStates;
-      const unstaged = this.codeGroup!.resourceStates;
-      const allPaths = [
-        ...staged.map(r => r.resourceUri.fsPath),
-        ...unstaged.map(r => r.resourceUri.fsPath),
-      ];
-      const hasMigrationChanges = allPaths.some(p =>
-        p.includes(config.migrationPath) && /V\d+.*\.sql$/i.test(p)
-      );
+      const mainMigrations = await this.gitService.listMigrationsOnBranch('main', config.migrationPath, config.migrationPattern);
+      const mainSet = new Set(mainMigrations);
+      const branchMigrations = this.flywayService.listMigrations();
+      const newMigrations = branchMigrations.filter(m => !mainSet.has(m.filename));
 
-      if (hasMigrationChanges) {
-        // Parse the uncommitted migration files to show what schema changes they introduce
-        const mainMigrations = await this.gitService.listMigrationsOnBranch('main', config.migrationPath);
-        const mainSet = new Set(mainMigrations);
-        const branchMigrations = this.flywayService.listMigrations();
-        const newMigrations = branchMigrations.filter(m => !mainSet.has(m.filename));
-
-        if (newMigrations.length > 0) {
-          const schemaChanges = this.flywayService.parseMigrationSchemaChanges(newMigrations);
-          const tableMap = new Map<string, { type: string; tableName: string }>();
-          for (const change of schemaChanges) { tableMap.set(change.tableName, change); }
-          for (const change of tableMap.values()) {
-            schemaItems.push(this.makeSchemaResource(
-              change.tableName,
-              change.type as 'created' | 'modified' | 'removed'
-            ));
-          }
+      if (newMigrations.length > 0) {
+        const schemaChanges = this.flywayService.parseMigrationSchemaChanges(newMigrations);
+        const tableMap = new Map<string, { type: string; tableName: string }>();
+        for (const change of schemaChanges) { tableMap.set(change.tableName, change); }
+        for (const change of tableMap.values()) {
+          schemaItems.push(this.makeSchemaResource(
+            change.tableName,
+            change.type as 'created' | 'modified' | 'removed'
+          ));
         }
       }
     } catch { /* ignore */ }
@@ -760,13 +745,15 @@ export class SchemaScmProvider {
     const config = getConfig();
     const staged = await this.gitService.getStagedFiles();
     const stagedMigrations = staged.filter(f =>
-      f.startsWith(config.migrationPath) && /V\d+.*\.sql$/i.test(f)
+      f.startsWith(config.migrationPath) && config.migrationPattern.test(f.split('/').pop() || f)
     );
     if (stagedMigrations.length === 0) { return; }
     const descriptions = stagedMigrations.map(f => {
       const filename = f.split('/').pop() || f;
-      const match = filename.match(/^V(\d+(?:\.\d+)*)__(.+)\.sql$/i);
-      return match ? `V${match[1]}: ${match[2].replace(/_/g, ' ')}` : filename;
+      const match = filename.match(/^V(\d+(?:\.\d+)*)__(.+)\.sql$/i)
+        || filename.match(/^([0-9a-f]+)_(.+)\.py$/i)
+        || filename.match(/^(\d+)_(.+)\.(js|ts)$/i);
+      return match ? `${match[1]}: ${match[2].replace(/_/g, ' ')}` : filename;
     });
     vscode.window.showInformationMessage(
       `Committing ${stagedMigrations.length} schema migration${stagedMigrations.length > 1 ? 's' : ''}: ${descriptions.join(', ')}`,

@@ -293,12 +293,13 @@ export class GitService {
     }
   }
 
-  /** List V*.sql migration filenames on a given branch (without checking it out) */
-  async listMigrationsOnBranch(branchName: string, migrationPath: string): Promise<string[]> {
+  /** List migration filenames on a given branch (without checking it out) */
+  async listMigrationsOnBranch(branchName: string, migrationPath: string, pattern?: RegExp): Promise<string[]> {
     const root = getWorkspaceRoot();
     if (!root) {
       return [];
     }
+    const filePattern = pattern || /^V\d+.*\.sql$/i;
     try {
       const raw = await exec(
         `git ls-tree --name-only "${branchName}" -- "${migrationPath}/"`,
@@ -309,7 +310,7 @@ export class GitService {
       }
       return raw.split('\n')
         .map(f => f.split('/').pop() || f)
-        .filter(f => /^V\d+.*\.sql$/i.test(f))
+        .filter(f => filePattern.test(f))
         .sort();
     } catch {
       return [];

@@ -474,6 +474,12 @@ lakebase-scm-extension/
 - **Register refreshRunner command** — Was declared in `package.json` but missing from `extension.ts`; CI Runner view refresh button now works.
 - **Docs updated** — README reflects v0.4.3, uv in prerequisites, language-aware CI, Deploy to Databricks Apps in roadmap. Plan updated with multi-language template structure, 10-step wizard, current extension file tree. Removed completed plan docs.
 
+### v0.4.7 changelog:
+- **Language-aware migration detection** — Lakebase Changes group now works for Python/Alembic and Node.js/Knex projects, not just Java/Flyway. Auto-detects project language from marker files (`pyproject.toml` → Alembic, `pom.xml` → Flyway, `package.json` → Knex) and uses the correct migration path, file pattern, and parser.
+- **Lakebase Changes shows committed-but-unmerged schema changes** — Previously only showed uncommitted migration files. Now compares branch migrations against main regardless of commit status, matching how the Code group behaves.
+- **Alembic migration parser** — Parses `op.create_table`, `op.drop_table`, `op.add_column` from Alembic Python files to show table-level schema changes in the Changes tray.
+- **Config: `migrationPattern` and `migrationGlob` auto-detected** — `LakebaseConfig` now includes `migrationPattern` (regex), `migrationGlob` (watcher pattern), and `language` fields, all derived from project language detection.
+
 ### v0.4.6 changelog:
 - **Service principal auth for CI/CD** — New `setup-ci-auth.sh` script creates a Databricks service principal with OAuth M2M credentials and syncs them to GitHub repo secrets. Credentials don't expire, eliminating the PAT expiry problem that caused silent CI failures.
 - **Scaffolding runs SP auth automatically** — `syncCiSecrets()` now runs `setup-ci-auth.sh` during project creation (step 8), falling back to PAT if SP creation fails on restricted workspaces.
