@@ -486,23 +486,21 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
         }
       }
 
-      const diffItems = [...items.filter(i => {
-        const s = statusMap.get(i.label as string);
-        return s === 'new' || s === 'modified';
-      }), ...removedItems];
+      // Show all tables (new/modified/unchanged) + removed, sorted: diffs first, then unchanged
+      const allItems = [...items, ...removedItems];
+      allItems.sort((a, b) => {
+        const sa = statusMap.get(a.label as string) || 'removed';
+        const sb = statusMap.get(b.label as string) || 'removed';
+        const order: Record<string, number> = { new: 0, modified: 1, removed: 2, unchanged: 3 };
+        return (order[sa] ?? 3) - (order[sb] ?? 3);
+      });
 
-      if (diffItems.length > 0) {
-        // There are schema changes — show only diffs (new/modified/removed)
-        return diffItems;
-      }
-
-      // No schema changes vs production — show all tables so the branch is browseable
-      if (items.length === 0) {
+      if (allItems.length === 0) {
         const emptyItem = new BranchItem(undefined, undefined, 'detail', 'No tables');
         emptyItem.iconPath = new vscode.ThemeIcon('info');
         return [emptyItem];
       }
-      return items;
+      return allItems;
     }
 
     // Try cached schema diff first (has branchTables + diff status)
