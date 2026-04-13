@@ -87,22 +87,13 @@ jobs:
       # Creates Lakebase branch ci-pr-<N> (same steps as post-checkout hook). See docs/lakebase-branch-creation.md.
       - name: Create CI database branch (Lakebase)
         id: lakebase-db
-        # Custom repo secrets; linter may warn "Context access might be invalid" (false positive).
-        # Auth: prefers service principal (DATABRICKS_CLIENT_ID + SECRET) over PAT (DATABRICKS_TOKEN).
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST || '' }}
-          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID || '' }}
-          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET || '' }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN || '' }}
           LAKEBASE_PROJECT_ID: ${{ secrets.LAKEBASE_PROJECT_ID || '' }}
         run: |
-          # CLI auth: PAT/OAuth preferred (works for DB credentials), SP as fallback
-          export DATABRICKS_HOST
-          if [ -n "$DATABRICKS_TOKEN" ]; then
-            export DATABRICKS_TOKEN
-          elif [ -n "$DATABRICKS_CLIENT_ID" ] && [ -n "$DATABRICKS_CLIENT_SECRET" ]; then
-            export DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
-          fi
+          # CLI auth: Databricks CLI uses these when set (same as post-checkout hook)
+          export DATABRICKS_HOST DATABRICKS_TOKEN
           PR="${{ github.event.pull_request.number }}"
           BRANCH_NAME="ci-pr-${PR}"
           # Branch ID must be 1-63 chars (CLI spec); ci-pr-<N> is always within range
@@ -117,43 +108,38 @@ jobs:
           }
 
           # Diagnose why CI branch might not be created (do not log secret values)
-          HAS_SP_AUTH="no"; [ -n "$DATABRICKS_CLIENT_ID" ] && [ -n "$DATABRICKS_CLIENT_SECRET" ] && HAS_SP_AUTH="yes"
-          HAS_PAT_AUTH="no"; [ -n "$DATABRICKS_TOKEN" ] && HAS_PAT_AUTH="yes"
           echo "Lakebase CI branch setup:"
           echo "  PR from fork: ${{ github.event.pull_request.head.repo.fork }}"
           echo "  DATABRICKS_HOST: $([ -n "$DATABRICKS_HOST" ] && echo 'set' || echo 'NOT SET')"
-          echo "  Auth: service-principal=$HAS_SP_AUTH pat=$HAS_PAT_AUTH"
+          echo "  DATABRICKS_TOKEN: $([ -n "$DATABRICKS_TOKEN" ] && echo 'set' || echo 'NOT SET')"
           echo "  LAKEBASE_PROJECT_ID: $([ -n "$LAKEBASE_PROJECT_ID" ] && echo 'set' || echo 'NOT SET')"
           echo "  databricks: $(command -v databricks || echo 'not found')"
           echo "  jq: $(command -v jq || echo 'not found')"
 
           if [ "${{ github.event.pull_request.head.repo.fork }}" = "true" ]; then
-            echo "Lakebase: PR is from a fork. GitHub does not pass repository secrets to fork PRs. Push your branch to this repository and open a PR from it (same repo) to create a Lakebase CI branch."
-            write_skip "**Reason:** PR is from a fork — GitHub does not pass repository secrets to fork PRs. **Fix:** Push your branch to this repo and open the PR from that branch (not from a fork)."
+            echo "Lakebase: PR is from a fork. GitHub does not pass repository secrets to fork PRs."
+            write_skip "**Reason:** PR is from a fork. **Fix:** Push your branch to this repo and open the PR from that branch."
             exit 0
           fi
           if ! command -v databricks >/dev/null 2>&1; then
-            echo "Lakebase: databricks CLI not found. Install it on the runner or fix the Install Databricks CLI step."
-            write_skip "**Reason:** \`databricks\` CLI not found on runner. **Fix:** Install Databricks CLI on the self-hosted runner or ensure the Install step runs (e.g. allow sudo)."
+            echo "Lakebase: databricks CLI not found."
+            write_skip "**Reason:** \`databricks\` CLI not found on runner."
             exit 0
           fi
           if ! command -v jq >/dev/null 2>&1; then
-            echo "Lakebase: jq not found. Install jq on the runner."
-            write_skip "**Reason:** \`jq\` not found on runner. **Fix:** Install jq on the self-hosted runner (e.g. \`brew install jq\` or \`apt-get install jq\`)."
+            echo "Lakebase: jq not found."
+            write_skip "**Reason:** \`jq\` not found on runner."
             exit 0
           fi
-          HAS_AUTH="false"
-          [ -n "$DATABRICKS_CLIENT_ID" ] && [ -n "$DATABRICKS_CLIENT_SECRET" ] && HAS_AUTH="true"
-          [ -n "$DATABRICKS_TOKEN" ] && HAS_AUTH="true"
-          if [ -z "$LAKEBASE_PROJECT_ID" ] || [ -z "$DATABRICKS_HOST" ] || [ "$HAS_AUTH" = "false" ]; then
+          if [ -z "$LAKEBASE_PROJECT_ID" ] || [ -z "$DATABRICKS_HOST" ] || [ -z "$DATABRICKS_TOKEN" ]; then
             echo "Lakebase: secrets not set; skipping CI branch creation."
-            write_skip "**Reason:** Missing secrets. **Fix:** Run \`./scripts/setup-ci-auth.sh\` to configure service principal auth, or manually add DATABRICKS_HOST, DATABRICKS_CLIENT_ID, DATABRICKS_CLIENT_SECRET, LAKEBASE_PROJECT_ID in repo Settings → Secrets."
+            write_skip "**Reason:** Missing secrets (DATABRICKS_HOST, DATABRICKS_TOKEN, LAKEBASE_PROJECT_ID). **Fix:** Add them in repo Settings → Secrets."
             exit 0
           fi
           # Verify auth actually works before proceeding
           if ! databricks current-user me -o json >/dev/null 2>&1; then
-            echo "Lakebase: Databricks auth failed. Credentials may be expired."
-            write_skip "**Reason:** Databricks authentication failed. **Fix:** Run \`./scripts/setup-ci-auth.sh\` to set up service principal auth (credentials don't expire)."
+            echo "Lakebase: Databricks auth failed. Token may be expired."
+            write_skip "**Reason:** Databricks authentication failed. Token may be expired."
             exit 0
           fi
 

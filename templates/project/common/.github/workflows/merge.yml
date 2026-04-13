@@ -6,8 +6,7 @@
 #   - cleanup-lakebase-branches: runs only on pull_request closed+merged (has PR context for branch names)
 # Each merge event triggers exactly one of each — no duplicate runs.
 #
-# Auth: PAT/OAuth preferred (works for DB credentials), SP as fallback.
-# Run ./scripts/setup-ci-auth.sh to set up service principal auth (recommended).
+# Auth: uses DATABRICKS_TOKEN (OAuth) from repo secrets. Run ./scripts/create-token-and-sync-secrets.sh to set up.
 name: Merge
 
 on:
@@ -89,42 +88,24 @@ jobs:
             databricks -v
           fi
 
-      # Authenticate to Databricks. Prefers service principal (OAuth M2M) over PAT.
-      # Service principal credentials don't expire — PATs do.
-      # Run ./scripts/setup-ci-auth.sh to set up service principal auth.
       - name: Authenticate Databricks
         id: db-auth
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
-          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          if [ -z "$DATABRICKS_HOST" ]; then
-            echo "::error::DATABRICKS_HOST secret not set. Add it in repo Settings → Secrets."
+          if [ -z "$DATABRICKS_HOST" ] || [ -z "$DATABRICKS_TOKEN" ]; then
+            echo "::error::DATABRICKS_HOST or DATABRICKS_TOKEN secret not set. Run ./scripts/create-token-and-sync-secrets.sh"
             exit 1
           fi
           echo "DATABRICKS_HOST=$DATABRICKS_HOST" >> $GITHUB_ENV
-
-          if [ -n "$DATABRICKS_TOKEN" ]; then
-            echo "DATABRICKS_TOKEN=$DATABRICKS_TOKEN" >> $GITHUB_ENV
-            AUTH_METHOD="oauth/pat"
-          elif [ -n "$DATABRICKS_CLIENT_ID" ] && [ -n "$DATABRICKS_CLIENT_SECRET" ]; then
-            echo "DATABRICKS_CLIENT_ID=$DATABRICKS_CLIENT_ID" >> $GITHUB_ENV
-            echo "DATABRICKS_CLIENT_SECRET=$DATABRICKS_CLIENT_SECRET" >> $GITHUB_ENV
-            AUTH_METHOD="service-principal"
-          else
-            echo "::error::No Databricks credentials found. Run ./scripts/create-token-and-sync-secrets.sh"
-            exit 1
-          fi
+          echo "DATABRICKS_TOKEN=$DATABRICKS_TOKEN" >> $GITHUB_ENV
 
           if ! databricks current-user me -o json >/dev/null 2>&1; then
-            echo "::error::Databricks authentication failed ($AUTH_METHOD). Credentials may be expired or invalid."
-            [ "$AUTH_METHOD" = "pat" ] && echo "::error::PAT tokens expire. Run ./scripts/setup-ci-auth.sh to switch to service principal auth."
+            echo "::error::Databricks authentication failed. Token may be expired. Run ./scripts/create-token-and-sync-secrets.sh"
             exit 1
           fi
-          echo "auth_method=$AUTH_METHOD" >> $GITHUB_OUTPUT
-          echo "Databricks authenticated via $AUTH_METHOD."
+          echo "Databricks authenticated."
 
       # Resolve production (default) Lakebase branch URL and credentials.
       - name: Resolve production DB credentials (Lakebase)
@@ -356,34 +337,20 @@ jobs:
       - name: Authenticate Databricks (cleanup job)
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
-          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          if [ -z "$DATABRICKS_HOST" ]; then
-            echo "::error::DATABRICKS_HOST secret not set."
+          if [ -z "$DATABRICKS_HOST" ] || [ -z "$DATABRICKS_TOKEN" ]; then
+            echo "::error::DATABRICKS_HOST or DATABRICKS_TOKEN secret not set."
             exit 1
           fi
           echo "DATABRICKS_HOST=$DATABRICKS_HOST" >> $GITHUB_ENV
-
-          if [ -n "$DATABRICKS_CLIENT_ID" ] && [ -n "$DATABRICKS_CLIENT_SECRET" ]; then
-            echo "DATABRICKS_CLIENT_ID=$DATABRICKS_CLIENT_ID" >> $GITHUB_ENV
-            echo "DATABRICKS_CLIENT_SECRET=$DATABRICKS_CLIENT_SECRET" >> $GITHUB_ENV
-            AUTH_METHOD="service-principal"
-          elif [ -n "$DATABRICKS_TOKEN" ]; then
-            echo "DATABRICKS_TOKEN=$DATABRICKS_TOKEN" >> $GITHUB_ENV
-            echo "::warning::Using PAT auth — PATs expire. Switch to service principal: ./scripts/setup-ci-auth.sh"
-            AUTH_METHOD="pat"
-          else
-            echo "::error::No Databricks credentials found. Run ./scripts/setup-ci-auth.sh"
-            exit 1
-          fi
+          echo "DATABRICKS_TOKEN=$DATABRICKS_TOKEN" >> $GITHUB_ENV
 
           if ! databricks current-user me -o json >/dev/null 2>&1; then
-            echo "::error::Databricks authentication failed ($AUTH_METHOD)."
+            echo "::error::Databricks authentication failed. Token may be expired."
             exit 1
           fi
-          echo "Databricks authenticated via $AUTH_METHOD."
+          echo "Databricks authenticated."
 
       - name: Delete CI and feature DB branches (Lakebase)
         env:

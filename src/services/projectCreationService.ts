@@ -154,7 +154,7 @@ export class ProjectCreationService {
     // Step 8: Set up CI auth (service principal preferred, PAT fallback)
     report('Setting up CI auth (service principal)...');
     try {
-      await syncCiSecrets(projectDir);
+      await syncCiSecrets(projectDir, 'GitHub Actions CI', 86400);
     } catch (err: any) {
       report(`Warning: CI auth setup failed (${err.message}). Run ./scripts/setup-ci-auth.sh manually.`);
     }
