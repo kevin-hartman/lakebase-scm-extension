@@ -391,12 +391,13 @@ test/integration/ecommerce/
 ├── runner.ts                     # Ephemeral self-hosted GitHub Actions runner lifecycle
 ├── mavenProject.ts               # Maven/Spring Boot project scaffolding
 ├── ecommerceScenarios.test.ts    # Top-level Mocha orchestrator
-├── scenario1Book.ts              # Scenario 1: CREATE TABLE book
-├── scenario2Product.ts           # Scenario 2: CREATE TABLE product
-├── scenario3Customer.ts          # Scenario 3: CREATE TABLE customer (UNIQUE)
-├── scenario4Cart.ts              # Scenario 4: cart + cart_item (FKs, CHECK)
-├── scenario5Orders.ts            # Scenario 5: orders + order_item (enum, NUMERIC)
-├── scenario6Wishlist.ts          # Scenario 6: wishlist + wishlist_item (compound UNIQUE)
+├── scenario1_6_AllEntities.ts    # Scenarios 1-6 combined: all entities in one branch/PR/merge
+├── scenario1Book.ts              # Book entity data (exports migrations, Java files, tests)
+├── scenario2Product.ts           # Product entity data
+├── scenario3Customer.ts          # Customer entity data
+├── scenario4Cart.ts              # Cart entity data
+├── scenario5Orders.ts            # Orders entity data
+├── scenario6Wishlist.ts          # Wishlist entity data
 ├── scenario7AlterProduct.ts      # Scenario 7: ALTER TABLE product (ADD COLUMN)
 └── scenario8DropBook.ts          # Scenario 8: DROP TABLE book
 ```
@@ -406,11 +407,14 @@ test/integration/ecommerce/
 All tests run through the existing Mocha integration test harness defined in `package.json`:
 
 ```bash
-# Run all 8 e-commerce scenarios (full suite)
+# Run all e-commerce scenarios (full suite — 3 scenarios)
 npm run test:integration -- --grep "E-Commerce"
 
-# Run a single scenario (e.g., Scenario 1 only — still requires setup/teardown)
-npm run test:integration -- --grep "Scenario 1: Book"
+# Run all integration suites in parallel (e-commerce, python, runner)
+./test/integration/run-all.sh
+
+# Run a single suite
+./test/integration/run-all.sh java
 
 # Run with verbose output
 npm run test:integration -- --grep "E-Commerce" --reporter spec
@@ -476,7 +480,7 @@ No test code. Exports functions consumed by all 8 scenario files:
 | **Workflow** | `waitForWorkflowRun`, `getLatestRunId`, `getWorkflowLogs` | Poll `gh run list` until workflow completes; fetch logs on failure |
 | **Phase D** | `queryProduction`, `verifyTableExists`, `verifyTableNotExists`, `verifyColumnExists`, `verifyMigrationApplied` | SQL queries against production via `psql` (using `databricks` CLI for credentials) |
 | **GitHub** | `verifyFileOnGitHub`, `verifyFileNotOnGitHub` | Check file presence via `gh api` |
-| **Schema** | `parseMigrationSql` | Delegates to `FlywayService.parseSql()` |
+| **Schema** | `parseMigrationSql` | Delegates to `SchemaMigrationService.parseSql()` |
 | **Cleanup** | `deleteLakebaseBranch` | Non-fatal branch deletion via `databricks` CLI |
 
 All functions take a `ScenarioContext` as first argument — a shared object containing project name, directory, GitHub user, Lakebase host, and service instances.
@@ -488,26 +492,23 @@ Each scenario file exports a single function:
 export function runScenario(ctx: ScenarioContext): void
 ```
 
-This function registers Mocha `describe`/`it` blocks. Each scenario follows the Master Execution Outline with 4 describe blocks:
+This function registers Mocha `describe`/`it` blocks. Scenarios 1-6 are consolidated into `scenario1_6_AllEntities.ts`, which imports entity data (migrations, Java files, tests) from the individual `scenario1Book.ts`–`scenario6Wishlist.ts` files. Scenarios 7 and 8 remain standalone. Each follows the Master Execution Outline with 4 describe blocks:
 
 ```
 describe('Phase A: Developer')
   it('A1: creates feature branch')
   it('A2: writes Java files')
   it('A3: writes migration SQL')
-  it('A3-verify: parseSql extracts expected changes')
   it('A5+A6: commits and pushes')
 
 describe('Phase B: PR workflow')
   it('B1: creates PR')
   it('B2: pr.yml succeeds (Flyway + tests on branch DB)')
-       → waitForWorkflowRun('pr.yml', { branch, event: 'pull_request' })
 
 describe('Phase C: Merge workflow')
   it('C1: records latest merge.yml run ID')
   it('C2: merges PR')
   it('C3: merge.yml succeeds (Flyway on production)')
-       → waitForWorkflowRun('merge.yml', { branch: 'main', event: 'push', afterRunId })
   it('C4: pulls main')
 
 describe('Phase D: Verification')
@@ -532,8 +533,8 @@ describe('E-Commerce Backend — 8 Iterative Scenarios')
     → ensureRunnerBinary()     ← download/cache runner binary
     → startRunner()            ← configure + start self-hosted runner
 
-  describe('Scenario 1: Book Entity')        → scenario1(ctx)
-  ...
+  describe('Scenarios 1-6: All Entities')     → scenario1_6(ctx)
+  describe('Scenario 7: ALTER TABLE')         → scenario7(ctx)
   describe('Scenario 8: DROP TABLE')          → scenario8(ctx)
 
   describe('Final Verification')
@@ -541,7 +542,7 @@ describe('E-Commerce Backend — 8 Iterative Scenarios')
     it('book table does NOT exist')
     it('all 8 remaining tables exist')
     it('flyway_schema_history has 9 entries')
-    it('8 merge commits on main')
+    it('3 merge commits on main (scenarios 1-6, 7, 8)')
     it('Book Java files absent')
     it('all other Java files present')
 
@@ -551,7 +552,7 @@ describe('E-Commerce Backend — 8 Iterative Scenarios')
   after()                      → safety-net cleanup
 ```
 
-**Sequencing:** Scenarios run in order (1→8) because each builds on the previous. Scenario 4 (Cart) references customer and product tables from Scenarios 2-3. Scenario 8 (DROP) removes the table created in Scenario 1.
+**Sequencing:** Scenarios 1-6 run as a single combined branch/PR/merge cycle (all 6 entities created together). Scenario 7 (ALTER TABLE) and Scenario 8 (DROP TABLE) follow as separate cycles.
 
 **Timeouts:** 2 hours overall, 10 min per scenario, 7 min for workflow wait, 1 min for verification.
 
@@ -561,23 +562,17 @@ describe('E-Commerce Backend — 8 Iterative Scenarios')
 
 | Section | Tests |
 |---------|-------|
-| Scenario 1 (Book) | 12 |
-| Scenario 2 (Product) | 10 |
-| Scenario 3 (Customer) | 10 |
-| Scenario 4 (Cart) | 11 |
-| Scenario 5 (Orders) | 11 |
-| Scenario 6 (Wishlist) | 11 |
-| Scenario 7 (ALTER) | 10 |
-| Scenario 8 (DROP) | 11 |
-| Final Verification | 7 |
-| Teardown | 1 |
-| **Total** | **~94** |
+| Scenarios 1-6 (All Entities) | 19 |
+| Scenario 7 (ALTER) | 21 |
+| Scenario 8 (DROP) | 22 |
+| Final Verification + Teardown | 8 |
+| **Total** | **70** |
 
 ### What Each Test Exercises
 
 | Test Point | What Happens |
 |------------|-------------|
-| A3-verify (parseSql) | `FlywayService.parseSql()` — static SQL parser |
+| A3-verify (parseSql) | `SchemaMigrationService.parseSql()` — static SQL parser |
 | B1 (create PR) | `gh pr create` via helpers |
 | B2 (pr.yml succeeds) | Self-hosted runner executes pr.yml: Lakebase branch creation, Flyway migrate on branch, `./mvnw test`, schema diff, PR comment |
 | C2 (merge PR) | `gh pr merge --admin` via helpers |
@@ -594,9 +589,9 @@ Each test run creates and tears down:
 - **1 GitHub repo** (private): `{user}/ecom-{timestamp}`
 - **1 Lakebase project**: `ecom-{timestamp}`
 - **1 self-hosted runner**: registered to the repo, running on local machine
-- **8 Lakebase CI branches** (created by pr.yml, deleted by merge.yml)
-- **8 Lakebase feature branches** (created by pr.yml, deleted by merge.yml)
-- **8 GitHub PRs** (created and merged per scenario)
+- **3 Lakebase CI branches** (created by pr.yml, deleted by merge.yml)
+- **3 Lakebase feature branches** (created by pr.yml, deleted by merge.yml)
+- **3 GitHub PRs** (created and merged: scenarios 1-6 combined, 7, 8)
 - **1 local directory** in `$TMPDIR`
 - **1 runner directory** in `$TMPDIR`
 
@@ -621,7 +616,7 @@ All resources are cleaned up in teardown, with a safety-net `after()` hook that 
 - **Controllers (5):** Product, Customer, Cart, Order, Wishlist
 
 ### Git history:
-8 merge commits, one per scenario, each with a PR number.
+3 merge commits (scenarios 1-6 combined, 7, 8), each with a PR number.
 
 ---
 

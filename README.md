@@ -222,12 +222,14 @@ Search `lakebaseSync` in VS Code Settings:
 ## Testing
 
 ```bash
-npm test                                              # 299 unit tests
-npm run test:integration -- --grep "E-Commerce"       # 179 integration tests (8 scenarios, ~30 min)
-npm run test:integration -- --grep "Self-Hosted Runner" # 11 runner pipeline tests (~2 min)
+npm test                                              # 328 unit tests
+npm run test:integration -- --grep "E-Commerce"       # 70 integration tests (3 scenarios, ~15 min)
+npm run test:integration -- --grep "Self-Hosted Runner" # 12 runner pipeline tests (~2 min)
+npm run test:integration -- --grep "Python Dev Loop"  # 83 integration tests (4 scenarios, ~40 min)
+./test/integration/run-all.sh                         # all suites in parallel
 ```
 
-**Integration tests** create real GitHub repos + Lakebase projects, deploy self-hosted runners, execute actual CI workflows, and verify production database state. Total: **190 integration tests**.
+**Integration tests** create real GitHub repos + Lakebase projects, deploy self-hosted runners, execute actual CI workflows, and verify production database state. Total: **165 integration tests**.
 
 ## Lakebase Sync Across Git Operations
 

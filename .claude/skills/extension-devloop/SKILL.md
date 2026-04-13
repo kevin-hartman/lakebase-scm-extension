@@ -77,7 +77,7 @@ npx @vscode/vsce package --no-dependencies  # build .vsix
 
 | Suite | Run | Duration | Coverage |
 |-------|-----|----------|----------|
-| Java E-Commerce (8 scenarios) | `npm run test:integration -- --grep "E-Commerce"` | ~2 hrs | CREATE, ALTER, DROP across 8 tables with FK chains |
+| Java E-Commerce (3 scenarios) | `npm run test:integration -- --grep "E-Commerce"` | ~15 min | CREATE, ALTER, DROP across 8 tables with FK chains |
 | Python Dev Loop (4 scenarios) | `npm run test:integration -- --grep "Python Dev Loop"` | ~40 min | CREATE, CREATE+FK, ALTER, DROP with Alembic/FastAPI/pytest |
 | Branch Lifecycle | `npm run test:integration -- --grep "Branch Lifecycle"` | ~5 min | Lakebase branch create/delete |
 | Project Creation | `npm run test:integration -- --grep "Project Creation"` | ~10 min | Full project scaffolding E2E |

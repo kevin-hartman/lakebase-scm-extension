@@ -274,7 +274,7 @@ Available from Command Palette and Project view title bar.
 | 10 | Execute | Create GitHub repo, Lakebase project, scaffold, secrets, hooks, runner, initial commit, offer to open |
 
 ### Deliverables
-42. **Project scaffold template** ✅ — 21 files in `templates/project/` (16 scripts, 2 workflows, .env.example, .gitignore, .vscode/settings.json, V1 migration placeholder). Deployed by `ScaffoldService`.
+42. **Project scaffold template** ✅ — 51 files in `templates/project/` (16 scripts, 2 workflows, .env.example, .gitignore, .vscode/settings.json, V1 migration placeholder). Deployed by `ScaffoldService`.
 43. **Lakebase project creation** ✅ — `LakebaseService.createProject()` via `databricks postgres create-project` CLI (not REST API — CLI supports it now). Includes `setProjectIdOverride()` for test contexts.
 44. **GitHub repo creation** ✅ — `GitService.createRepo()` via `gh repo create` with visibility, description. `syncCiSecrets()` sets DATABRICKS_HOST, LAKEBASE_PROJECT_ID, DATABRICKS_TOKEN.
 45. **Create Project command** ✅ — `lakebaseSync.createProject` wizard with 7-step UI flow: project name → parent dir → GitHub auth gate (web login) → repo name (defaults from project name) → visibility → Databricks workspace picker + auth gate → Lakebase project name (defaults from repo name) → execute with progress → offer to open folder. Cleanup on failure.
@@ -346,8 +346,8 @@ lakebase-scm-extension/
 ├── docs/
 │   └── plugin-plan.md               # This file
 ├── test/
-│   ├── suite/                       # 299 unit tests across 16 suites
-│   └── integration/                 # 190 integration tests (e-commerce + self-hosted runner)
+│   ├── suite/                       # 328 unit tests across 17 suites
+│   └── integration/                 # 165 integration tests (e-commerce + runner + python devloop)
 └── .vscodeignore
 ```
 
@@ -367,7 +367,7 @@ lakebase-scm-extension/
 
 ## Design Decisions
 
-1. **CLI-based, not API-based** — Wraps `databricks` CLI rather than calling REST APIs directly. Reuses existing auth (OAuth, PAT) and avoids token management complexity. Exception: Lakebase project creation (Phase 4) uses REST API since the CLI doesn't support `create-project`.
+1. **CLI-based, not API-based** — Wraps `databricks` CLI rather than calling REST APIs directly. Reuses existing auth (OAuth, PAT) and avoids token management complexity. Lakebase project creation uses `databricks postgres create-project` CLI.
 2. **Event-driven, not polling** — Uses VS Code FileSystemWatcher and git extension events rather than polling Lakebase API. File saves and git index changes trigger debounced code refreshes.
 3. **Schema diff at multiple layers** — Per-branch cache with migration-mtime invalidation for speed; pg_dump for accuracy; migration parsing as fallback; cache cleared on migration changes, Flyway runs, and branch switches.
 4. **Complements existing hooks** — Provides visibility into what post-checkout and prepare-commit-msg hooks do, does not replace them. Auto-branch creation syncs `.env` on every branch change.
@@ -434,8 +434,9 @@ lakebase-scm-extension/
 | 5.5 | R1-R8 Refactoring | ✅ Complete | v0.3.8 |
 | 6 | Remaining Cleanup | Partially complete | v0.4.0 (#57 partial) |
 | 7 | Deploy to Databricks Apps | Future | — |
+| — | OAuth-only CI, template parity | ✅ Complete | v0.4.1–v0.4.9 |
 
-**Current state:** v0.4.4
+**Current state:** v0.4.9
 
 ### v0.4.0 changelog:
 - **Create New Project wizard** — 10-step flow: project name → parent dir → GitHub auth gate → repo name → visibility → language (Java/Python/Node.js) → runner type (self-hosted/GitHub-hosted) → Databricks workspace + auth gate → Lakebase project name → execute. Cascading defaults, cleanup on failure, opens project folder.
@@ -447,7 +448,7 @@ lakebase-scm-extension/
 - **Branch Review** — Uses `queryBranchSchema` for both sides (fast, captures ALTER TABLE effects).
 - **PR flow** — Full pipeline: uncommitted → commit → unpushed → push → sync secrets (non-blocking) → PR title → create. PR status deduplicates check runs (latest wins).
 - **Service layer routing** — Extension.ts, providers, and graphService route through GitService/LakebaseService. Remaining: health check version commands (acceptable).
-- **Integration tests** — 179 passing (8 e-commerce scenarios, 29 min) + 11 passing (self-hosted runner test, 2 min) = **190 total**.
+- **Integration tests** — 70 passing (3 e-commerce scenarios, ~15 min) + 12 passing (self-hosted runner test, 2 min) + 83 passing (4 Python devloop scenarios, ~40 min) = **165 total**.
 
 ### v0.4.1 changelog:
 - **Fix .env pointing at production after branch creation** — `syncConnection` now immediately clears `.env` connection fields before waiting for the endpoint, ensuring `.env` never remains pointed at production. Retries up to 30s for the endpoint to become available.
@@ -464,15 +465,15 @@ lakebase-scm-extension/
 - **Schema diff fallback** — Replaced `flyway:info` version comparison with language-independent `psql` table comparison for the pg_dump fallback path.
 - **Phase 7 planned** — Deploy to Databricks Apps (deliverables 58–65): deploy command, `app.yaml`/`databricks.yml` generation, OAuth M2M via `databricks-sdk`, database resource config, frontend build integration.
 
-### v0.4.4 changelog:
-- **Fix PR flow silent abort** — `createPullRequest` command no longer silently exits when the push dialog is dismissed. Removed the separate "Push to GitHub?" blocking dialog — `gitService.createPullRequest()` already handles pushing internally, so the dialog was redundant and fragile. Added post-commit verification: after the commit step, re-checks for uncommitted changes and stops with a clear message if the commit wasn't completed. Added cancellation feedback at every early-return point.
-- **Template: `maybe_npm_install` helper** — `post-checkout.sh` now auto-runs `npm install` in `client/` when `node_modules` is missing, so branch switches are fully self-contained for projects with a React client.
-
 ### v0.4.3 changelog:
 - **Fix stale runner auto-reconfigure** — `setupRunner` now verifies the runner is registered on GitHub before reusing the `.runner` config. If stale (removed from GitHub side), it deletes credentials and re-runs `config.sh` with a fresh token automatically.
 - **Fix Alembic sys.path** — `alembic/env.py` adds the project root to `sys.path` so `from app.database import ...` resolves in CI runner working directories.
 - **Register refreshRunner command** — Was declared in `package.json` but missing from `extension.ts`; CI Runner view refresh button now works.
 - **Docs updated** — README reflects v0.4.3, uv in prerequisites, language-aware CI, Deploy to Databricks Apps in roadmap. Plan updated with multi-language template structure, 10-step wizard, current extension file tree. Removed completed plan docs.
+
+### v0.4.4 changelog:
+- **Fix PR flow silent abort** — `createPullRequest` command no longer silently exits when the push dialog is dismissed. Removed the separate "Push to GitHub?" blocking dialog — `gitService.createPullRequest()` already handles pushing internally, so the dialog was redundant and fragile. Added post-commit verification: after the commit step, re-checks for uncommitted changes and stops with a clear message if the commit wasn't completed. Added cancellation feedback at every early-return point.
+- **Template: `maybe_npm_install` helper** — `post-checkout.sh` now auto-runs `npm install` in `client/` when `node_modules` is missing, so branch switches are fully self-contained for projects with a React client.
 
 ### v0.4.9 changelog:
 - **OAuth-only CI auth** — Removed all service principal references from workflows and scripts. CI uses `DATABRICKS_TOKEN` (OAuth token refreshed by pre-push hook). Fail-loud `::error::` on missing/expired credentials.
