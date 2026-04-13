@@ -474,6 +474,13 @@ lakebase-scm-extension/
 - **Register refreshRunner command** — Was declared in `package.json` but missing from `extension.ts`; CI Runner view refresh button now works.
 - **Docs updated** — README reflects v0.4.3, uv in prerequisites, language-aware CI, Deploy to Databricks Apps in roadmap. Plan updated with multi-language template structure, 10-step wizard, current extension file tree. Removed completed plan docs.
 
+### v0.4.9 changelog:
+- **OAuth-only CI auth** — Removed all service principal references from workflows and scripts. CI uses `DATABRICKS_TOKEN` (OAuth token refreshed by pre-push hook). Fail-loud `::error::` on missing/expired credentials.
+- **Pre-push hook refreshes OAuth token** — `pre-push.sh` runs `databricks auth token` before every push, syncing a fresh token to `DATABRICKS_TOKEN` in GitHub secrets. Eliminates stale token failures.
+- **Backported PAT fixes to templates** — Auth preflight check, `.name`-over-`.uid` jq branch lookup, 3-char Lakebase branch name padding in `post-checkout.sh` and `refresh-token.sh`.
+- **Full template/project parity** — All 16 scripts and 2 workflows verified identical between extension templates and deployed projects.
+- **328 tests passing, 0 failing.**
+
 ### v0.4.8 changelog:
 - **Service principal CI/CD auth** — New `setup-ci-auth.sh` creates a Databricks service principal with OAuth M2M credentials (don't expire). Scaffolding runs it automatically. Replaces PAT-based auth that caused silent CI failures.
 - **merge.yml: fail-loud, no duplicate runs** — Migration job on `push`, cleanup job on `pull_request: closed`. Auth failures exit 1 with `::error::`. Cleanup uses PR event data directly (no squash-merge parsing bug).
