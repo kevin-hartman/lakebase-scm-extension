@@ -227,7 +227,7 @@ jobs:
 
           # Parse postgresql:// URL into psql connection params
           URL_NO_SCHEME="${DATABASE_URL#postgresql://}"
-          URL_AFTER_AT="${URL_NO_SCHEME#*@}"
+          URL_AFTER_AT="${URL_NO_SCHEME##*@}"
           PG_HOST="$(echo "$URL_AFTER_AT" | sed -n 's|\([^:/]*\).*|\1|p')"
           PG_PORT="$(echo "$URL_AFTER_AT" | sed -n 's|[^:]*:\([0-9]*\)/.*|\1|p')"
           PG_DB="$(echo "$URL_AFTER_AT" | sed -n 's|[^/]*/\([^?]*\).*|\1|p')"
