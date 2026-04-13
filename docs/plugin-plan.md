@@ -56,10 +56,10 @@ A VS Code / Cursor extension that provides unified visibility into both code cha
 │  └──────┬──────┘  └──────┬───────┘  └──────────┬───────────┘ │
 │         │                │                      │             │
 │  ┌──────────────┐  ┌──────────────┐  ┌─────────────────────┐ │
-│  │ FlywayService│  │ SchemaContent│  │ GitBaseContent       │ │
-│  │ - list/parse │  │ Provider     │  │ Provider             │ │
-│  │   migrations │  │ - DDL for    │  │ - file at merge-base │ │
-│  │ - watch files│  │   multi-diff │  │   for code diffs     │ │
+│  │ SchemaMigr.  │  │ SchemaContent│  │ GitBaseContent       │ │
+│  │  Service     │  │ Provider     │  │ Provider             │ │
+│  │ - list/parse │  │ - DDL for    │  │ - file at merge-base │ │
+│  │   migrations │  │   multi-diff │  │   for code diffs     │ │
 │  └──────────────┘  └──────────────┘  └─────────────────────┘ │
 ├──────────────────────────────────────────────────────────────┤
 │                    External CLIs                              │
@@ -111,7 +111,7 @@ A VS Code / Cursor extension that provides unified visibility into both code cha
 ### Deliverables
 6. ✅ **SchemaDiffService** — pg_dump comparison with fresh credentials for both branches; per-branch cache with migration-mtime invalidation and 10-minute max age; error results never cached
 7. ✅ **Branch Diff WebView** — Two-column: code file changes (left) + schema changes (right); per-item diff for any branch without switching
-8. ✅ **FlywayService** — Read migration files, track version state, per-branch via git ls-tree
+8. ✅ **FlywayService** (now `SchemaMigrationService`) — Read migration files, track version state, per-branch via git ls-tree
 9. ✅ **Unified Repo SCM** — Single "Unified Repo" in Source Control with flat "Code" and "Lakebase" groups; icons for added/modified/removed; clicking code files opens git diff; clicking schema items opens table diff
 10. ✅ **Per-table Schema Diff** — Two-column production vs branch with GitHub diff conventions (empty panes for created/removed)
 11. ✅ **Open in Databricks Console** — Per-branch link to Lakebase console URL
@@ -277,8 +277,8 @@ Available from Command Palette and Project view title bar.
 42. **Project scaffold template** ✅ — 51 files in `templates/project/` (16 scripts, 2 workflows, .env.example, .gitignore, .vscode/settings.json, V1 migration placeholder). Deployed by `ScaffoldService`.
 43. **Lakebase project creation** ✅ — `LakebaseService.createProject()` via `databricks postgres create-project` CLI (not REST API — CLI supports it now). Includes `setProjectIdOverride()` for test contexts.
 44. **GitHub repo creation** ✅ — `GitService.createRepo()` via `gh repo create` with visibility, description. `syncCiSecrets()` sets DATABRICKS_HOST, LAKEBASE_PROJECT_ID, DATABRICKS_TOKEN.
-45. **Create Project command** ✅ — `lakebaseSync.createProject` wizard with 7-step UI flow: project name → parent dir → GitHub auth gate (web login) → repo name (defaults from project name) → visibility → Databricks workspace picker + auth gate → Lakebase project name (defaults from repo name) → execute with progress → offer to open folder. Cleanup on failure.
-46. **`.vscodeignore` update** ✅ — `templates/` included in packaged extension (82 files, ~216KB).
+45. **Create Project command** ✅ — `lakebaseSync.createProject` wizard with 10-step UI flow: project name → parent dir → GitHub auth gate (web login) → repo name (defaults from project name) → visibility → Databricks workspace picker + auth gate → Lakebase project name (defaults from repo name) → execute with progress → offer to open folder. Cleanup on failure.
+46. **`.vscodeignore` update** ✅ — `templates/` included in packaged extension (51 files).
 47. **Disable built-in Git SCM in workspace** ✅ — `.vscode/settings.json` with `"git.enabled": false` deployed by `ScaffoldService.deployVscodeSettings()`.
 
 ### Resolved Questions
@@ -332,19 +332,24 @@ lakebase-scm-extension/
 │   ├── services/
 │   │   ├── lakebaseService.ts       # Databricks CLI wrapper + console URLs + syncConnection
 │   │   ├── gitService.ts            # Git operations + event watching + diff content
-│   │   ├── flywayService.ts         # Migration parsing + execution
+│   │   ├── schemaMigrationService.ts # Migration parsing (Flyway/Alembic/Knex)
 │   │   ├── schemaDiffService.ts     # Schema diff generation + per-branch cache
+│   │   ├── diffService.ts           # Diff tuple builder for review/compare
+│   │   ├── graphService.ts          # Commit graph data + avatar fetching
 │   │   ├── projectCreationService.ts # 10-step project creation wizard
 │   │   ├── scaffoldService.ts       # Template deployment (common + java/python/nodejs)
 │   │   └── runnerService.ts         # Self-hosted GitHub Actions runner lifecycle
 │   └── utils/
 │       ├── config.ts                # .env + settings management + connection updates
 │       ├── exec.ts                  # Async exec wrapper with auth error detection
+│       ├── ciSecrets.ts             # GitHub Actions secret sync
+│       ├── diffBuilder.ts           # Diff URI/tuple construction
 │       └── theme.ts                 # Status icons, colors, branch name utilities
 ├── resources/icons/
 ├── templates/project/               # Multi-language scaffold (common + java + python + nodejs)
 ├── docs/
-│   └── plugin-plan.md               # This file
+│   ├── plugin-plan.md               # This file
+│   └── e-commerce-scenarios.md      # Integration test design doc
 ├── test/
 │   ├── suite/                       # 328 unit tests across 17 suites
 │   └── integration/                 # 165 integration tests (e-commerce + runner + python devloop)
@@ -392,7 +397,7 @@ lakebase-scm-extension/
     - `lakebaseSync.createBranch` — Create Lakebase Branch (db-only)
     - `lakebaseSync.showCachedBranchDiff` — Branch Diff (Cached)
     Add these to appropriate menus (Lakebase submenu, Project view context, or view title bars).
-57. **Eliminate remaining execSync in GraphService** — ✅ Partial: `fetchAvatars()` now uses `gitService.getCurrentBranch()` + `gitService.ghApi()`. Remaining: `getCommits()` still uses `execSync` for batch git log — refactor to use `GitService.getLogRaw()` + `getLogShortstat()` (already exist).
+57. **Eliminate remaining execSync in GraphService** — ✅ Complete: `fetchAvatars()` uses `gitService.getCurrentBranch()` + `gitService.ghApi()`. `getCommits()` uses `gitService.getLogRaw()` + `gitService.getLogShortstat()`. No `execSync` remains.
 
 ---
 
@@ -432,7 +437,7 @@ lakebase-scm-extension/
 | 4 | Unified Project Creation | ✅ Complete | v0.4.0 |
 | 5 | Advanced Features | Partially complete | v0.3.7 (Graph), v0.3.8 (Refactoring) |
 | 5.5 | R1-R8 Refactoring | ✅ Complete | v0.3.8 |
-| 6 | Remaining Cleanup | Partially complete | v0.4.0 (#57 partial) |
+| 6 | Remaining Cleanup | Partially complete | v0.4.0 (#55-#56 open, #57 done) |
 | 7 | Deploy to Databricks Apps | Future | — |
 | — | OAuth-only CI, template parity | ✅ Complete | v0.4.1–v0.4.9 |
 
@@ -475,17 +480,19 @@ lakebase-scm-extension/
 - **Fix PR flow silent abort** — `createPullRequest` command no longer silently exits when the push dialog is dismissed. Removed the separate "Push to GitHub?" blocking dialog — `gitService.createPullRequest()` already handles pushing internally, so the dialog was redundant and fragile. Added post-commit verification: after the commit step, re-checks for uncommitted changes and stops with a clear message if the commit wasn't completed. Added cancellation feedback at every early-return point.
 - **Template: `maybe_npm_install` helper** — `post-checkout.sh` now auto-runs `npm install` in `client/` when `node_modules` is missing, so branch switches are fully self-contained for projects with a React client.
 
-### v0.4.9 changelog:
-- **OAuth-only CI auth** — Removed all service principal references from workflows and scripts. CI uses `DATABRICKS_TOKEN` (OAuth token refreshed by pre-push hook). Fail-loud `::error::` on missing/expired credentials.
-- **Pre-push hook refreshes OAuth token** — `pre-push.sh` runs `databricks auth token` before every push, syncing a fresh token to `DATABRICKS_TOKEN` in GitHub secrets. Eliminates stale token failures.
-- **Backported PAT fixes to templates** — Auth preflight check, `.name`-over-`.uid` jq branch lookup, 3-char Lakebase branch name padding in `post-checkout.sh` and `refresh-token.sh`.
-- **Full template/project parity** — All 16 scripts and 2 workflows verified identical between extension templates and deployed projects.
-- **328 tests passing, 0 failing.**
+### v0.4.5 changelog:
+- **Post-merge auto-refresh** — Polls Lakebase branches after PR merge to auto-refresh tree when CI cleans up. Added `branchTreeProvider.refresh()` to local merge flow.
+- **Language detection fix** — Use `git ls-files` in CI workflows to avoid stale file language detection on self-hosted runners.
+- **Python integration tests** — 4-scenario Python dev loop suite (Alembic/FastAPI/pytest): CREATE TABLE, CREATE with FK, ALTER TABLE, DROP TABLE.
 
-### v0.4.8 changelog:
+### v0.4.6 changelog:
 - **Service principal CI/CD auth** — New `setup-ci-auth.sh` creates a Databricks service principal with OAuth M2M credentials (don't expire). Scaffolding runs it automatically. Replaces PAT-based auth that caused silent CI failures.
 - **merge.yml: fail-loud, no duplicate runs** — Migration job on `push`, cleanup job on `pull_request: closed`. Auth failures exit 1 with `::error::`. Cleanup uses PR event data directly (no squash-merge parsing bug).
 - **pr.yml: service principal auth support** — Accepts `DATABRICKS_CLIENT_ID`/`SECRET` (preferred) or `DATABRICKS_TOKEN` (legacy). Verifies auth before proceeding.
+- **Deleted stale pre-refactor template copies** — Removed `templates/project/{.env.example,.github,.gitignore,scripts,src}`.
+- **Added branch lifecycle integration test** — `test/integration/branchLifecycle.test.ts`.
+
+### v0.4.7 changelog:
 - **Renamed FlywayService → SchemaMigrationService** — Language-agnostic name. 22 files updated, unused `migrate()` deleted.
 - **Language-aware migration detection** — Auto-detects Python/Alembic, Java/Flyway, Node.js/Knex from marker files. Correct migration path, file pattern, and parser per language.
 - **Lakebase Changes uses live database diff** — Queries actual Lakebase branch tables and diffs against production (same as branch tree). Language-agnostic, no migration file parsing.
@@ -494,38 +501,24 @@ lakebase-scm-extension/
 - **Run Tests command** — Beaker icon on current branch row. Runs `refresh-token.sh` → `run-tests.sh` (which applies pending migrations then runs tests).
 - **Language-aware migration commands** — `Run Migrations` and branch-switch migration use `refresh-token.sh` + correct tool per language (Alembic/Flyway/Knex).
 - **run-tests.sh applies pending migrations** — Detects language and runs Alembic/Flyway/Knex upgrade before test runner.
-- **Deleted stale pre-refactor template copies** — Removed `templates/project/{.env.example,.github,.gitignore,scripts,src}`.
-- **Added branch lifecycle integration test** — `test/integration/branchLifecycle.test.ts`.
-- **Fixed 9 pre-existing test failures** — `getConsoleUrl` async/await, `schemaDiffService` cache bypass stub, `updateEnvConnection` Spring-specific assertions, SCM provider schema tests updated for live DB diff.
+
+### v0.4.8 changelog:
+- **SP auth refinements** — Polished service principal workflow from v0.4.6. Fixed 9 pre-existing test failures: `getConsoleUrl` async/await, `schemaDiffService` cache bypass stub, `updateEnvConnection` Spring-specific assertions, SCM provider schema tests updated for live DB diff.
 - **328 tests passing, 0 failing.**
 
-### v0.4.7 changelog:
-- **Language-aware migration detection** — Lakebase Changes group now works for Python/Alembic and Node.js/Knex projects, not just Java/Flyway. Auto-detects project language from marker files (`pyproject.toml` → Alembic, `pom.xml` → Flyway, `package.json` → Knex) and uses the correct migration path, file pattern, and parser.
-- **Lakebase Changes shows committed-but-unmerged schema changes** — Previously only showed uncommitted migration files. Now compares branch migrations against main regardless of commit status, matching how the Code group behaves.
-- **Alembic migration parser** — Parses `op.create_table`, `op.drop_table`, `op.add_column` from Alembic Python files to show table-level schema changes in the Changes tray.
-- **Config: `migrationPattern` and `migrationGlob` auto-detected** — `LakebaseConfig` now includes `migrationPattern` (regex), `migrationGlob` (watcher pattern), and `language` fields, all derived from project language detection.
-
-### v0.4.6 changelog:
-- **Service principal auth for CI/CD** — New `setup-ci-auth.sh` script creates a Databricks service principal with OAuth M2M credentials and syncs them to GitHub repo secrets. Credentials don't expire, eliminating the PAT expiry problem that caused silent CI failures.
-- **Scaffolding runs SP auth automatically** — `syncCiSecrets()` now runs `setup-ci-auth.sh` during project creation (step 8), falling back to PAT if SP creation fails on restricted workspaces.
-- **merge.yml: fail-loud and no duplicate runs** — Migration job runs on `push` to main only; cleanup job runs on `pull_request: closed` only. Each merge fires exactly one of each. Auth failures now `exit 1` with `::error::` annotations instead of silently exiting 0.
-- **merge.yml: no commit message parsing for cleanup** — Cleanup job uses PR event data directly (`github.event.pull_request.head.ref`), eliminating the squash-merge branch name parsing bug.
-- **pr.yml: service principal auth support** — CI branch creation step accepts `DATABRICKS_CLIENT_ID` + `DATABRICKS_CLIENT_SECRET` (preferred) or `DATABRICKS_TOKEN` (legacy). Verifies auth before proceeding.
-- **Updated set-repo-secrets.sh and pre-push.sh** — Both scripts support SP and PAT credential sets. SP auth auto-removes the old `DATABRICKS_TOKEN` secret.
-- **Deprecated create-token-and-sync-secrets.sh** — Added deprecation notice pointing to `setup-ci-auth.sh`.
-- **Deleted stale pre-refactor template copies** — Removed `templates/project/{.env.example,.github,.gitignore,scripts,src}` (pre-`common/` + language overlay leftovers).
-- **Added branch lifecycle integration test** — `test/integration/branchLifecycle.test.ts` covering create, idempotent create, list, delete, and recreate.
-
-### v0.4.5 changelog:
-- **Post-merge branch tree auto-refresh** — After merging a PR, the extension polls `listBranches()` every 15s for up to 2 minutes, refreshing the branch tree as CI cleans up the `ci-pr-*` and feature Lakebase branches. Eliminates stale "db only" entries in Other Branches without manual refresh.
-- **Local merge branch tree refresh** — Added missing `branchTreeProvider.refresh()` call after the local merge command deletes a Lakebase branch.
-- **Fix language detection on self-hosted runners** — CI workflows (`pr.yml`, `merge.yml`) now use `git ls-files --error-unmatch` instead of `[ -f ]` to detect project language. Prevents stale files from previous repos on self-hosted runners from poisoning detection (e.g., leftover `pom.xml` causing a Python project to be detected as Java).
-- **Python dev loop integration tests** — 4-scenario end-to-end test suite (`test/integration/python-devloop/`) covering CREATE TABLE, CREATE TABLE with FK, ALTER TABLE, and DROP TABLE via Alembic/FastAPI/pytest. Runs in ~9 minutes. Complements the existing Java e-commerce 8-scenario suite.
+### v0.4.9 changelog:
+- **OAuth-only CI auth** — Removed all service principal references from workflows and scripts. CI uses `DATABRICKS_TOKEN` (OAuth token refreshed by pre-push hook). Fail-loud `::error::` on missing/expired credentials.
+- **Pre-push hook refreshes OAuth token** — `pre-push.sh` runs `databricks auth token` before every push, syncing a fresh token to `DATABRICKS_TOKEN` in GitHub secrets. Eliminates stale token failures.
+- **Backported PAT fixes to templates** — Auth preflight check, `.name`-over-`.uid` jq branch lookup, 3-char Lakebase branch name padding in `post-checkout.sh` and `refresh-token.sh`.
+- **Full template/project parity** — All 16 scripts and 2 workflows verified identical between extension templates and deployed projects.
+- **328 tests passing, 0 failing.**
 
 ### Known issues / tech debt:
 - Existing projects created before v0.4.0 need manual workflow update (replace `actions/setup-java` with local JDK step) for self-hosted runners.
 - Runner zombie processes can still occur if the extension crashes mid-operation.
-- `GraphService.getCommits()` still uses `execSync` for batch git log (Phase 6 #57 remaining).
 - Health check commands (`databricks --version`, `gh --version`) use direct `execSync` — acceptable.
 - More Actions `...` opens a QuickPick at the top of the window — VS Code extension API does not support floating popups positioned near tree items.
 - `lakebaseSync` prefix used for all command IDs, settings, context keys, and submenu IDs (457 occurrences across 11 files). Should be renamed to `lakebaseScm` to match the extension name "Lakebase SCM Extension". Breaking change — requires updating all `when` clauses, `registerCommand` calls, `contributes` entries, and user-facing settings simultaneously.
+- `DiffService` exists but is not wired into callers (Phase 6 #55). `extension.ts` and `graphWebview.ts` still build diff tuples inline.
+- 6 commands are registered but only accessible via Command Palette — no menu placements (Phase 6 #56).
+- `STATUS_ICONS`/`STATUS_COLORS` exported from `theme.ts` but not consumed by providers (Phase 5 #53).
