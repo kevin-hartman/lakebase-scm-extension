@@ -38,6 +38,18 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+# Auth preflight: .env already sourced above so DATABRICKS_CONFIG_PROFILE is exported if set.
+if ! databricks current-user me -o json >/dev/null 2>&1; then
+  echo "refresh-token: Databricks CLI auth failed. Re-authenticate:"
+  if [ -n "${DATABRICKS_CONFIG_PROFILE:-}" ]; then
+    echo "  databricks auth login --profile ${DATABRICKS_CONFIG_PROFILE} --host ${DATABRICKS_HOST:-<workspace-url>}"
+  else
+    echo "  databricks auth login --host ${DATABRICKS_HOST:-<workspace-url>}"
+    echo "  Tip: set DATABRICKS_CONFIG_PROFILE in .env to pin a specific CLI profile."
+  fi
+  exit 1
+fi
+
 PROJ_PATH="projects/${PROJ_ID}"
 DB_NAME="databricks_postgres"
 
@@ -96,7 +108,7 @@ fi
 
 # Resolve Lakebase branch path (same logic as post-checkout)
 DEFAULT_BRANCH_UID="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null \
-  | jq -r '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[] | select((.status.default == true) or (.is_default == true)) | (.uid // .id // (if .name then (.name | split("/") | last) else empty end))' | head -1)"
+  | jq -r '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[] | select((.status.default == true) or (.is_default == true)) | (if .name then (.name | split("/") | last) else (.uid // .id // empty) end)' | head -1)"
 
 if [ -z "$DEFAULT_BRANCH_UID" ]; then
   echo "refresh-token: could not find default Lakebase branch. Check LAKEBASE_PROJECT_ID and CLI auth."
@@ -108,6 +120,8 @@ if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
   BRANCH_ID="$DEFAULT_BRANCH_UID"
 else
   LAKEBASE_BRANCH="$(echo "$BRANCH" | sed 's/\//-/g' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-63)"
+  # Lakebase requires at least 3 characters — pad short names
+  while [ ${#LAKEBASE_BRANCH} -lt 3 ]; do LAKEBASE_BRANCH="${LAKEBASE_BRANCH}-x"; done
   BRANCH_PATH="${PROJ_PATH}/branches/${LAKEBASE_BRANCH}"
   BRANCH_ID="$LAKEBASE_BRANCH"
 fi

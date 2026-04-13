@@ -6,7 +6,7 @@
 #   - cleanup-lakebase-branches: runs only on pull_request closed+merged (has PR context for branch names)
 # Each merge event triggers exactly one of each — no duplicate runs.
 #
-# Auth: uses DATABRICKS_TOKEN (OAuth) from repo secrets. Run ./scripts/create-token-and-sync-secrets.sh to set up.
+# Auth: OAuth token refreshed by pre-push hook and synced to DATABRICKS_TOKEN secret.
 name: Merge
 
 on:
@@ -95,14 +95,14 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
           if [ -z "$DATABRICKS_HOST" ] || [ -z "$DATABRICKS_TOKEN" ]; then
-            echo "::error::DATABRICKS_HOST or DATABRICKS_TOKEN secret not set. Run ./scripts/create-token-and-sync-secrets.sh"
+            echo "::error::DATABRICKS_HOST or DATABRICKS_TOKEN secret not set. Push from local to refresh: git push triggers pre-push hook which syncs the token."
             exit 1
           fi
           echo "DATABRICKS_HOST=$DATABRICKS_HOST" >> $GITHUB_ENV
           echo "DATABRICKS_TOKEN=$DATABRICKS_TOKEN" >> $GITHUB_ENV
 
           if ! databricks current-user me -o json >/dev/null 2>&1; then
-            echo "::error::Databricks authentication failed. Token may be expired. Run ./scripts/create-token-and-sync-secrets.sh"
+            echo "::error::Databricks authentication failed. Token may be expired. Push again from local to refresh."
             exit 1
           fi
           echo "Databricks authenticated."

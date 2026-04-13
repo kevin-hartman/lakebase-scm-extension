@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Pre-push hook: before pushing, ensure repository secrets
-# (DATABRICKS_HOST, DATABRICKS_TOKEN, LAKEBASE_PROJECT_ID) are set via set-repo-secrets.sh.
-# Loads .env from repo root so local Lakebase config can sync to GitHub Actions secrets.
+# Pre-push hook: refresh OAuth token and sync to GitHub secrets before every push.
+#
+# OAuth tokens are short-lived (~1h). This hook ensures CI always has a fresh token
+# by refreshing via `databricks auth token` and syncing to DATABRICKS_TOKEN in GitHub secrets.
+#
 # Install: ./scripts/install-hook.sh
 
 set -e
@@ -16,12 +18,28 @@ if [ -f .env ]; then
   set +a
 fi
 
-# Only run set-repo-secrets if we have the three vars
-if [ -n "${DATABRICKS_HOST:-}" ] && [ -n "${DATABRICKS_TOKEN:-}" ] && [ -n "${LAKEBASE_PROJECT_ID:-}" ]; then
-  if "$SCRIPT_DIR/set-repo-secrets.sh"; then
+# Refresh OAuth token before syncing — this is the critical step.
+# CI workflows use DATABRICKS_TOKEN from GitHub secrets. If we don't refresh here,
+# CI gets a stale token and auth fails on merge cleanup, migrations, etc.
+if [ -n "${DATABRICKS_HOST:-}" ] && command -v databricks >/dev/null 2>&1; then
+  PROFILE_FLAG=""
+  [ -n "${DATABRICKS_CONFIG_PROFILE:-}" ] && PROFILE_FLAG="--profile ${DATABRICKS_CONFIG_PROFILE}"
+
+  FRESH_TOKEN="$(databricks auth token $PROFILE_FLAG -o json 2>/dev/null | jq -r '.access_token // empty' 2>/dev/null)" || true
+  if [ -n "$FRESH_TOKEN" ]; then
+    export DATABRICKS_TOKEN="$FRESH_TOKEN"
+    echo "Pre-push: OAuth token refreshed."
+  else
+    echo "Pre-push: warning — could not refresh OAuth token. CI may use a stale token."
+  fi
+fi
+
+# Sync secrets to GitHub (DATABRICKS_HOST, DATABRICKS_TOKEN, LAKEBASE_PROJECT_ID)
+if [ -n "${DATABRICKS_HOST:-}" ] && [ -n "${LAKEBASE_PROJECT_ID:-}" ] && [ -n "${DATABRICKS_TOKEN:-}" ]; then
+  if "$SCRIPT_DIR/set-repo-secrets.sh" 2>/dev/null; then
     echo "Pre-push: repository secrets synced."
   fi
-  # If set-repo-secrets fails (e.g. no gh / no GITHUB_TOKEN), push continues anyway
+  # If set-repo-secrets fails (e.g. no gh), push continues anyway
 fi
 
 exit 0

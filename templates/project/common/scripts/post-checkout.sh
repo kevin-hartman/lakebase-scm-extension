@@ -53,6 +53,20 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+# --- Auth preflight: verify CLI can reach Databricks before doing anything ---
+# .env is already sourced above, so DATABRICKS_CONFIG_PROFILE (if set) is already exported.
+if ! databricks current-user me -o json >/dev/null 2>&1; then
+  echo "Lakebase: Databricks CLI auth failed. Re-authenticate and then re-trigger the hook:"
+  if [ -n "${DATABRICKS_CONFIG_PROFILE:-}" ]; then
+    echo "  databricks auth login --profile ${DATABRICKS_CONFIG_PROFILE} --host ${DATABRICKS_HOST:-<workspace-url>}"
+  else
+    echo "  databricks auth login --host ${DATABRICKS_HOST:-<workspace-url>}"
+    echo "  Tip: set DATABRICKS_CONFIG_PROFILE in .env to pin a specific CLI profile."
+  fi
+  echo "  Then: git checkout - && git checkout $BRANCH"
+  exit 0  # don't block the git checkout itself
+fi
+
 PROJ_PATH="projects/${PROJ_ID}"
 DB_NAME="databricks_postgres"
 
@@ -83,9 +97,6 @@ update_env() {
     grep -v "^DATABASE_URL=" .env \
       | grep -v "^DB_USERNAME=" \
       | grep -v "^DB_PASSWORD=" \
-      | grep -v "^SPRING_DATASOURCE_URL=" \
-      | grep -v "^SPRING_DATASOURCE_USERNAME=" \
-      | grep -v "^SPRING_DATASOURCE_PASSWORD=" \
       | grep -v "^LAKEBASE_BRANCH_ID=" \
       | grep -v "^LAKEBASE_HOST=" \
       > .env.tmp 2>/dev/null || true
@@ -155,8 +166,9 @@ get_or_create_endpoint() {
 
 # --- Find the default (main) Lakebase branch ---
 # API returns { "branches": [ ... ] }; CLI may unwrap to [ ... ]. Support both.
+# Prefer the name component (last segment of .name) over uid — the create-branch API requires it.
 DEFAULT_BRANCH_UID="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null \
-  | jq -r '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[] | select((.status.default == true) or (.is_default == true)) | (.uid // .id // (if .name then (.name | split("/") | last) else empty end))' | head -1)"
+  | jq -r '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[] | select((.status.default == true) or (.is_default == true)) | (if .name then (.name | split("/") | last) else (.uid // .id // empty) end)' | head -1)"
 
 if [ -z "$DEFAULT_BRANCH_UID" ]; then
   echo "Lakebase: could not find default branch. Check LAKEBASE_PROJECT_ID and CLI auth."
@@ -189,6 +201,8 @@ fi
 # --- Feature branch: create Lakebase branch from default ---
 # Sanitize git branch name for Lakebase branch ID
 LAKEBASE_BRANCH="$(echo "$BRANCH" | sed 's/\//-/g' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-63)"
+# Lakebase requires at least 3 characters — pad short names
+while [ ${#LAKEBASE_BRANCH} -lt 3 ]; do LAKEBASE_BRANCH="${LAKEBASE_BRANCH}-x"; done
 BRANCH_PATH="${PROJ_PATH}/branches/${LAKEBASE_BRANCH}"
 SOURCE_BRANCH="${PROJ_PATH}/branches/${DEFAULT_BRANCH_UID}"
 
