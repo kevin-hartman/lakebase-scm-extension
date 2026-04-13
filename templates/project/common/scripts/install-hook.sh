@@ -25,7 +25,13 @@ fi
 if [ -f "$SCRIPT_DIR/pre-push.sh" ]; then
   cp "$SCRIPT_DIR/pre-push.sh" "$REPO_ROOT/.git/hooks/pre-push"
   chmod +x "$REPO_ROOT/.git/hooks/pre-push"
-  echo "Installed .git/hooks/pre-push (runs set-repo-secrets.sh before push so PR workflow has secrets)."
+  echo "Installed .git/hooks/pre-push (refreshes OAuth token + syncs secrets before push)."
+fi
+
+if [ -f "$SCRIPT_DIR/post-merge.sh" ]; then
+  cp "$SCRIPT_DIR/post-merge.sh" "$REPO_ROOT/.git/hooks/post-merge"
+  chmod +x "$REPO_ROOT/.git/hooks/post-merge"
+  echo "Installed .git/hooks/post-merge (cleans up Lakebase branches + prunes stale refs after merge)."
 fi
 
 echo "After any change to hook scripts in scripts/, run this again so .git/hooks uses the latest."
