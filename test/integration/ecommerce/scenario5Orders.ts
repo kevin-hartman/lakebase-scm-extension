@@ -17,8 +17,8 @@ import {
 } from './helpers';
 
 const BRANCH = 'feature/orders';
-const MIGRATION_FILE = 'V6__create_orders_and_order_item_tables.sql';
-const MIGRATION_SQL = `CREATE TABLE IF NOT EXISTS orders (
+export const MIGRATION_FILE = 'V6__create_orders_and_order_item_tables.sql';
+export const MIGRATION_SQL = `CREATE TABLE IF NOT EXISTS orders (
     id BIGSERIAL PRIMARY KEY,
     customer_id BIGINT NOT NULL REFERENCES customer(id) ON DELETE CASCADE,
     status VARCHAR(32) NOT NULL,
@@ -38,7 +38,7 @@ CREATE INDEX IF NOT EXISTS idx_orders_customer_id ON orders(customer_id);
 CREATE INDEX IF NOT EXISTS idx_order_item_order_id ON order_item(order_id);
 `;
 
-const TEST_FILES: Record<string, string> = {
+export const TEST_FILES: Record<string, string> = {
   'OrderServiceTest.java': `package com.example.demo;
 
 import com.example.demo.model.*;
@@ -175,7 +175,7 @@ class OrderControllerTest {
 `,
 };
 
-const JAVA_FILES: Record<string, string> = {
+export const JAVA_FILES: Record<string, string> = {
   'model/OrderStatus.java': `package com.example.demo.model;
 
 public enum OrderStatus {

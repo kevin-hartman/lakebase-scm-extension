@@ -20,12 +20,7 @@ import { ScenarioContext, git, verifyTableExists, verifyTableNotExists, verifyMi
 import { ensureRunnerBinary, startRunner, cleanupStaleRunners, RunnerHandle } from './runner';
 import { scaffoldMavenProject } from './mavenProject';
 
-import { runScenario as scenario1 } from './scenario1Book';
-import { runScenario as scenario2 } from './scenario2Product';
-import { runScenario as scenario3 } from './scenario3Customer';
-import { runScenario as scenario4 } from './scenario4Cart';
-import { runScenario as scenario5 } from './scenario5Orders';
-import { runScenario as scenario6 } from './scenario6Wishlist';
+import { runScenario as scenario1_6 } from './scenario1_6_AllEntities';
 import { runScenario as scenario7 } from './scenario7AlterProduct';
 import { runScenario as scenario8 } from './scenario8DropBook';
 
@@ -115,52 +110,12 @@ describe('E-Commerce Backend — 8 Iterative Scenarios', function () {
     console.log(`    [setup] Ready — 8 scenarios will execute.\n`);
   });
 
-  // ── Scenario 1: Book Entity ──────────────────────────────────────
+  // ── Scenarios 1-6: All Entities (one branch, one PR, one merge) ──
 
-  describe('Scenario 1: Book Entity', function () {
+  describe('Scenarios 1-6: All Entities', function () {
     this.timeout(600000);
     before(function () { if (!created) { this.skip(); } });
-    scenario1(ctx);
-  });
-
-  // ── Scenario 2: Product Catalog ──────────────────────────────────
-
-  describe('Scenario 2: Product Catalog', function () {
-    this.timeout(600000);
-    before(function () { if (!created) { this.skip(); } });
-    scenario2(ctx);
-  });
-
-  // ── Scenario 3: Customer Registration ────────────────────────────
-
-  describe('Scenario 3: Customer Registration', function () {
-    this.timeout(600000);
-    before(function () { if (!created) { this.skip(); } });
-    scenario3(ctx);
-  });
-
-  // ── Scenario 4: Shopping Cart ────────────────────────────────────
-
-  describe('Scenario 4: Shopping Cart', function () {
-    this.timeout(600000);
-    before(function () { if (!created) { this.skip(); } });
-    scenario4(ctx);
-  });
-
-  // ── Scenario 5: Order Processing ─────────────────────────────────
-
-  describe('Scenario 5: Order Processing', function () {
-    this.timeout(600000);
-    before(function () { if (!created) { this.skip(); } });
-    scenario5(ctx);
-  });
-
-  // ── Scenario 6: Wishlist ─────────────────────────────────────────
-
-  describe('Scenario 6: Wishlist', function () {
-    this.timeout(600000);
-    before(function () { if (!created) { this.skip(); } });
-    scenario6(ctx);
+    scenario1_6(ctx);
   });
 
   // ── Scenario 7: ALTER TABLE (Product Reviews) ────────────────────
@@ -208,10 +163,10 @@ describe('E-Commerce Backend — 8 Iterative Scenarios', function () {
       assert.strictEqual(parseInt(count, 10), 9, `Expected 9 migrations, got ${count}`);
     });
 
-    it('8 merge commits on main', () => {
+    it('3 merge commits on main (scenarios 1-6, 7, 8)', () => {
       const merges = cp.execSync('git log --merges --oneline', { cwd: ctx.projectDir, timeout: 10000 }).toString().trim();
       const lines = merges.split('\n').filter(Boolean);
-      assert.ok(lines.length >= 8, `Expected 8+ merge commits, got ${lines.length}`);
+      assert.ok(lines.length >= 3, `Expected 3+ merge commits, got ${lines.length}`);
     });
 
     it('Book Java files absent from repo', () => {

@@ -17,8 +17,8 @@ import {
 } from './helpers';
 
 const BRANCH = 'feature/wishlist';
-const MIGRATION_FILE = 'V7__create_wishlist_tables.sql';
-const MIGRATION_SQL = `CREATE TABLE IF NOT EXISTS wishlist (
+export const MIGRATION_FILE = 'V7__create_wishlist_tables.sql';
+export const MIGRATION_SQL = `CREATE TABLE IF NOT EXISTS wishlist (
     id BIGSERIAL PRIMARY KEY,
     customer_id BIGINT NOT NULL UNIQUE REFERENCES customer(id) ON DELETE CASCADE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS wishlist_item (
 CREATE INDEX IF NOT EXISTS idx_wishlist_item_wishlist_id ON wishlist_item(wishlist_id);
 `;
 
-const TEST_FILES: Record<string, string> = {
+export const TEST_FILES: Record<string, string> = {
   'WishlistServiceTest.java': `package com.example.demo;
 
 import com.example.demo.model.Customer;
@@ -160,7 +160,7 @@ class WishlistControllerTest {
 `,
 };
 
-const JAVA_FILES: Record<string, string> = {
+export const JAVA_FILES: Record<string, string> = {
   'model/Wishlist.java': `package com.example.demo.model;
 
 import jakarta.persistence.*;

@@ -17,8 +17,8 @@ import {
 } from './helpers';
 
 const BRANCH = 'feature/book';
-const MIGRATION_FILE = 'V2__create_book_table.sql';
-const MIGRATION_SQL = `CREATE TABLE IF NOT EXISTS book (
+export const MIGRATION_FILE = 'V2__create_book_table.sql';
+export const MIGRATION_SQL = `CREATE TABLE IF NOT EXISTS book (
     id BIGSERIAL PRIMARY KEY,
     title VARCHAR(255),
     price DECIMAL(19, 2),
@@ -26,7 +26,7 @@ const MIGRATION_SQL = `CREATE TABLE IF NOT EXISTS book (
 );
 `;
 
-const TEST_FILES: Record<string, string> = {
+export const TEST_FILES: Record<string, string> = {
   'BookServiceTest.java': `package com.example.demo;
 
 import com.example.demo.model.Book;
@@ -135,7 +135,7 @@ class BookControllerTest {
 `,
 };
 
-const JAVA_FILES: Record<string, string> = {
+export const JAVA_FILES: Record<string, string> = {
   'model/Book.java': `package com.example.demo.model;
 
 import jakarta.persistence.*;

@@ -17,8 +17,8 @@ import {
 } from './helpers';
 
 const BRANCH = 'feature/product-catalog';
-const MIGRATION_FILE = 'V3__create_product_table.sql';
-const MIGRATION_SQL = `CREATE TABLE IF NOT EXISTS product (
+export const MIGRATION_FILE = 'V3__create_product_table.sql';
+export const MIGRATION_SQL = `CREATE TABLE IF NOT EXISTS product (
     id BIGSERIAL PRIMARY KEY,
     title VARCHAR(255) NOT NULL,
     description TEXT,
@@ -29,7 +29,7 @@ const MIGRATION_SQL = `CREATE TABLE IF NOT EXISTS product (
 );
 `;
 
-const TEST_FILES: Record<string, string> = {
+export const TEST_FILES: Record<string, string> = {
   'ProductServiceTest.java': `package com.example.demo;
 
 import com.example.demo.model.Product;
@@ -131,7 +131,7 @@ class ProductControllerTest {
 `,
 };
 
-const JAVA_FILES: Record<string, string> = {
+export const JAVA_FILES: Record<string, string> = {
   'model/Product.java': `package com.example.demo.model;
 
 import jakarta.persistence.*;

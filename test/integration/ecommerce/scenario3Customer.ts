@@ -17,8 +17,8 @@ import {
 } from './helpers';
 
 const BRANCH = 'feature/customer';
-const MIGRATION_FILE = 'V4__create_customer_table.sql';
-const MIGRATION_SQL = `CREATE TABLE IF NOT EXISTS customer (
+export const MIGRATION_FILE = 'V4__create_customer_table.sql';
+export const MIGRATION_SQL = `CREATE TABLE IF NOT EXISTS customer (
     id BIGSERIAL PRIMARY KEY,
     email VARCHAR(255) NOT NULL UNIQUE,
     name VARCHAR(255) NOT NULL,
@@ -27,7 +27,7 @@ const MIGRATION_SQL = `CREATE TABLE IF NOT EXISTS customer (
 );
 `;
 
-const TEST_FILES: Record<string, string> = {
+export const TEST_FILES: Record<string, string> = {
   'CustomerServiceTest.java': `package com.example.demo;
 
 import com.example.demo.model.Customer;
@@ -124,7 +124,7 @@ class CustomerControllerTest {
 `,
 };
 
-const JAVA_FILES: Record<string, string> = {
+export const JAVA_FILES: Record<string, string> = {
   'model/Customer.java': `package com.example.demo.model;
 
 import jakarta.persistence.*;

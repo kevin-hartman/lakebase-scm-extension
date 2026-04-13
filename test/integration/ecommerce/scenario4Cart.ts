@@ -17,8 +17,8 @@ import {
 } from './helpers';
 
 const BRANCH = 'feature/cart';
-const MIGRATION_FILE = 'V5__create_cart_and_cart_item_tables.sql';
-const MIGRATION_SQL = `CREATE TABLE IF NOT EXISTS cart (
+export const MIGRATION_FILE = 'V5__create_cart_and_cart_item_tables.sql';
+export const MIGRATION_SQL = `CREATE TABLE IF NOT EXISTS cart (
     id BIGSERIAL PRIMARY KEY,
     customer_id BIGINT NOT NULL UNIQUE REFERENCES customer(id) ON DELETE CASCADE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -35,7 +35,7 @@ CREATE INDEX IF NOT EXISTS idx_cart_item_cart_id ON cart_item(cart_id);
 CREATE INDEX IF NOT EXISTS idx_cart_item_product_id ON cart_item(product_id);
 `;
 
-const TEST_FILES: Record<string, string> = {
+export const TEST_FILES: Record<string, string> = {
   'CartServiceTest.java': `package com.example.demo;
 
 import com.example.demo.model.Cart;
@@ -160,7 +160,7 @@ class CartControllerTest {
 `,
 };
 
-const JAVA_FILES: Record<string, string> = {
+export const JAVA_FILES: Record<string, string> = {
   'model/Cart.java': `package com.example.demo.model;
 
 import jakarta.persistence.*;
