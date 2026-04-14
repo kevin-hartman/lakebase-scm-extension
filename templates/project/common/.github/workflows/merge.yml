@@ -178,6 +178,32 @@ jobs:
           echo "DATABASE_URL=postgresql://${EMAIL}:${ENCODED_PASS}@${HOST}:5432/${DB_NAME}?sslmode=require" >> $GITHUB_ENV
           echo "Production credentials resolved (default branch: $DEFAULT_UID)."
 
+      - name: Create pre-migration snapshot
+        id: snapshot
+        env:
+          LAKEBASE_PROJECT_ID: ${{ secrets.LAKEBASE_PROJECT_ID }}
+        run: |
+          PROJ_PATH="projects/${LAKEBASE_PROJECT_ID}"
+          # Extract PR number from merge commit message (e.g. "Merge pull request #7")
+          PR_NUM="$(git log -1 --pretty=%s | grep -oE '#[0-9]+' | head -1 | tr -d '#')" || true
+          SNAPSHOT_NAME="pre-migrate-pr-${PR_NUM:-$(date +%s)}"
+
+          # Find default branch as source
+          LIST_RAW="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>&1)"
+          BRANCHES="$(echo "$LIST_RAW" | jq -c 'if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end' 2>/dev/null)" || BRANCHES="[]"
+          DEFAULT_NAME="$(echo "$BRANCHES" | jq -r '.[] | select((.status.default == true) or (.is_default == true)) | .name' 2>/dev/null | head -1)"
+
+          if [ -n "$DEFAULT_NAME" ]; then
+            echo "Creating pre-migration snapshot: $SNAPSHOT_NAME"
+            databricks postgres create-branch "$PROJ_PATH" "$SNAPSHOT_NAME" \
+              --json "{\"spec\": {\"source_branch\": \"${DEFAULT_NAME}\", \"ttl\": \"86400s\"}}" 2>&1 || true
+            echo "SNAPSHOT_NAME=$SNAPSHOT_NAME" >> $GITHUB_ENV
+            echo "SNAPSHOT_PROJ_PATH=$PROJ_PATH" >> $GITHUB_ENV
+          else
+            echo "::warning::Could not find default branch for snapshot. Proceeding without rollback safety."
+            echo "SNAPSHOT_NAME=" >> $GITHUB_ENV
+          fi
+
       - name: Run migrations (production)
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
@@ -208,6 +234,41 @@ jobs:
               echo "::error::Knex migrate failed."
               exit 1
             fi
+          fi
+
+      - name: Clean up or preserve snapshot
+        if: always()
+        env:
+          LAKEBASE_PROJECT_ID: ${{ secrets.LAKEBASE_PROJECT_ID }}
+        run: |
+          if [ -z "${SNAPSHOT_NAME}" ]; then
+            echo "No snapshot to manage."
+            exit 0
+          fi
+          PROJ_PATH="projects/${LAKEBASE_PROJECT_ID}"
+
+          # Find the snapshot branch path
+          LIST_RAW="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>&1)"
+          BRANCHES="$(echo "$LIST_RAW" | jq -c 'if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end' 2>/dev/null)" || BRANCHES="[]"
+          SNAP_PATH="$(echo "$BRANCHES" | jq -r ".[] | select(.name | test(\"${SNAPSHOT_NAME}\")) | .name" 2>/dev/null | head -1)"
+
+          if [ -z "$SNAP_PATH" ]; then
+            echo "Snapshot branch not found in listing. May have already expired."
+            exit 0
+          fi
+
+          MIGRATE_RESULT="${{ steps.snapshot.outcome }}"
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "Migrations succeeded. Deleting snapshot: $SNAP_PATH"
+            databricks postgres delete-branch "$SNAP_PATH" 2>&1 || true
+          else
+            echo "::warning::Migrations failed. Snapshot preserved for rollback: $SNAP_PATH"
+            echo "### Migration Rollback Available" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "A pre-migration snapshot was preserved: \`${SNAPSHOT_NAME}\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "To recover, point your application at this branch or use it as the source for a new default branch." >> $GITHUB_STEP_SUMMARY
+            echo "The snapshot will auto-expire in 24 hours." >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Verify schema (post-migrate)

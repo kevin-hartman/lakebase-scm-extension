@@ -30,7 +30,9 @@ if [ -n "${DATABRICKS_HOST:-}" ] && command -v databricks >/dev/null 2>&1; then
     export DATABRICKS_TOKEN="$FRESH_TOKEN"
     echo "Pre-push: OAuth token refreshed."
   else
-    echo "Pre-push: warning — could not refresh OAuth token. CI may use a stale token."
+    echo "Pre-push: ERROR — could not refresh OAuth token."
+    echo "Pre-push: CI will fail with a stale token. Run 'databricks auth login' and try again."
+    exit 1
   fi
 fi
 

@@ -175,7 +175,7 @@ jobs:
           # Create CI branch from default (use full resource name as source_branch)
           SOURCE_BRANCH="${DEFAULT_NAME:-${PROJ_PATH}/branches/${DEFAULT_UID}}"
           CREATE_OUT="$(databricks postgres create-branch "$PROJ_PATH" "$BRANCH_NAME" \
-            --json "{\"spec\": {\"source_branch\": \"${SOURCE_BRANCH}\", \"no_expiry\": true}}" 2>&1)" || true
+            --json "{\"spec\": {\"source_branch\": \"${SOURCE_BRANCH}\", \"ttl\": \"86400s\"}}" 2>&1)" || true
           echo "Lakebase: create-branch output: $CREATE_OUT"
           sleep 5
 
