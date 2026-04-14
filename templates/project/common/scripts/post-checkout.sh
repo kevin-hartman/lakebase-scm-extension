@@ -200,9 +200,7 @@ fi
 
 # --- Feature branch: create Lakebase branch from default ---
 # Sanitize git branch name for Lakebase branch ID
-LAKEBASE_BRANCH="$(echo "$BRANCH" | sed 's/\//-/g' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-63)"
-# Lakebase requires at least 3 characters — pad short names
-while [ ${#LAKEBASE_BRANCH} -lt 3 ]; do LAKEBASE_BRANCH="${LAKEBASE_BRANCH}-x"; done
+LAKEBASE_BRANCH="$("$SCRIPT_DIR/sanitize-branch-name.sh" "$BRANCH")"
 BRANCH_PATH="${PROJ_PATH}/branches/${LAKEBASE_BRANCH}"
 SOURCE_BRANCH="${PROJ_PATH}/branches/${DEFAULT_BRANCH_UID}"
 

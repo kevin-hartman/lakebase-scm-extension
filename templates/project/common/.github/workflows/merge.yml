@@ -425,10 +425,10 @@ jobs:
           PR_NUM="${{ github.event.pull_request.number }}"
           HEAD_REF="${{ github.event.pull_request.head.ref }}"
 
-          # Sanitize feature branch name to match Lakebase naming convention
+          # Sanitize feature branch name via shared script
           FEATURE_BRANCH=""
           if [ -n "$HEAD_REF" ]; then
-            FEATURE_BRANCH="$(echo "$HEAD_REF" | sed 's/\//-/g' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-63)"
+            FEATURE_BRANCH="$(bash scripts/sanitize-branch-name.sh "$HEAD_REF")"
           fi
 
           echo "PR_NUM=${PR_NUM} HEAD_REF=${HEAD_REF} FEATURE_BRANCH=${FEATURE_BRANCH:-none}"

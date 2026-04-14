@@ -96,8 +96,8 @@ jobs:
           export DATABRICKS_HOST DATABRICKS_TOKEN
           PR="${{ github.event.pull_request.number }}"
           BRANCH_NAME="ci-pr-${PR}"
-          # Branch ID must be 1-63 chars (CLI spec); ci-pr-<N> is always within range
-          BRANCH_NAME="$(echo "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-63)"
+          # Sanitize via shared script (same logic as post-checkout hook)
+          BRANCH_NAME="$(bash scripts/sanitize-branch-name.sh "$BRANCH_NAME")"
           echo "branch=${BRANCH_NAME}" >> $GITHUB_OUTPUT
           write_skip() {
             echo "## Lakebase CI branch: not created" >> $GITHUB_STEP_SUMMARY
