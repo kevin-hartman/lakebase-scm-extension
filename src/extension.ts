@@ -1030,10 +1030,10 @@ export async function activate(context: vscode.ExtensionContext) {
       const root = getWorkspaceRoot();
       const lang = detectLanguage(root);
       const cmds: Record<string, { name: string; cmd: string }> = {
-        java:    { name: 'Flyway Migrate',   cmd: './scripts/flyway-migrate.sh' },
+        java:    { name: 'Flyway Migrate',   cmd: './scripts/refresh-token.sh ./scripts/flyway-migrate.sh' },
         python:  { name: 'Alembic Migrate',  cmd: './scripts/refresh-token.sh uv run alembic upgrade head' },
-        nodejs:  { name: 'Knex Migrate',     cmd: 'set -a; source .env 2>/dev/null; set +a; npx knex migrate:latest' },
-        unknown: { name: 'Run Migrations',   cmd: './scripts/flyway-migrate.sh' },
+        nodejs:  { name: 'Knex Migrate',     cmd: './scripts/refresh-token.sh bash -c "set -a; source .env 2>/dev/null; set +a; npx knex migrate:latest"' },
+        unknown: { name: 'Run Migrations',   cmd: './scripts/refresh-token.sh ./scripts/flyway-migrate.sh' },
       };
       const { name, cmd } = cmds[lang];
       const terminal = vscode.window.createTerminal(name);
@@ -2920,7 +2920,7 @@ export async function activate(context: vscode.ExtensionContext) {
     const cfg = getConfig();
     if (!cfg.autoRefreshCredentials) { return; }
 
-    const REFRESH_INTERVAL_MS = 20 * 60 * 1000; // 20 minutes
+    const REFRESH_INTERVAL_MS = 45 * 60 * 1000; // 45 minutes (token lifetime ~1h, 15 min buffer)
 
     credentialRefreshTimer = setInterval(async () => {
       try {
