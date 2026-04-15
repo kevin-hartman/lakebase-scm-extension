@@ -411,10 +411,12 @@ export class LakebaseService {
    * @returns Connection info, or undefined if endpoint never became available.
    */
   async syncConnection(branchId: string): Promise<{ host: string; branchId: string; username: string; password: string } | undefined> {
+    const vscode = require('vscode');
     const { updateEnvConnection } = require('../utils/config');
     // Immediately point .env at this branch with empty credentials.
     // This ensures .env never remains pointed at production.
-    updateEnvConnection({ host: '', branchId, username: '', password: '' });
+    const failTimestamp = new Date().toISOString();
+    updateEnvConnection({ host: '', branchId, username: '', password: '', comment: `# Connection pending at ${failTimestamp}. If this persists, run: git checkout - && git checkout <branch>` });
 
     let ep = await this.getEndpoint(branchId);
     if (!ep?.host) {
@@ -425,7 +427,16 @@ export class LakebaseService {
         if (ep?.host) { break; }
       }
     }
-    if (!ep?.host) { return undefined; }
+    if (!ep?.host) {
+      const action = await vscode.window.showWarningMessage(
+        `Lakebase endpoint for branch "${branchId}" is not available. Credentials in .env are empty.`,
+        'Retry'
+      );
+      if (action === 'Retry') {
+        return this.syncConnection(branchId);
+      }
+      return undefined;
+    }
     const cred = await this.getCredential(branchId);
     updateEnvConnection({ host: ep.host, branchId, username: cred.email, password: cred.token });
     return { host: ep.host, branchId, username: cred.email, password: cred.token };

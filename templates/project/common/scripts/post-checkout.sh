@@ -210,8 +210,12 @@ BRANCH_EXISTS="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/n
 
 if [ -z "$BRANCH_EXISTS" ]; then
   echo "Lakebase: creating branch '$LAKEBASE_BRANCH' from default ($DEFAULT_BRANCH_UID)..."
-  databricks postgres create-branch "$PROJ_PATH" "$LAKEBASE_BRANCH" \
-    --json "{\"spec\": {\"source_branch\": \"$SOURCE_BRANCH\", \"no_expiry\": true}}" >/dev/null 2>&1 || true
+  CREATE_RESPONSE="$(databricks postgres create-branch "$PROJ_PATH" "$LAKEBASE_BRANCH" \
+    --json "{\"spec\": {\"source_branch\": \"$SOURCE_BRANCH\", \"no_expiry\": true}}" 2>&1)" || true
+  # Log fork point for audit trail
+  FORK_LSN="$(echo "$CREATE_RESPONSE" | jq -r '.status.source_branch_lsn // empty' 2>/dev/null)"
+  FORK_TIME="$(echo "$CREATE_RESPONSE" | jq -r '.status.source_branch_time // empty' 2>/dev/null)"
+  [ -n "$FORK_LSN" ] && echo "Lakebase: forked at LSN=$FORK_LSN time=$FORK_TIME"
 else
   echo "Lakebase: branch '$LAKEBASE_BRANCH' already exists."
 fi
@@ -246,5 +250,25 @@ if [ -z "$TOKEN" ] || [ -z "$EMAIL" ]; then
 fi
 
 update_env "$HOST" "$EMAIL" "$TOKEN" "$LAKEBASE_BRANCH"
-echo "Lakebase: branch '$LAKEBASE_BRANCH' ready. Updated .env with DATABASE_URL."
+
+# Verify connection works (non-blocking — skip if psql not available)
+if command -v psql >/dev/null 2>&1; then
+  if psql "host=$HOST port=5432 dbname=databricks_postgres user=$EMAIL password=$TOKEN sslmode=require" -c "SELECT 1" >/dev/null 2>&1; then
+    echo "Lakebase: branch '$LAKEBASE_BRANCH' ready. Connection verified. Updated .env."
+  else
+    echo "Lakebase: branch '$LAKEBASE_BRANCH' ready but connection check failed. Retrying credential..."
+    sleep 3
+    get_credential "${BRANCH_PATH}/endpoints/primary"
+    if [ -n "$TOKEN" ] && [ -n "$EMAIL" ]; then
+      update_env "$HOST" "$EMAIL" "$TOKEN" "$LAKEBASE_BRANCH"
+      if psql "host=$HOST port=5432 dbname=databricks_postgres user=$EMAIL password=$TOKEN sslmode=require" -c "SELECT 1" >/dev/null 2>&1; then
+        echo "Lakebase: connection verified on retry."
+      else
+        echo "Lakebase: warning — connection still failing. .env updated but credentials may need manual refresh."
+      fi
+    fi
+  fi
+else
+  echo "Lakebase: branch '$LAKEBASE_BRANCH' ready. Updated .env with DATABASE_URL."
+fi
 maybe_npm_install

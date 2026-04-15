@@ -119,6 +119,7 @@ export function updateEnvConnection(opts: {
   branchId: string;
   username: string;
   password: string;
+  comment?: string;
 }): void {
   const root = getWorkspaceRoot();
   if (!root) {
@@ -158,6 +159,9 @@ export function updateEnvConnection(opts: {
   }
 
   // Generic names — all languages read these
+  if (opts.comment) {
+    lines.push(opts.comment);
+  }
   lines.push(
     `LAKEBASE_HOST=${opts.host}`,
     `LAKEBASE_BRANCH_ID=${opts.branchId}`,

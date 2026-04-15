@@ -177,6 +177,10 @@ jobs:
           CREATE_OUT="$(databricks postgres create-branch "$PROJ_PATH" "$BRANCH_NAME" \
             --json "{\"spec\": {\"source_branch\": \"${SOURCE_BRANCH}\", \"ttl\": \"86400s\"}}" 2>&1)" || true
           echo "Lakebase: create-branch output: $CREATE_OUT"
+          # Log fork point for audit trail
+          FORK_LSN="$(echo "$CREATE_OUT" | jq -r '.status.source_branch_lsn // empty' 2>/dev/null)"
+          FORK_TIME="$(echo "$CREATE_OUT" | jq -r '.status.source_branch_time // empty' 2>/dev/null)"
+          [ -n "$FORK_LSN" ] && echo "Lakebase: CI branch forked at LSN=$FORK_LSN time=$FORK_TIME"
           sleep 5
 
           # Re-fetch list after create (CLI may return fresh data)
