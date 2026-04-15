@@ -253,6 +253,7 @@ npm run test:integration -- --grep "Python Dev Loop"  # 83 integration tests (4 
 - **Merge conflict resolution** — no special handling for conflicting migration versions across branches
 - **Multi-project support** — assumes one Lakebase project per workspace
 - **Blue action button** — VS Code's SCM action button uses a proposed API not available to third-party extensions
+- **Local branch after merge** — merging a PR checks out main and pulls, but does not delete the local feature branch or prune stale remote tracking refs. The branch remains visible in the IDE until manually deleted (`git branch -d <branch>`)
 
 ## Roadmap
 
