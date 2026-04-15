@@ -247,9 +247,21 @@ export class SchemaScmProvider {
   private async refreshMainBranch(currentBranch: string): Promise<void> {
     if (!this.scm) { return; }
 
-    // Clear working tree groups (not relevant on main)
-    this.stagedGroup!.resourceStates = [];
-    this.codeGroup!.resourceStates = [];
+    // Staged + unstaged files (main can have uncommitted changes after merge, stash pop, etc.)
+    try {
+      const staged = await this.gitService.getStagedChanges();
+      const root = getWorkspaceRoot();
+      this.stagedGroup!.resourceStates = staged.map(f => this.makeStagedResource(f, root));
+    } catch {
+      this.stagedGroup!.resourceStates = [];
+    }
+    try {
+      const unstaged = await this.gitService.getUnstagedChanges();
+      const root = getWorkspaceRoot();
+      this.codeGroup!.resourceStates = unstaged.map(f => this.makeChangeResource(f, root));
+    } catch {
+      this.codeGroup!.resourceStates = [];
+    }
     this.syncGroup!.resourceStates = [];
     this.prGroup!.resourceStates = [];
     this.lastPrInfo = undefined;
@@ -359,7 +371,9 @@ export class SchemaScmProvider {
     } catch { /* ignore */ }
     this.mergesGroup!.resourceStates = mergeItems;
 
-    this.scm.count = lakebaseItems.length + migrationItems.length + mergeItems.length;
+    this.scm.count = this.stagedGroup!.resourceStates.length +
+      this.codeGroup!.resourceStates.length +
+      lakebaseItems.length + migrationItems.length + mergeItems.length;
     this.updateBranchStatusBar(currentBranch);
     this._onDidRefresh.fire();
   }
