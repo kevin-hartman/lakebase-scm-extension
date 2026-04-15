@@ -253,7 +253,7 @@ npm run test:integration -- --grep "Python Dev Loop"  # 83 integration tests (4 
 - **Merge conflict resolution** — no special handling for conflicting migration versions across branches
 - **Multi-project support** — assumes one Lakebase project per workspace
 - **Blue action button** — VS Code's SCM action button uses a proposed API not available to third-party extensions
-- **Local branch after merge** — the `post-merge` hook attempts to delete the local feature branch and prune stale remote tracking refs, but this may not succeed in all cases (e.g., squash merges with non-standard commit messages, local uncommitted changes). If the branch persists after merge, delete it manually with `git branch -d <branch>`. Needs investigation for a more reliable solution.
+- **Local branch after merge** — the `post-merge` hook attempts to delete the local feature branch and prune stale remote tracking refs, but this may not succeed in all cases (e.g., squash merges with non-standard commit messages, local uncommitted changes). If the branch persists after merge, delete it manually with `git branch -d <branch>`. Needs investigation — a more reliable approach may be to have the extension explicitly delete the local branch by name (which it already knows from the PR context) after merge, rather than relying on the hook's heuristic parsing of commit messages.
 
 ## Roadmap
 
