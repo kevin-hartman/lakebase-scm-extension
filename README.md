@@ -42,7 +42,7 @@ The wizard walks through 10 steps:
 - GitHub repository with CI/CD workflows (`pr.yml`, `merge.yml`)
 - Lakebase database project with a production branch
 - Language-specific scaffold (entity, migration, test framework, build tool)
-- 16 shell scripts (hooks, migration, secrets, schema diff)
+- 18 shell scripts (hooks, migration, secrets, schema diff, federation, cleanup)
 - `.env` with Databricks connection, `.gitignore`, `.vscode/settings.json`
 - Self-hosted GitHub Actions runner (if selected) — deployed and listening
 - Initial commit pushed to main
@@ -84,7 +84,7 @@ Smart scripts (`flyway-migrate.sh`, `run-tests.sh`) auto-detect the language fro
 
 ### Install the Extension
 
-1. Download `lakebase-scm-extension-0.4.9.vsix` from the [latest release](https://github.com/kevin-hartman/lakebase-scm-extension/releases/latest)
+1. Download `lakebase-scm-extension-0.5.0.vsix` from the [latest release](https://github.com/kevin-hartman/lakebase-scm-extension/releases/latest)
 2. In VS Code: **Extensions** → `...` → **Install from VSIX** → select the file
 3. Reload the window
 
@@ -140,7 +140,7 @@ Click `$(git-pull-request-create)` on the project item. The extension handles th
 5. Creates the PR
 
 The CI workflow (`pr.yml`) automatically:
-- Creates a `ci-pr-<N>` Lakebase branch from production
+- Creates a `ci-pr-<N>` Lakebase branch from production (24h TTL auto-expiry)
 - Runs Flyway/Alembic/Knex migrate on the CI branch
 - Runs tests
 - Posts a schema diff comment on the PR
@@ -162,8 +162,10 @@ Click `$(git-merge)` in the Pull Request view:
 3. Extension merges, checks out main, pulls latest
 
 The merge workflow (`merge.yml`) automatically:
+- Creates a pre-migration snapshot branch (rollback safety)
 - Runs Flyway/Alembic/Knex migrate on production
 - Verifies schema (checks all expected tables exist)
+- Deletes the snapshot branch on success (preserves on failure with recovery instructions)
 - Deletes the `ci-pr-<N>` and feature Lakebase branches
 
 ### 8. Verify Production
@@ -214,7 +216,7 @@ Search `lakebaseSync` in VS Code Settings:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `autoCreateBranch` | `true` | Auto-create Lakebase branch on git checkout |
-| `autoRefreshCredentials` | `true` | Background credential refresh (20 min) |
+| `autoRefreshCredentials` | `true` | Background credential refresh (45 min) |
 | `showUnifiedRepo` | `true` | Show Git + Lakebase in Source Control |
 | `productionReadOnly` | `true` | Prevent deleting the production branch |
 | `migrationPath` | `src/main/resources/db/migration` | Migration file path |
