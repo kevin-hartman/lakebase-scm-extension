@@ -611,6 +611,37 @@ export class SchemaScmProvider {
       const unstaged = await this.gitService.getUnstagedChanges();
       this.codeGroup!.resourceStates = unstaged.map(f => this.makeChangeResource(f, root));
 
+      // --- Re-evaluate Lakebase schema changes (migration files may have been added/staged) ---
+      let schemaItems: vscode.SourceControlResourceState[] = [];
+      try {
+        const config = getConfig();
+        const allPaths = [
+          ...this.stagedGroup!.resourceStates.map(r => r.resourceUri.fsPath),
+          ...this.codeGroup!.resourceStates.map(r => r.resourceUri.fsPath),
+        ];
+        const hasMigrationChanges = allPaths.some(p =>
+          p.includes(config.migrationPath) && config.migrationPattern.test(p.split('/').pop() || '')
+        );
+        if (hasMigrationChanges) {
+          const mainMigrations = await this.gitService.listMigrationsOnBranch('main', config.migrationPath, config.migrationPattern);
+          const mainSet = new Set(mainMigrations);
+          const branchMigrations = this.migrationService.listMigrations();
+          const newMigrations = branchMigrations.filter(m => !mainSet.has(m.filename));
+          if (newMigrations.length > 0) {
+            const schemaChanges = this.migrationService.parseMigrationSchemaChanges(newMigrations);
+            const tableMap = new Map<string, { type: string; tableName: string }>();
+            for (const change of schemaChanges) { tableMap.set(change.tableName, change); }
+            for (const change of tableMap.values()) {
+              schemaItems.push(this.makeSchemaResource(
+                change.tableName,
+                change.type as 'created' | 'modified' | 'removed'
+              ));
+            }
+          }
+        }
+      } catch { /* ignore */ }
+      this.lakebaseGroup!.resourceStates = schemaItems;
+
       this.scm.count = this.stagedGroup!.resourceStates.length +
         this.codeGroup!.resourceStates.length +
         this.lakebaseGroup!.resourceStates.length;
@@ -765,7 +796,7 @@ export class SchemaScmProvider {
     if (removed.length > 0) {
       vscode.window.showWarningMessage(`Migration${removed.length > 1 ? 's' : ''} removed: ${removed.join(', ')}`);
     }
-    await this.refreshCodeOnly();
+    await this.refresh();
   }
 
   private async onCommitDetected(): Promise<void> {

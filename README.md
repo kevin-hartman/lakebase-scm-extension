@@ -15,6 +15,7 @@ Lakebase SCM Extension is a VS Code / Cursor extension that replaces the built-i
 - **PR integration** — commit → push → create PR in one flow; CI creates a dedicated Lakebase branch for testing
 - **Merge awareness** — merge PRs from VS Code; CI applies migrations to production and cleans up branches
 - **Branch Review** — multi-diff editor showing all code + schema changes, querying actual database state
+- **Deploy to Databricks Apps** — multi-target deploy wizard with per-file workspace upload, clickable deploy progress, and post-deploy app launch
 - **Full Git SCM parity** — every command from the built-in Git extension is available, plus Lakebase sync
 
 ## Getting Started: Create a New Project
@@ -84,7 +85,7 @@ Smart scripts (`flyway-migrate.sh`, `run-tests.sh`) auto-detect the language fro
 
 ### Install the Extension
 
-1. Download `lakebase-scm-extension-0.5.0.vsix` from the [latest release](https://github.com/kevin-hartman/lakebase-scm-extension/releases/latest)
+1. Download `lakebase-scm-extension-0.5.1.vsix` from the [latest release](https://github.com/kevin-hartman/lakebase-scm-extension/releases/latest)
 2. In VS Code: **Extensions** → `...` → **Install from VSIX** → select the file
 3. Reload the window
 
@@ -219,7 +220,7 @@ Search `lakebaseSync` in VS Code Settings:
 | `autoRefreshCredentials` | `true` | Background credential refresh (45 min) |
 | `showUnifiedRepo` | `true` | Show Git + Lakebase in Source Control |
 | `productionReadOnly` | `true` | Prevent deleting the production branch |
-| `migrationPath` | `src/main/resources/db/migration` | Migration file path |
+| `migrationPath` | _(empty — auto-detect)_ | Migration file path. Leave empty to auto-detect from project language. |
 
 ## Testing
 
@@ -257,7 +258,6 @@ npm run test:integration -- --grep "Python Dev Loop"  # 83 integration tests (4 
 
 ## Roadmap
 
-- **Deploy to Databricks Apps** — One-click deployment with `app.yaml`/`databricks.yml` generation, OAuth M2M auth, and synced table support
 - **Data preview** — Read-only table viewer for branch databases
 - **Conflict detection** — Warn when two branches modify the same tables
 - **Branch comparison** — Diff any two Lakebase branches

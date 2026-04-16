@@ -18,6 +18,7 @@ import { isMainBranch } from './utils/theme';
 import { buildDiffTuples, DiffTuple } from './utils/diffBuilder';
 import { ProjectCreationService, PROJECT_CREATION_PROMPTS } from './services/projectCreationService';
 import { ScaffoldService } from './services/scaffoldService';
+import { DeployService, DeployTarget, DeployTargetsConfig } from './services/deployService';
 import { RunnerTreeProvider } from './providers/runnerTreeProvider';
 
 let gitService: GitService;
@@ -2908,6 +2909,281 @@ export async function activate(context: vscode.ExtensionContext) {
       const terminal = vscode.window.createTerminal('Git Output');
       terminal.show();
       terminal.sendText('git log --oneline --graph --decorate -30');
+    }),
+
+    // ── Deploy App (multi-step wizard) ─────────────────────────────
+    vscode.commands.registerCommand('lakebaseSync.deployApp', async () => {
+      const root = getWorkspaceRoot();
+      if (!root) {
+        vscode.window.showErrorMessage('No workspace folder open');
+        return;
+      }
+
+      // ── Step 1: Pick existing target or create new ──────────────
+      const existingConfig = DeployService.readTargets(root);
+      const existingTargets = existingConfig?.targets ?? {};
+      const targetNames = Object.keys(existingTargets);
+
+      interface TargetPick extends vscode.QuickPickItem { targetName?: string; action: 'deploy' | 'edit' | 'create' }
+      const pickItems: TargetPick[] = [];
+
+      for (const name of targetNames) {
+        const t = existingTargets[name];
+        pickItems.push({
+          label: `$(rocket) ${name}`,
+          description: `${t.app_name} → ${t.workspace_profile}`,
+          detail: `Lakebase: ${t.lakebase_project}/${t.lakebase_branch}  ·  Workspace: ${t.workspace_path}`,
+          targetName: name,
+          action: 'deploy',
+        });
+        pickItems.push({
+          label: `$(gear) ${name} — Edit configuration`,
+          description: 'Re-walk setup for this target',
+          targetName: name,
+          action: 'edit',
+        });
+      }
+
+      if (pickItems.length > 0) {
+        pickItems.push({ label: '', kind: vscode.QuickPickItemKind.Separator, action: 'create' });
+      }
+      pickItems.push({
+        label: '$(add) Create new deploy target',
+        description: 'Set up a new deployment target',
+        action: 'create',
+      });
+
+      const picked = await vscode.window.showQuickPick(pickItems, {
+        title: 'Lakebase: Deploy App',
+        placeHolder: targetNames.length > 0 ? 'Deploy to a target or create a new one' : 'No deploy targets yet — create one',
+      });
+      if (!picked) { return; }
+
+      let targetName: string;
+      let target: DeployTarget;
+
+      if (picked.action === 'deploy' && picked.targetName) {
+        // ── Direct deploy to existing target ──────────────────────
+        targetName = picked.targetName;
+        target = existingTargets[targetName];
+
+        const confirm = await vscode.window.showWarningMessage(
+          `Deploy to "${targetName}"?\n\nApp: ${target.app_name}\nWorkspace: ${target.workspace_profile}\nLakebase: ${target.lakebase_project}/${target.lakebase_branch}`,
+          { modal: true },
+          'Deploy'
+        );
+        if (confirm !== 'Deploy') { return; }
+
+      } else {
+        // ── Wizard: create new or edit existing ───────────────────
+        const isEdit = picked.action === 'edit' && picked.targetName;
+        const defaults = isEdit ? existingTargets[picked.targetName!] : undefined;
+        const totalSteps = isEdit ? 5 : 6;
+        const wizardTitle = isEdit ? `Lakebase: Edit Target "${picked.targetName}"` : 'Lakebase: New Deploy Target';
+
+        // Step 2a (create only): Target name
+        if (isEdit) {
+          targetName = picked.targetName!;
+        } else {
+          const nameInput = await vscode.window.showInputBox({
+            title: `${wizardTitle} (1/${totalSteps})`,
+            prompt: 'Target name (e.g. prod, staging, dev)',
+            placeHolder: 'prod',
+            validateInput: (val) => {
+              if (!val.trim()) { return 'Target name is required'; }
+              if (!/^[a-zA-Z0-9_-]+$/.test(val)) { return 'Use only letters, numbers, hyphens, underscores'; }
+              if (!isEdit && existingTargets[val]) { return `Target "${val}" already exists — choose Edit to modify it`; }
+              return undefined;
+            },
+          });
+          if (!nameInput) { return; }
+          targetName = nameInput;
+        }
+
+        // Step 2b: Workspace profile — pick from CLI profiles
+        const stepWorkspace = isEdit ? 1 : 2;
+        let profileName: string | undefined;
+
+        const profiles = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: 'Discovering Databricks workspaces...' },
+          () => lakebaseService.listProfiles()
+        );
+
+        if (profiles.length > 0) {
+          interface ProfilePick extends vscode.QuickPickItem { profileName: string; action?: string }
+          const profileItems: ProfilePick[] = profiles
+            .filter(p => p.valid)
+            .map(p => ({
+              label: `$(database) ${p.name}`,
+              description: `${p.host} (${p.cloud})`,
+              profileName: p.name,
+            }));
+          profileItems.push({ label: '', kind: vscode.QuickPickItemKind.Separator, profileName: '' });
+          profileItems.push({
+            label: '$(edit) Enter profile name manually...',
+            profileName: '', action: 'manual',
+          });
+
+          const profilePick = await vscode.window.showQuickPick(profileItems, {
+            title: `${wizardTitle} (${stepWorkspace}/${totalSteps})`,
+            placeHolder: defaults?.workspace_profile
+              ? `Current: ${defaults.workspace_profile}  ·  Select workspace profile`
+              : 'Select the Databricks CLI profile for this target',
+          });
+          if (!profilePick) { return; }
+
+          if (profilePick.action === 'manual') {
+            profileName = undefined; // fall through to manual input
+          } else {
+            profileName = profilePick.profileName;
+          }
+        }
+
+        if (!profileName) {
+          const manualProfile = await vscode.window.showInputBox({
+            title: `${wizardTitle} (${stepWorkspace}/${totalSteps})`,
+            prompt: 'Databricks CLI profile name',
+            value: defaults?.workspace_profile ?? '',
+            placeHolder: 'fevm-serverless-stable-nd62dj',
+            validateInput: (val) => val.trim() ? undefined : 'Profile name is required',
+          });
+          if (!manualProfile) { return; }
+          profileName = manualProfile;
+        }
+
+        // Step 3: Workspace path
+        const stepPath = isEdit ? 2 : 3;
+        const defaultWsPath = defaults?.workspace_path
+          ?? `/Workspace/Users/kevin.hartman@databricks.com/${require('path').basename(root)}`;
+        const wsPath = await vscode.window.showInputBox({
+          title: `${wizardTitle} (${stepPath}/${totalSteps})`,
+          prompt: 'Workspace path (where source files are uploaded)',
+          value: defaultWsPath,
+          placeHolder: '/Workspace/Users/you@company.com/my-app',
+          validateInput: (val) => {
+            if (!val.trim()) { return 'Workspace path is required'; }
+            if (!val.startsWith('/Workspace')) { return 'Path must start with /Workspace'; }
+            return undefined;
+          },
+        });
+        if (!wsPath) { return; }
+
+        // Step 4: App name
+        const stepApp = isEdit ? 3 : 4;
+        const defaultAppName = defaults?.app_name ?? require('path').basename(root);
+        const appName = await vscode.window.showInputBox({
+          title: `${wizardTitle} (${stepApp}/${totalSteps})`,
+          prompt: 'Databricks App name',
+          value: defaultAppName,
+          placeHolder: 'partner-asset-tracker',
+          validateInput: (val) => val.trim() ? undefined : 'App name is required',
+        });
+        if (!appName) { return; }
+
+        // Step 5: Lakebase project
+        const stepLbProject = isEdit ? 4 : 5;
+        const defaultLbProject = defaults?.lakebase_project ?? require('path').basename(root);
+        const lbProject = await vscode.window.showInputBox({
+          title: `${wizardTitle} (${stepLbProject}/${totalSteps})`,
+          prompt: 'Lakebase project name',
+          value: defaultLbProject,
+          placeHolder: 'partner-asset-tracker',
+          validateInput: (val) => val.trim() ? undefined : 'Lakebase project name is required',
+        });
+        if (!lbProject) { return; }
+
+        // Step 6: Lakebase branch
+        const stepLbBranch = isEdit ? 5 : 6;
+        const defaultLbBranch = defaults?.lakebase_branch ?? 'production';
+        const lbBranch = await vscode.window.showInputBox({
+          title: `${wizardTitle} (${stepLbBranch}/${totalSteps})`,
+          prompt: 'Lakebase branch for this deploy target',
+          value: defaultLbBranch,
+          placeHolder: 'production',
+          validateInput: (val) => val.trim() ? undefined : 'Branch name is required',
+        });
+        if (!lbBranch) { return; }
+
+        // Build target and save
+        target = {
+          workspace_profile: profileName,
+          workspace_path: wsPath,
+          app_name: appName,
+          lakebase_project: lbProject,
+          lakebase_branch: lbBranch,
+        };
+
+        const updatedConfig: DeployTargetsConfig = {
+          targets: { ...existingTargets, [targetName]: target },
+        };
+        DeployService.writeTargets(updatedConfig, root);
+
+        vscode.window.showInformationMessage(`Deploy target "${targetName}" saved to deploy-targets.yaml`);
+
+        // Ask whether to deploy now
+        const deployNow = await vscode.window.showInformationMessage(
+          `Target "${targetName}" configured. Deploy now?`,
+          'Deploy', 'Not Now'
+        );
+        if (deployNow !== 'Deploy') { return; }
+      }
+
+      // ── Execute deploy ──────────────────────────────────────────
+      const appName = target.app_name;
+      const workspaceHost = await DeployService.resolveWorkspaceHost(target.workspace_profile);
+
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `Deploying to ${targetName}`,
+          cancellable: false,
+        },
+        async (progress) => {
+          let deployLinkShown = false;
+          const result = await DeployService.deploy(
+            targetName,
+            root,
+            (msg, phase) => {
+              progress.report({ message: msg });
+              // When the long-running "apps deploy" starts, show a clickable link
+              if (phase === 'deploy' && !deployLinkShown) {
+                deployLinkShown = true;
+                if (workspaceHost) {
+                  const consoleUrl = `${workspaceHost}/apps/${encodeURIComponent(appName)}`;
+                  // Non-blocking — runs alongside the deploy
+                  vscode.window.showInformationMessage(
+                    `Deploying ${appName} — this may take a few minutes.`,
+                    'View in Databricks'
+                  ).then(action => {
+                    if (action === 'View in Databricks') {
+                      vscode.env.openExternal(vscode.Uri.parse(consoleUrl));
+                    }
+                  });
+                }
+              }
+            },
+          );
+
+          if (result.success) {
+            if (result.appUrl) {
+              const action = await vscode.window.showInformationMessage(
+                `Deployed "${appName}" to ${targetName} successfully!`,
+                'Open App', 'Copy URL'
+              );
+              if (action === 'Open App') {
+                vscode.env.openExternal(vscode.Uri.parse(result.appUrl));
+              } else if (action === 'Copy URL') {
+                vscode.env.clipboard.writeText(result.appUrl);
+                vscode.window.showInformationMessage('App URL copied to clipboard');
+              }
+            } else {
+              vscode.window.showInformationMessage(`Deployed "${appName}" to ${targetName} successfully!`);
+            }
+          } else {
+            vscode.window.showErrorMessage(`Deploy failed: ${result.error}`);
+          }
+        }
+      );
     }),
   );
 

@@ -2,7 +2,7 @@
   "name": "lakebase-scm-extension",
   "displayName": "Lakebase SCM Extension",
   "description": "Unified visibility into code and database branch changes for Databricks Lakebase",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "publisher": "databricks-field-eng",
   "icon": "resources/icons/extension-icon.png",
   "repository": {
@@ -474,6 +474,11 @@
         "command": "lakebaseSync.toggleChangesTree",
         "title": "View as Tree",
         "icon": "$(list-tree)"
+      },
+      {
+        "command": "lakebaseSync.deployApp",
+        "title": "Lakebase: Deploy App",
+        "icon": "$(rocket)"
       }
     ],
     "submenus": [
@@ -867,6 +872,10 @@
         {
           "command": "lakebaseSync.refreshPrStatus",
           "group": "2_pr@3"
+        },
+        {
+          "command": "lakebaseSync.deployApp",
+          "group": "3_deploy@1"
         }
       ],
       "scm/resourceGroup/context": [
@@ -928,6 +937,11 @@
           "command": "lakebaseSync.refreshBranches",
           "when": "view == lakebaseBranches",
           "group": "navigation@2"
+        },
+        {
+          "command": "lakebaseSync.deployApp",
+          "when": "view == lakebaseBranches",
+          "group": "navigation@3"
         },
         {
           "command": "lakebaseSync.toggleChangesTree",
@@ -1307,8 +1321,8 @@
         },
         "lakebaseSync.migrationPath": {
           "type": "string",
-          "default": "src/main/resources/db/migration",
-          "description": "Path to migration files relative to workspace root"
+          "default": "",
+          "description": "Path to migration files relative to workspace root. Leave empty to auto-detect from project language (Java: src/main/resources/db/migration, Python: alembic/versions, Node.js: migrations)."
         },
         "lakebaseSync.showUnifiedRepo": {
           "type": "boolean",

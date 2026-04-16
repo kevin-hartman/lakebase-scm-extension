@@ -58,6 +58,18 @@ export class ScaffoldService {
     fs.writeFileSync(dest, content);
   }
 
+  /** Deploy deploy-targets.yaml with optional project name substitution */
+  async deployDeployTargets(targetDir: string, projectName?: string): Promise<void> {
+    const src = path.join(this.commonDir(), 'deploy-targets.yaml');
+    const dest = path.join(targetDir, 'deploy-targets.yaml');
+    if (!fs.existsSync(src)) { return; }
+    let content = fs.readFileSync(src, 'utf-8');
+    if (projectName) {
+      content = content.replace(/\{\{PROJECT_NAME\}\}/g, projectName);
+    }
+    fs.writeFileSync(dest, content);
+  }
+
   /** Deploy .vscode/settings.json (disables built-in Git SCM) */
   async deployVscodeSettings(targetDir: string): Promise<void> {
     const src = path.join(this.commonDir(), '.vscode', 'settings.json');
@@ -119,6 +131,7 @@ export class ScaffoldService {
     await this.deployGitignore(targetDir, language);
     await this.deployEnvExample(targetDir, values);
     await this.deployVscodeSettings(targetDir);
+    await this.deployDeployTargets(targetDir, values?.lakebaseProjectId);
 
     // Language-specific project files
     await this.deployLanguageProject(targetDir, language, values?.lakebaseProjectId);

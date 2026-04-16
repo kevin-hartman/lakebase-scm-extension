@@ -438,10 +438,10 @@ lakebase-scm-extension/
 | 5 | Advanced Features | Partially complete | v0.3.7 (Graph), v0.3.8 (Refactoring) |
 | 5.5 | R1-R8 Refactoring | ✅ Complete | v0.3.8 |
 | 6 | Remaining Cleanup | Partially complete | v0.4.0 (#55-#56 open, #57 done) |
-| 7 | Deploy to Databricks Apps | Future | — |
+| 7 | Deploy to Databricks Apps | ✅ Complete | v0.5.1 |
 | — | OAuth-only CI, template parity | ✅ Complete | v0.4.1–v0.4.9 |
 
-**Current state:** v0.4.9
+**Current state:** v0.5.1
 
 ### v0.4.0 changelog:
 - **Create New Project wizard** — 10-step flow: project name → parent dir → GitHub auth gate → repo name → visibility → language (Java/Python/Node.js) → runner type (self-hosted/GitHub-hosted) → Databricks workspace + auth gate → Lakebase project name → execute. Cascading defaults, cleanup on failure, opens project folder.
@@ -512,6 +512,15 @@ lakebase-scm-extension/
 - **Backported PAT fixes to templates** — Auth preflight check, `.name`-over-`.uid` jq branch lookup, 3-char Lakebase branch name padding in `post-checkout.sh` and `refresh-token.sh`.
 - **Full template/project parity** — All 16 scripts and 2 workflows verified identical between extension templates and deployed projects.
 - **328 tests passing, 0 failing.**
+
+### v0.5.1 changelog:
+- **Deploy App command** — Multi-step wizard: pick existing target or create/edit one. Confirms before deploy. Builds frontend, updates `app.yaml` with Lakebase config, uploads source files per-file to workspace, deploys via `databricks apps deploy`. Clickable "View in Databricks" notification during deploy, "Open App" + "Copy URL" buttons on success.
+- **Workspace mkdirs before upload** — `uploadSource` now creates remote parent directories (`databricks workspace mkdirs`) before importing files, fixing deploys with nested asset directories (e.g. `static/_static/`).
+- **deploy-targets.yaml** — New config file format for multi-target deployments. Scaffolded projects get a template with `{{PROJECT_NAME}}` substitution.
+- **migrationPath default fix** — Changed default from hardcoded `src/main/resources/db/migration` to empty string (auto-detect from project language). Python and Node.js projects no longer need manual configuration.
+- **Lakebase folder always visible** — Changes tree shows the Lakebase folder even when empty (collapsed), instead of hiding it entirely.
+- **Lakebase re-evaluation on stage/unstage** — `refreshCodeOnly` now re-evaluates migration files, so staging a migration immediately updates the Lakebase group.
+- **Removed debug logging** — Cleaned up `Lakebase SCM Debug` output channel added during migrationPath troubleshooting.
 
 ### Known issues / tech debt:
 - Existing projects created before v0.4.0 need manual workflow update (replace `actions/setup-java` with local JDK step) for self-hosted runners.
