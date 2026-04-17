@@ -2978,7 +2978,7 @@ export async function activate(context: vscode.ExtensionContext) {
         // ── Wizard: create new or edit existing ───────────────────
         const isEdit = picked.action === 'edit' && picked.targetName;
         const defaults = isEdit ? existingTargets[picked.targetName!] : undefined;
-        const totalSteps = isEdit ? 5 : 6;
+        const totalSteps = isEdit ? 8 : 9;
         const wizardTitle = isEdit ? `Lakebase: Edit Target "${picked.targetName}"` : 'Lakebase: New Deploy Target';
 
         // Step 2a (create only): Target name
@@ -3104,6 +3104,47 @@ export async function activate(context: vscode.ExtensionContext) {
         });
         if (!lbBranch) { return; }
 
+        // Step 7: UC Catalog (optional — for UC Volumes file storage)
+        const stepUcCatalog = isEdit ? 6 : 7;
+        const defaultUcCatalog = defaults?.uc_catalog ?? '';
+        const ucCatalog = await vscode.window.showInputBox({
+          title: `${wizardTitle} (${stepUcCatalog}/${totalSteps})`,
+          prompt: 'UC catalog name for file storage (leave blank to skip)',
+          value: defaultUcCatalog,
+          placeHolder: 'partner_asset_tracker',
+        });
+        if (ucCatalog === undefined) { return; } // Escape pressed
+
+        // Step 8: UC Schema (if catalog provided)
+        let ucSchema = '';
+        let ucVolume = '';
+        if (ucCatalog) {
+          const stepUcSchema = isEdit ? 7 : 8;
+          const defaultUcSchema = defaults?.uc_schema ?? ucCatalog;
+          const ucSchemaInput = await vscode.window.showInputBox({
+            title: `${wizardTitle} (${stepUcSchema}/${totalSteps})`,
+            prompt: 'UC schema name',
+            value: defaultUcSchema,
+            placeHolder: 'partner_asset_tracker',
+            validateInput: (val) => val.trim() ? undefined : 'Schema name is required when catalog is set',
+          });
+          if (!ucSchemaInput) { return; }
+          ucSchema = ucSchemaInput;
+
+          // Step 9: UC Volume
+          const stepUcVolume = isEdit ? 8 : 9;
+          const defaultUcVolume = defaults?.uc_volume ?? 'partner_files';
+          const ucVolumeInput = await vscode.window.showInputBox({
+            title: `${wizardTitle} (${stepUcVolume}/${totalSteps})`,
+            prompt: 'UC volume name for file uploads',
+            value: defaultUcVolume,
+            placeHolder: 'partner_files',
+            validateInput: (val) => val.trim() ? undefined : 'Volume name is required when catalog is set',
+          });
+          if (!ucVolumeInput) { return; }
+          ucVolume = ucVolumeInput;
+        }
+
         // Build target and save
         target = {
           workspace_profile: profileName,
@@ -3111,6 +3152,7 @@ export async function activate(context: vscode.ExtensionContext) {
           app_name: appName,
           lakebase_project: lbProject,
           lakebase_branch: lbBranch,
+          ...(ucCatalog ? { uc_catalog: ucCatalog, uc_schema: ucSchema, uc_volume: ucVolume } : {}),
         };
 
         const updatedConfig: DeployTargetsConfig = {
@@ -3163,6 +3205,102 @@ export async function activate(context: vscode.ExtensionContext) {
               }
             },
           );
+
+          // Handle catalog missing — interactive flow
+          if (!result.success && result.error?.startsWith('CATALOG_MISSING:')) {
+            const catalogName = result.error.split(':')[1];
+            const catalogUrl = result.workspaceHost
+              ? DeployService.catalogExplorerUrl(result.workspaceHost)
+              : undefined;
+
+            const action = await vscode.window.showWarningMessage(
+              `UC catalog "${catalogName}" does not exist on the target workspace. ` +
+              `This workspace requires manual catalog creation via the Databricks UI.\n\n` +
+              `Steps:\n` +
+              `1. Open Catalog Explorer\n` +
+              `2. Click "+ Add" → "Create a new catalog"\n` +
+              `3. Name: "${catalogName}", Storage: Default Storage\n` +
+              `4. Click Create, then come back here`,
+              { modal: true },
+              ...(catalogUrl ? ['Open Catalog Explorer'] : []),
+              'I\'ve Created It',
+              'Cancel Deploy',
+            );
+
+            if (action === 'Open Catalog Explorer' && catalogUrl) {
+              vscode.env.openExternal(vscode.Uri.parse(catalogUrl));
+              // Wait for user to come back
+              const confirm = await vscode.window.showInformationMessage(
+                `Create catalog "${catalogName}" in the Catalog Explorer, then click "I've Created It" to continue.`,
+                { modal: true },
+                'I\'ve Created It',
+                'Cancel Deploy',
+              );
+              if (confirm !== 'I\'ve Created It') {
+                vscode.window.showInformationMessage('Deploy cancelled. You can re-run deploy when ready.');
+                return;
+              }
+            } else if (action === 'I\'ve Created It') {
+              // User says they created it — fall through to verify
+            } else {
+              vscode.window.showInformationMessage('Deploy cancelled. You can re-run deploy when ready.');
+              return;
+            }
+
+            // Verify the catalog now exists
+            progress.report({ message: `Verifying catalog "${catalogName}" exists...` });
+            const exists = await DeployService.catalogExists(target.workspace_profile, catalogName);
+            if (!exists) {
+              vscode.window.showErrorMessage(
+                `Catalog "${catalogName}" still not found. Please create it via the Databricks UI, then re-run deploy.`
+              );
+              return;
+            }
+
+            // Catalog confirmed — retry the full deploy
+            progress.report({ message: 'Catalog confirmed. Resuming deploy...' });
+            const retryResult = await DeployService.deploy(
+              targetName,
+              root,
+              (msg, phase) => {
+                progress.report({ message: msg });
+                if (phase === 'deploy' && !deployLinkShown) {
+                  deployLinkShown = true;
+                  if (workspaceHost) {
+                    const consoleUrl = `${workspaceHost}/apps/${encodeURIComponent(appName)}`;
+                    vscode.window.showInformationMessage(
+                      `Deploying ${appName} — this may take a few minutes.`,
+                      'View in Databricks'
+                    ).then(a => {
+                      if (a === 'View in Databricks') {
+                        vscode.env.openExternal(vscode.Uri.parse(consoleUrl));
+                      }
+                    });
+                  }
+                }
+              },
+            );
+
+            if (retryResult.success) {
+              if (retryResult.appUrl) {
+                const a = await vscode.window.showInformationMessage(
+                  `Deployed "${appName}" to ${targetName} successfully!`,
+                  'Open App', 'Copy URL'
+                );
+                if (a === 'Open App') {
+                  vscode.env.openExternal(vscode.Uri.parse(retryResult.appUrl));
+                } else if (a === 'Copy URL') {
+                  vscode.env.clipboard.writeText(retryResult.appUrl);
+                  vscode.window.showInformationMessage('App URL copied to clipboard');
+                }
+              } else {
+                vscode.window.showInformationMessage(`Deployed "${appName}" to ${targetName} successfully!`);
+              }
+            } else {
+              vscode.window.showErrorMessage(`Deploy failed: ${retryResult.error}`);
+            }
+            return;
+          }
 
           if (result.success) {
             if (result.appUrl) {

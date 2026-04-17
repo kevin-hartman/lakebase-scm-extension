@@ -173,6 +173,123 @@ The merge workflow (`merge.yml`) automatically:
 
 On main, expand the production database node to see all tables. The **Branch Review** queries the actual database state — including ALTER TABLE changes from previous merges.
 
+## Deploy to Databricks Apps
+
+The extension includes a multi-target deploy wizard for deploying applications to Databricks Apps. Run it from the Command Palette:
+
+**Lakebase: Deploy to Databricks App**
+
+### Deploy Targets
+
+Deploy targets are defined in `deploy-targets.yaml` at the project root. Each target specifies where and how to deploy:
+
+```yaml
+targets:
+  staging:
+    workspace_profile: my-staging-workspace
+    workspace_path: /Workspace/Users/you@company.com/my-app
+    app_name: my-app
+    lakebase_project: my-app
+    lakebase_branch: production
+    uc_catalog: my_catalog
+    uc_schema: my_schema
+    uc_volume: my_volume
+  prod:
+    workspace_profile: my-prod-workspace
+    workspace_path: /Workspace/Users/you@company.com/my-app
+    app_name: my-app
+    lakebase_project: my-app
+    lakebase_branch: production
+    uc_catalog: my_catalog
+    uc_schema: my_schema
+    uc_volume: my_volume
+    lakebase_secret_scope: pat-app-secrets
+    lakebase_secret_key: lakebase-pat
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `workspace_profile` | Yes | Databricks CLI profile name |
+| `workspace_path` | Yes | Workspace path where source files are uploaded |
+| `app_name` | Yes | Databricks App name (created if missing) |
+| `lakebase_project` | Yes | Lakebase project name |
+| `lakebase_branch` | Yes | Lakebase branch (typically `production`) |
+| `uc_catalog` | No | Unity Catalog catalog for file storage volumes |
+| `uc_schema` | No | UC schema within the catalog |
+| `uc_volume` | No | UC volume name for file uploads |
+| `lakebase_secret_scope` | No | Secret scope containing a PAT for Lakebase auth (see below) |
+| `lakebase_secret_key` | No | Secret key within the scope |
+
+### Deploy Steps
+
+The deploy wizard executes these steps in order:
+
+| Step | What | Detail |
+|------|------|--------|
+| 1 | Build frontend | Runs `npm run build` in `client/` (if it exists) |
+| 2 | Generate app.yaml | Builds the env block from target config, restores the original after deploy |
+| 3 | Ensure Lakebase infra | Creates Lakebase project and branch if missing |
+| 4 | Ensure UC infra | Creates catalog, schema, and volume if missing (prompts for manual creation on Default Storage workspaces) |
+| 5 | Upload source | Per-file `databricks workspace import` for app code, migrations, config, and built frontend |
+| 6 | Create app | Creates the Databricks App if it doesn't exist |
+| 7 | Grant permissions | Grants the app's service principal access to the Lakebase project and UC catalog |
+| 8 | Secret auth | Creates secret scope, generates PAT, stores it, grants SP read access (only when `lakebase_secret_scope` is configured) |
+| 9 | Deploy | Runs `databricks apps deploy` and waits for completion |
+| 10 | Seed data | Runs `scripts/seed-data/seed_demo_data.py --target <name>` if the file exists |
+
+### Lakebase Auth: SP vs PAT
+
+Databricks Apps run as a service principal (SP). On most workspaces, the SP can generate Lakebase database credentials directly. However, **some workspaces do not accept SP-generated credentials** (a platform-level feature gap).
+
+**Workaround:** Store a user PAT in a Databricks secret scope. At startup, the app reads the PAT, temporarily masks the SP's OAuth env vars, and creates a PAT-based `WorkspaceClient` to generate Lakebase credentials as the PAT owner.
+
+To enable this for a target, add two fields to `deploy-targets.yaml`:
+
+```yaml
+prod:
+  # ... other fields ...
+  lakebase_secret_scope: pat-app-secrets
+  lakebase_secret_key: lakebase-pat
+```
+
+The deploy process automates the setup:
+1. Creates the secret scope (idempotent)
+2. Generates a 90-day PAT for the deploying user
+3. Stores the PAT in the secret scope
+4. Grants the app's SP READ access to the scope
+
+The PAT is refreshed on each deploy. The app reads these via the `LAKEBASE_SECRET_SCOPE` and `LAKEBASE_SECRET_KEY` env vars in `app.yaml`.
+
+**App-side implementation** (in `database.py` or equivalent):
+```python
+# When LAKEBASE_SECRET_SCOPE and LAKEBASE_SECRET_KEY are set:
+# 1. Use default WorkspaceClient (SP auth) to read the PAT from secrets
+# 2. Temporarily mask DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET
+# 3. Create a PAT-based WorkspaceClient to generate Lakebase credentials
+# 4. Restore the masked env vars
+```
+
+### Seed Data
+
+After a successful deploy, the extension checks for seed data scripts in the project:
+
+- **Primary:** `scripts/seed-data/seed_demo_data.py` — runs with `--target <name>` and `--with-partners` (if `sfdc_partners.csv` exists)
+- **Fallback:** Lists any `.py` files in `scripts/seed-data/` for manual execution
+
+Seed data is idempotent — existing rows are skipped, changed rows are updated. Failure is non-fatal (the deploy succeeds, a warning is shown).
+
+To add seed data to a project, create `scripts/seed-data/seed_demo_data.py` with a `--target` argument that reads `deploy-targets.yaml` to connect to the correct database.
+
+### CLI Deploy Script
+
+Projects can also include a `scripts/deploy.sh` for command-line deployment. It follows the same steps as the extension wizard and reads the same `deploy-targets.yaml`:
+
+```bash
+./scripts/deploy.sh              # list available targets
+./scripts/deploy.sh staging      # deploy to staging
+./scripts/deploy.sh prod         # deploy to prod
+```
+
 ## Sidebar Views
 
 Click the Lakebase icon in the activity bar. The sidebar contains:
