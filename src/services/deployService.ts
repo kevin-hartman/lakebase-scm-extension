@@ -14,6 +14,7 @@ export interface DeployTarget {
   uc_volume?: string;
   lakebase_secret_scope?: string;
   lakebase_secret_key?: string;
+  ai_model?: string;
 }
 
 export interface DeployTargetsConfig {
@@ -107,6 +108,7 @@ export class DeployService {
       if (target.uc_volume) { yaml += `    uc_volume: ${target.uc_volume}\n`; }
       if (target.lakebase_secret_scope) { yaml += `    lakebase_secret_scope: ${target.lakebase_secret_scope}\n`; }
       if (target.lakebase_secret_key) { yaml += `    lakebase_secret_key: ${target.lakebase_secret_key}\n`; }
+      if (target.ai_model) { yaml += `    ai_model: ${target.ai_model}\n`; }
     }
     fs.writeFileSync(targetsFile, yaml);
   }
@@ -442,6 +444,7 @@ export class DeployService {
         if (target.uc_volume) { envVars.push({ name: 'UC_VOLUME', value: target.uc_volume }); }
         if (target.lakebase_secret_scope) { envVars.push({ name: 'LAKEBASE_SECRET_SCOPE', value: target.lakebase_secret_scope }); }
         if (target.lakebase_secret_key) { envVars.push({ name: 'LAKEBASE_SECRET_KEY', value: target.lakebase_secret_key }); }
+        if (target.ai_model) { envVars.push({ name: 'AI_MODEL', value: target.ai_model }); }
 
         const envBlock = 'env:\n' + envVars.map(v => `  - name: ${v.name}\n    value: "${v.value}"`).join('\n');
         fs.writeFileSync(appYamlPath, commandBlock + envBlock + '\n');
