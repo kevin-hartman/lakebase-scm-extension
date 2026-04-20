@@ -20,6 +20,7 @@
     "onStartupFinished",
     "onView:lakebaseBranches",
     "onCommand:lakebaseSync.createProject",
+    "onCommand:lakebaseSync.createLakebaseProject",
     "onCommand:lakebaseSync.connectWorkspace",
     "workspaceContains:.env",
     "workspaceContains:.env.example"
@@ -324,6 +325,11 @@
         "command": "lakebaseSync.createProject",
         "title": "Lakebase: Create New Project",
         "icon": "$(add)"
+      },
+      {
+        "command": "lakebaseSync.createLakebaseProject",
+        "title": "Lakebase: Create Database Project for This Workspace",
+        "icon": "$(database)"
       },
       {
         "command": "lakebaseSync.startRunner",

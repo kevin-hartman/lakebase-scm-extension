@@ -7,5 +7,5 @@ docs/**
 .gitignore
 tsconfig.json
 webpack.config.js
-.claude/hooks
+.claude/**
 .agent-logs/**

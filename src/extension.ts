@@ -61,6 +61,27 @@ async function handleAuthError(lakebaseService: LakebaseService, err: any): Prom
   return true;
 }
 
+/** Update or append key=value pairs in .env content, preserving comments/order. */
+function upsertEnvKeys(content: string, updates: Record<string, string>): string {
+  const lines = content ? content.split('\n') : [];
+  const seen = new Set<string>();
+  const out = lines.map(line => {
+    const m = line.match(/^([A-Z_][A-Z0-9_]*)\s*=/i);
+    if (m && updates[m[1]] !== undefined) {
+      seen.add(m[1]);
+      return `${m[1]}=${updates[m[1]]}`;
+    }
+    return line;
+  });
+  const toAppend = Object.entries(updates).filter(([k]) => !seen.has(k));
+  if (toAppend.length > 0) {
+    if (out.length > 0 && out[out.length - 1].trim() !== '') { out.push(''); }
+    for (const [k, v] of toAppend) { out.push(`${k}=${v}`); }
+    out.push('');
+  }
+  return out.join('\n');
+}
+
 export async function activate(context: vscode.ExtensionContext) {
   const config = getConfig();
 
@@ -700,6 +721,100 @@ export async function activate(context: vscode.ExtensionContext) {
           }
         }
       }
+    }),
+
+    vscode.commands.registerCommand('lakebaseSync.createLakebaseProject', async () => {
+      const fs = require('fs');
+      const path = require('path');
+
+      const root = getWorkspaceRoot();
+      if (!root) {
+        vscode.window.showErrorMessage('Open a project folder first.');
+        return;
+      }
+
+      const defaultName = path.basename(root).toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '');
+      const existing = getConfig().lakebaseProjectId;
+      const projectId = await vscode.window.showInputBox({
+        prompt: 'Lakebase project ID',
+        value: existing || defaultName,
+        validateInput: PROJECT_CREATION_PROMPTS.projectName.validateInput,
+        title: 'Lakebase: Create Database Project for This Workspace',
+      });
+      if (!projectId) { return; }
+
+      const authStatus = await lakebaseService.checkAuth();
+      if (!authStatus.authenticated) {
+        const action = await vscode.window.showWarningMessage(
+          `Not authenticated to Databricks${authStatus.expectedHost ? ` (${authStatus.expectedHost})` : ''}. Connect first?`,
+          'Connect', 'Cancel'
+        );
+        if (action !== 'Connect') { return; }
+        await vscode.commands.executeCommand('lakebaseSync.connectWorkspace');
+        const recheck = await lakebaseService.checkAuth();
+        if (!recheck.authenticated) {
+          vscode.window.showErrorMessage('Still not authenticated. Aborting.');
+          return;
+        }
+      }
+
+      const host = lakebaseService.getEffectiveHost().replace(/\/+$/, '');
+
+      try {
+        await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: `Creating Lakebase project: ${projectId}`, cancellable: false },
+          async (progress) => {
+            progress.report({ message: 'Creating database...' });
+            await lakebaseService.createProject(projectId);
+
+            progress.report({ message: 'Updating .env...' });
+            const envPath = path.join(root, '.env');
+            const existingContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
+            const updated = upsertEnvKeys(existingContent, {
+              DATABRICKS_HOST: host,
+              LAKEBASE_PROJECT_ID: projectId,
+            });
+            fs.writeFileSync(envPath, updated);
+          }
+        );
+      } catch (err: any) {
+        if (!await handleAuthError(lakebaseService, err)) {
+          vscode.window.showErrorMessage(`Failed to create Lakebase project: ${err.message}`);
+        }
+        return;
+      }
+
+      const runnerChoice = await vscode.window.showInformationMessage(
+        `Lakebase project "${projectId}" created. Set up self-hosted CI runner now?`,
+        'Set up runner', 'Skip'
+      );
+
+      if (runnerChoice === 'Set up runner') {
+        const ghUrl = await gitService.getGitHubUrl();
+        const match = ghUrl.match(/github\.com\/(.+)$/);
+        if (!match) {
+          vscode.window.showWarningMessage('No GitHub origin remote found. Skipping runner setup. Run "Lakebase: Start CI Runner" after pushing to GitHub.');
+        } else {
+          const fullRepoName = match[1];
+          try {
+            await vscode.window.withProgress(
+              { location: vscode.ProgressLocation.Notification, title: `Setting up runner for ${fullRepoName}`, cancellable: false },
+              async (progress) => {
+                const { RunnerService } = require('./services/runnerService');
+                const runnerService = new RunnerService();
+                await runnerService.setupRunner(fullRepoName, projectId, (msg: string) => progress.report({ message: msg }));
+              }
+            );
+            vscode.window.showInformationMessage(`Runner started for ${projectId}.`);
+            runnerTreeProvider.refresh();
+          } catch (err: any) {
+            vscode.window.showErrorMessage(`Runner setup failed: ${err.message}`);
+          }
+        }
+      }
+
+      statusBarProvider.refresh();
+      branchTreeProvider.refresh();
     }),
 
     vscode.commands.registerCommand('lakebaseSync.createUnifiedBranch', async () => {
