@@ -2,7 +2,7 @@
   "name": "lakebase-scm-extension",
   "displayName": "Lakebase SCM Extension",
   "description": "Unified visibility into code and database branch changes for Databricks Lakebase",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "publisher": "databricks-field-eng",
   "icon": "resources/icons/extension-icon.png",
   "repository": {
@@ -17,7 +17,10 @@
     "SCM Providers"
   ],
   "activationEvents": [
+    "onStartupFinished",
     "onView:lakebaseBranches",
+    "onCommand:lakebaseSync.createProject",
+    "onCommand:lakebaseSync.connectWorkspace",
     "workspaceContains:.env",
     "workspaceContains:.env.example"
   ],
