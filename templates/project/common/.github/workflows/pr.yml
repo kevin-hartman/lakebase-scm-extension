@@ -147,25 +147,29 @@ jobs:
           # main, but now base.ref is staging), delete + re-fork from the
           # correct parent. CI branches are disposable so this is always safe.
           # --ensure-endpoint creates the primary endpoint if it doesn't exist.
-          if ! ./scripts/ci/resolve-lakebase-branch.sh \
+          #
+          # --github-env writes tokens/DATABASE_URL to $GITHUB_ENV (visible to
+          # subsequent steps) AND prints non-secret key='value' lines to stdout
+          # (captured + evaled below so they're visible IN THIS STEP too —
+          # $GITHUB_ENV writes don't take effect until the next step).
+          if ! HELPER_OUT="$(./scripts/ci/resolve-lakebase-branch.sh \
                 --lakebase-name "$CI_BRANCH_NAME" \
                 --create-from "$PR_BASE_REF" \
                 --recreate-on-source-mismatch \
                 --ensure-endpoint \
-                --github-env; then
+                --github-env)"; then
             write_skip "**Reason:** Could not create CI branch \`$CI_BRANCH_NAME\` forked from \`$PR_BASE_REF\`. Check the workflow log above."
             exit 0
           fi
+          eval "$HELPER_OUT"
 
-          # resolve-lakebase-branch.sh exported JDBC_URL, DB_USERNAME, DB_PASSWORD,
-          # DATABASE_URL, LAKEBASE_BRANCH_STATUS, LAKEBASE_BRANCH_SOURCE etc. to
-          # $GITHUB_ENV. Mirror the critical ones to step outputs so downstream
-          # steps / jobs can reference them the old way.
+          # JDBC_URL, LAKEBASE_BRANCH_STATUS, LAKEBASE_BRANCH_SOURCE,
+          # LAKEBASE_USERNAME are now set in this shell. Mirror the critical
+          # ones to step outputs for downstream jobs + conditional steps.
+          # (Secrets stay in $GITHUB_ENV — downstream steps read them via
+          # env.DB_PASSWORD rather than step outputs.)
           echo "url=${JDBC_URL}" >> $GITHUB_OUTPUT
-          echo "username=${DB_USERNAME}" >> $GITHUB_OUTPUT
-          echo "password<<PASS_EOF" >> $GITHUB_OUTPUT
-          printf '%s\n' "$DB_PASSWORD" >> $GITHUB_OUTPUT
-          echo "PASS_EOF" >> $GITHUB_OUTPUT
+          echo "username=${LAKEBASE_USERNAME}" >> $GITHUB_OUTPUT
 
           # Translate LAKEBASE_BRANCH_STATUS into a truthful one-line log +
           # summary table row. Never claim "forked from X" unless we actually
@@ -191,24 +195,11 @@ jobs:
       - name: Configure datasource for CI
         id: datasource
         run: |
-          JDBC_URL="${{ steps.lakebase-db.outputs.url }}"
-          DB_USER="${{ steps.lakebase-db.outputs.username }}"
-          DB_PASS="${{ steps.lakebase-db.outputs.password }}"
-          if [ -n "$JDBC_URL" ]; then
-            # Generic vars for all languages
-            echo "DB_USERNAME=$DB_USER" >> $GITHUB_ENV
-            echo "DB_PASSWORD=$DB_PASS" >> $GITHUB_ENV
-            # DATABASE_URL in postgresql:// format with embedded credentials
-            PG_URL="$(echo "$JDBC_URL" | sed 's|^jdbc:postgresql://|postgresql://|')"
-            if [ -n "$DB_USER" ] && [ -n "$DB_PASS" ]; then
-              ENCODED_PASS="$(printf '%s' "$DB_PASS" | sed 's/@/%40/g; s/:/%3A/g; s/\//%2F/g; s/?/%3F/g; s/#/%23/g')"
-              PG_URL="$(echo "$PG_URL" | sed "s|postgresql://|postgresql://${DB_USER}:${ENCODED_PASS}@|")"
-            fi
-            echo "DATABASE_URL=$PG_URL" >> $GITHUB_ENV
-            # Java-specific: Spring reads these natively
-            echo "SPRING_DATASOURCE_URL=$JDBC_URL" >> $GITHUB_ENV
-            echo "SPRING_DATASOURCE_USERNAME=$DB_USER" >> $GITHUB_ENV
-            echo "SPRING_DATASOURCE_PASSWORD=$DB_PASS" >> $GITHUB_ENV
+          # DATABASE_URL, DB_USERNAME, DB_PASSWORD, SPRING_DATASOURCE_* were
+          # already written to $GITHUB_ENV by resolve-lakebase-branch.sh in the
+          # previous step. Nothing to mirror here. This step exists only to
+          # emit `ci_branch_used` for the pr-comment job's condition.
+          if [ -n "${{ steps.lakebase-db.outputs.url }}" ]; then
             echo "ci_branch_used=true" >> $GITHUB_OUTPUT
             echo "Using CI branch URL"
           else
@@ -245,8 +236,8 @@ jobs:
         if: steps.detect-lang.outputs.lang == 'java' && steps.lakebase-db.outputs.url != ''
         env:
           FLYWAY_URL: ${{ steps.lakebase-db.outputs.url }}
-          FLYWAY_USER: ${{ steps.lakebase-db.outputs.username }}
-          FLYWAY_PASS: ${{ steps.lakebase-db.outputs.password }}
+          FLYWAY_USER: ${{ env.DB_USERNAME }}
+          FLYWAY_PASS: ${{ env.DB_PASSWORD }}
         run: |
           set +e
           if ! command -v psql >/dev/null 2>&1; then

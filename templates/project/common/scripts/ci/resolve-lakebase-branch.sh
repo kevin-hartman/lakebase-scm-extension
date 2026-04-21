@@ -311,8 +311,20 @@ if [ "$GH_ENV_MODE" = "1" ] && [ -n "${GITHUB_ENV:-}" ]; then
     printf '%s\n' "$TOKEN"
     echo "__LB_PW_EOF__"
   } >> "$GITHUB_ENV"
-  # Also print the branch name to stdout for logging (non-secret)
-  echo "$LAKEBASE_NAME"
+  # Also emit NON-SECRET vars to stdout as shell key='value' lines so the
+  # caller can `eval` them and get access WITHIN THE SAME STEP (writes to
+  # $GITHUB_ENV only take effect in subsequent steps). Tokens and DATABASE_URL
+  # (which embeds the token) are deliberately omitted — those stay in
+  # $GITHUB_ENV and reach downstream steps via env-context masking.
+  cat <<EOF
+LAKEBASE_BRANCH_NAME='${LAKEBASE_NAME}'
+LAKEBASE_BRANCH_PATH='${BRANCH_PATH}'
+LAKEBASE_BRANCH_STATUS='${BRANCH_STATUS}'
+LAKEBASE_BRANCH_SOURCE='${LAKEBASE_BRANCH_SOURCE}'
+LAKEBASE_HOST='${HOST}'
+LAKEBASE_USERNAME='${EMAIL}'
+JDBC_URL='${JDBC_URL}'
+EOF
 else
   # Stdout: shell-eval format. Caller: eval "$(resolve-lakebase-branch.sh ...)"
   cat <<EOF
