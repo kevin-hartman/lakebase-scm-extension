@@ -1363,6 +1363,7 @@
   "devDependencies": {
     "@types/mocha": "^10.0.0",
     "@types/node": "^20.11.0",
+    "@types/pg": "^8.20.0",
     "@types/sinon": "^17.0.0",
     "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
@@ -1377,6 +1378,7 @@
     "webpack-cli": "^5.1.0"
   },
   "dependencies": {
+    "pg": "^8.20.0",
     "vsce": "^2.15.0"
   }
 }
