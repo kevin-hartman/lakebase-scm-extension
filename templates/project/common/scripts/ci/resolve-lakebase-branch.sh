@@ -16,18 +16,33 @@
 #                                (overrides --git-branch mapping). Useful for ci-pr-N.
 #   --github-env                 Append env vars to $GITHUB_ENV instead of stdout.
 #   --ensure-endpoint            Create the primary endpoint if it doesn't exist.
+#   --recreate-on-source-mismatch When the Lakebase branch already exists but
+#                                was forked from a different source than
+#                                --create-from asks for, delete and re-fork it
+#                                from the requested source. Without this flag,
+#                                the helper exits 1 on mismatch instead of
+#                                silently using the wrong fork. Intended for
+#                                disposable CI branches (ci-pr-*).
 #
 # Requires env:  DATABRICKS_HOST, DATABRICKS_TOKEN, LAKEBASE_PROJECT_ID
 # Optional env:  LAKEBASE_DB_NAME (default: databricks_postgres)
 #
 # Outputs (shell key=value OR appended to $GITHUB_ENV):
-#   LAKEBASE_BRANCH_NAME  — e.g. "staging" / "feature-foo" / "ci-pr-42"
-#   LAKEBASE_BRANCH_PATH  — projects/<id>/branches/<name>
-#   LAKEBASE_HOST         — endpoint hostname
-#   LAKEBASE_USERNAME     — user email (OAuth "user" for psql)
-#   LAKEBASE_PASSWORD     — OAuth token (secret — never echo to logs)
-#   DATABASE_URL          — postgresql:// URL with embedded creds
-#   JDBC_URL              — jdbc:postgresql:// URL (no creds; Java auth uses DB_USERNAME/DB_PASSWORD)
+#   LAKEBASE_BRANCH_NAME   — e.g. "staging" / "feature-foo" / "ci-pr-42"
+#   LAKEBASE_BRANCH_PATH   — projects/<id>/branches/<name>
+#   LAKEBASE_BRANCH_STATUS — one of: CREATED (new), VERIFIED (existed + source
+#                                     matched), RECREATED (existed but wrong
+#                                     source, deleted + re-forked), EXISTS
+#                                     (existed, source not verified because
+#                                     --create-from not given), UNVERIFIED
+#                                     (existed but API did not report a
+#                                     source_branch — can't confirm parent)
+#   LAKEBASE_BRANCH_SOURCE — the actual source branch name (or empty)
+#   LAKEBASE_HOST          — endpoint hostname
+#   LAKEBASE_USERNAME      — user email (OAuth "user" for psql)
+#   LAKEBASE_PASSWORD      — OAuth token (secret — never echo to logs)
+#   DATABASE_URL           — postgresql:// URL with embedded creds
+#   JDBC_URL               — jdbc:postgresql:// URL (no creds; Java auth uses DB_USERNAME/DB_PASSWORD)
 
 set -eu
 
@@ -43,6 +58,7 @@ CREATE_FROM=""
 LAKEBASE_NAME_OVERRIDE=""
 GH_ENV_MODE=0
 ENSURE_ENDPOINT=0
+RECREATE_ON_MISMATCH=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -51,6 +67,7 @@ while [ $# -gt 0 ]; do
     --lakebase-name) LAKEBASE_NAME_OVERRIDE="$2"; shift 2 ;;
     --github-env)    GH_ENV_MODE=1; shift ;;
     --ensure-endpoint) ENSURE_ENDPOINT=1; shift ;;
+    --recreate-on-source-mismatch) RECREATE_ON_MISMATCH=1; shift ;;
     *) echo "resolve-lakebase-branch: unknown flag: $1" >&2; exit 2 ;;
   esac
 done
@@ -105,6 +122,59 @@ branch_state() {
   ' | head -1
 }
 
+# Return the branch NAME (last path segment) that the given branch was forked
+# from. Empty if the API didn't record a source (root branches, or branches
+# created before source tracking shipped).
+branch_source_name() {
+  local name="$1"
+  echo "$BRANCHES_JSON" | jq -r --arg n "$name" '
+    .[] | select(
+      (.name | type == "string" and (endswith("/branches/" + $n) or (split("/") | last == $n)))
+      or (.uid == $n) or (.id == $n)
+    ) | (.status.source_branch // empty)
+    | (if . == "" then empty else (split("/") | last) end)
+  ' | head -1
+}
+
+# Refresh the cached BRANCHES_JSON (needed after create/delete mutations).
+refresh_branches_cache() {
+  _BRANCHES_RAW="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null || echo "[]")"
+  BRANCHES_JSON="$(echo "$_BRANCHES_RAW" | jq -c '
+    if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end' 2>/dev/null || echo "[]")"
+}
+
+# Create LAKEBASE_NAME forked from SOURCE_NAME and wait until READY. Exits 1
+# on timeout. Assumes caller has verified SOURCE_NAME is non-empty.
+do_create_and_wait() {
+  local source_name="$1"
+  databricks postgres create-branch "$PROJ_PATH" "$LAKEBASE_NAME" \
+    --json "{\"spec\": {\"source_branch\": \"${PROJ_PATH}/branches/${source_name}\", \"no_expiry\": true}}" \
+    >/dev/null 2>&1 || true
+  # Wait for READY (up to 2 min).
+  for _ in $(seq 1 24); do
+    sleep 5
+    refresh_branches_cache
+    STATE="$(branch_state "$LAKEBASE_NAME")"
+    [ "$STATE" = "READY" ] && return 0
+  done
+  echo "resolve-lakebase-branch: branch '$LAKEBASE_NAME' did not reach READY (state: ${STATE:-unknown})" >&2
+  exit 1
+}
+
+# Delete LAKEBASE_NAME and wait until the branch is gone from the list.
+do_delete_and_wait() {
+  databricks postgres delete-branch "$BRANCH_PATH" >/dev/null 2>&1 || true
+  # Wait for deletion to propagate (up to 1 min).
+  for _ in $(seq 1 30); do
+    sleep 2
+    refresh_branches_cache
+    STATE="$(branch_state "$LAKEBASE_NAME")"
+    [ -z "$STATE" ] && return 0
+  done
+  echo "resolve-lakebase-branch: delete of '$LAKEBASE_NAME' did not propagate in time (state: ${STATE:-?})" >&2
+  exit 1
+}
+
 # ── Resolve the target Lakebase branch name ──────────────────────
 if [ -n "$LAKEBASE_NAME_OVERRIDE" ]; then
   LAKEBASE_NAME="$LAKEBASE_NAME_OVERRIDE"
@@ -119,8 +189,18 @@ fi
 
 BRANCH_PATH="${PROJ_PATH}/branches/${LAKEBASE_NAME}"
 
-# ── Ensure the branch exists (create if requested) ───────────────
+# ── Ensure the branch exists AND is forked from the right source ─
+# Four cases, driven by (does it exist?) x (was --create-from given?):
+#   exists=no, create-from=no   → hard error (nothing to do)
+#   exists=no, create-from=yes  → create + wait. STATUS=CREATED
+#   exists=yes, create-from=no  → use as-is, no verification. STATUS=EXISTS
+#   exists=yes, create-from=yes → VERIFY source matches. If it does, STATUS=VERIFIED.
+#                                 If it doesn't: RECREATED (w/ flag) or error.
+#                                 If API didn't record a source, STATUS=UNVERIFIED.
+BRANCH_STATUS=""
+LAKEBASE_BRANCH_SOURCE=""
 STATE="$(branch_state "$LAKEBASE_NAME")"
+
 if [ -z "$STATE" ]; then
   if [ -n "$CREATE_FROM" ]; then
     SOURCE_NAME="$(git_to_lakebase_name "$CREATE_FROM")"
@@ -128,25 +208,41 @@ if [ -z "$STATE" ]; then
       echo "resolve-lakebase-branch: could not resolve source branch for '$CREATE_FROM'" >&2
       exit 1
     }
-    databricks postgres create-branch "$PROJ_PATH" "$LAKEBASE_NAME" \
-      --json "{\"spec\": {\"source_branch\": \"${PROJ_PATH}/branches/${SOURCE_NAME}\", \"no_expiry\": true}}" \
-      >/dev/null 2>&1 || true
-    # Wait for READY (up to 2 min). Re-fetch branches every 5s.
-    for _ in $(seq 1 24); do
-      sleep 5
-      _BRANCHES_RAW="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null || echo "[]")"
-      BRANCHES_JSON="$(echo "$_BRANCHES_RAW" | jq -c '
-        if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end')"
-      STATE="$(branch_state "$LAKEBASE_NAME")"
-      [ "$STATE" = "READY" ] && break
-    done
-    [ "$STATE" = "READY" ] || {
-      echo "resolve-lakebase-branch: branch '$LAKEBASE_NAME' did not reach READY (state: ${STATE:-unknown})" >&2
-      exit 1
-    }
+    do_create_and_wait "$SOURCE_NAME"
+    BRANCH_STATUS="CREATED"
+    LAKEBASE_BRANCH_SOURCE="$SOURCE_NAME"
   else
     echo "resolve-lakebase-branch: branch '$LAKEBASE_NAME' does not exist and --create-from not given" >&2
     exit 1
+  fi
+else
+  # Branch exists. If --create-from was given, verify the source matches.
+  if [ -n "$CREATE_FROM" ]; then
+    EXPECTED_SOURCE="$(git_to_lakebase_name "$CREATE_FROM")"
+    ACTUAL_SOURCE="$(branch_source_name "$LAKEBASE_NAME")"
+    LAKEBASE_BRANCH_SOURCE="$ACTUAL_SOURCE"
+    if [ -z "$ACTUAL_SOURCE" ]; then
+      echo "resolve-lakebase-branch: branch '$LAKEBASE_NAME' exists but source_branch is not recorded; using as-is without verification." >&2
+      BRANCH_STATUS="UNVERIFIED"
+    elif [ "$ACTUAL_SOURCE" = "$EXPECTED_SOURCE" ]; then
+      echo "resolve-lakebase-branch: branch '$LAKEBASE_NAME' exists and was forked from '$ACTUAL_SOURCE' (as expected)."
+      BRANCH_STATUS="VERIFIED"
+    else
+      if [ "$RECREATE_ON_MISMATCH" = "1" ]; then
+        echo "resolve-lakebase-branch: branch '$LAKEBASE_NAME' was forked from '$ACTUAL_SOURCE' but parent '$EXPECTED_SOURCE' was requested. Deleting and re-forking..."
+        do_delete_and_wait
+        do_create_and_wait "$EXPECTED_SOURCE"
+        BRANCH_STATUS="RECREATED"
+        LAKEBASE_BRANCH_SOURCE="$EXPECTED_SOURCE"
+      else
+        echo "resolve-lakebase-branch: branch '$LAKEBASE_NAME' was forked from '$ACTUAL_SOURCE' but parent '$EXPECTED_SOURCE' was requested." >&2
+        echo "resolve-lakebase-branch: pass --recreate-on-source-mismatch to delete and re-fork, or delete '$LAKEBASE_NAME' manually before re-running." >&2
+        exit 1
+      fi
+    fi
+  else
+    BRANCH_STATUS="EXISTS"
+    LAKEBASE_BRANCH_SOURCE="$(branch_source_name "$LAKEBASE_NAME")"
   fi
 fi
 
@@ -196,6 +292,8 @@ if [ "$GH_ENV_MODE" = "1" ] && [ -n "${GITHUB_ENV:-}" ]; then
   {
     echo "LAKEBASE_BRANCH_NAME=${LAKEBASE_NAME}"
     echo "LAKEBASE_BRANCH_PATH=${BRANCH_PATH}"
+    echo "LAKEBASE_BRANCH_STATUS=${BRANCH_STATUS}"
+    echo "LAKEBASE_BRANCH_SOURCE=${LAKEBASE_BRANCH_SOURCE}"
     echo "LAKEBASE_HOST=${HOST}"
     echo "LAKEBASE_USERNAME=${EMAIL}"
     echo "LAKEBASE_PASSWORD<<__LB_PW_EOF__"
@@ -220,6 +318,8 @@ else
   cat <<EOF
 LAKEBASE_BRANCH_NAME='${LAKEBASE_NAME}'
 LAKEBASE_BRANCH_PATH='${BRANCH_PATH}'
+LAKEBASE_BRANCH_STATUS='${BRANCH_STATUS}'
+LAKEBASE_BRANCH_SOURCE='${LAKEBASE_BRANCH_SOURCE}'
 LAKEBASE_HOST='${HOST}'
 LAKEBASE_USERNAME='${EMAIL}'
 LAKEBASE_PASSWORD='${TOKEN}'

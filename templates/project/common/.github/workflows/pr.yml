@@ -142,10 +142,15 @@ jobs:
           # Resolve + create the CI branch forked from the parent's Lakebase clone.
           # --lakebase-name pins the name to ci-pr-<N> (skip the git→name mapping).
           # --create-from <PR_BASE_REF> forks from the parent branch's Lakebase clone.
+          # --recreate-on-source-mismatch: if ci-pr-N already exists but was
+          # forked from a different parent (e.g. a prior run when base.ref was
+          # main, but now base.ref is staging), delete + re-fork from the
+          # correct parent. CI branches are disposable so this is always safe.
           # --ensure-endpoint creates the primary endpoint if it doesn't exist.
           if ! ./scripts/ci/resolve-lakebase-branch.sh \
                 --lakebase-name "$CI_BRANCH_NAME" \
                 --create-from "$PR_BASE_REF" \
+                --recreate-on-source-mismatch \
                 --ensure-endpoint \
                 --github-env; then
             write_skip "**Reason:** Could not create CI branch \`$CI_BRANCH_NAME\` forked from \`$PR_BASE_REF\`. Check the workflow log above."
@@ -153,22 +158,34 @@ jobs:
           fi
 
           # resolve-lakebase-branch.sh exported JDBC_URL, DB_USERNAME, DB_PASSWORD,
-          # DATABASE_URL, etc. to $GITHUB_ENV. Mirror the critical ones to step
-          # outputs so downstream steps / jobs can reference them the old way.
+          # DATABASE_URL, LAKEBASE_BRANCH_STATUS, LAKEBASE_BRANCH_SOURCE etc. to
+          # $GITHUB_ENV. Mirror the critical ones to step outputs so downstream
+          # steps / jobs can reference them the old way.
           echo "url=${JDBC_URL}" >> $GITHUB_OUTPUT
           echo "username=${DB_USERNAME}" >> $GITHUB_OUTPUT
           echo "password<<PASS_EOF" >> $GITHUB_OUTPUT
           printf '%s\n' "$DB_PASSWORD" >> $GITHUB_OUTPUT
           echo "PASS_EOF" >> $GITHUB_OUTPUT
 
-          echo "Lakebase: CI branch $CI_BRANCH_NAME ready (forked from Lakebase '$PR_BASE_REF' pair)."
+          # Translate LAKEBASE_BRANCH_STATUS into a truthful one-line log +
+          # summary table row. Never claim "forked from X" unless we actually
+          # forked (or verified the existing fork points at X).
+          case "$LAKEBASE_BRANCH_STATUS" in
+            CREATED)    ACTION="newly created, forked from Lakebase '$LAKEBASE_BRANCH_SOURCE' pair of git '$PR_BASE_REF'" ;;
+            RECREATED)  ACTION="existed with wrong source — deleted and re-forked from Lakebase '$LAKEBASE_BRANCH_SOURCE' pair of git '$PR_BASE_REF'" ;;
+            VERIFIED)   ACTION="already existed, source '$LAKEBASE_BRANCH_SOURCE' matches parent — reused" ;;
+            UNVERIFIED) ACTION="already existed but API did not report a source_branch — reused without verification" ;;
+            *)          ACTION="status=$LAKEBASE_BRANCH_STATUS (source=$LAKEBASE_BRANCH_SOURCE)" ;;
+          esac
+          echo "Lakebase: CI branch $CI_BRANCH_NAME ready — ${ACTION}."
           {
-            echo "## Lakebase CI branch: created"
+            echo "## Lakebase CI branch: $LAKEBASE_BRANCH_STATUS"
             echo "| | |"
             echo "|--|--|"
             echo "| Branch | \`$CI_BRANCH_NAME\` |"
-            echo "| Forked from (git) | \`$PR_BASE_REF\` |"
-            echo "| Forked from (Lakebase) | pair of \`$PR_BASE_REF\` |"
+            echo "| Status | \`$LAKEBASE_BRANCH_STATUS\` |"
+            echo "| Actual source | \`${LAKEBASE_BRANCH_SOURCE:-unknown}\` |"
+            echo "| PR base.ref (expected parent) | \`$PR_BASE_REF\` |"
           } >> $GITHUB_STEP_SUMMARY
 
       - name: Configure datasource for CI
