@@ -225,11 +225,11 @@ else
       echo "resolve-lakebase-branch: branch '$LAKEBASE_NAME' exists but source_branch is not recorded; using as-is without verification." >&2
       BRANCH_STATUS="UNVERIFIED"
     elif [ "$ACTUAL_SOURCE" = "$EXPECTED_SOURCE" ]; then
-      echo "resolve-lakebase-branch: branch '$LAKEBASE_NAME' exists and was forked from '$ACTUAL_SOURCE' (as expected)."
+      echo "resolve-lakebase-branch: branch '$LAKEBASE_NAME' exists and was forked from '$ACTUAL_SOURCE' (as expected)." >&2
       BRANCH_STATUS="VERIFIED"
     else
       if [ "$RECREATE_ON_MISMATCH" = "1" ]; then
-        echo "resolve-lakebase-branch: branch '$LAKEBASE_NAME' was forked from '$ACTUAL_SOURCE' but parent '$EXPECTED_SOURCE' was requested. Deleting and re-forking..."
+        echo "resolve-lakebase-branch: branch '$LAKEBASE_NAME' was forked from '$ACTUAL_SOURCE' but parent '$EXPECTED_SOURCE' was requested. Deleting and re-forking..." >&2
         do_delete_and_wait
         do_create_and_wait "$EXPECTED_SOURCE"
         BRANCH_STATUS="RECREATED"
