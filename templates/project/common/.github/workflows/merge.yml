@@ -1,17 +1,29 @@
-# On merge to main: run migrations on production, delete ci-pr-* and merged feature branch.
+# On merge to any long-lived branch (main, staging, ...): run migrations on the
+# MATCHING Lakebase branch (main → production / default; staging → staging;
+# etc.), then delete ci-pr-* and the merged feature branch's Lakebase clone.
 # Language-aware: detects Java/Flyway, Python/Alembic, or Node.js/Knex.
 #
+# Two-tier flow:
+#   PR feature/* → staging  → push to staging   → migrate Lakebase 'staging'
+#   PR staging   → main     → push to main      → migrate Lakebase default (prod)
+#
 # Job design:
-#   - migrate-production: runs on push to main (triggered by both PR merges and direct pushes)
-#   - cleanup-lakebase-branches: runs only on pull_request closed+merged (has PR context for branch names)
-# Each merge event triggers exactly one of each — no duplicate runs.
+#   - migrate-target: runs on push to any listed branch (triggered by PR merges or direct pushes)
+#     Resolves target Lakebase branch via scripts/ci/resolve-lakebase-branch.sh
+#     (same mapping used by pr.yml and scripts/post-checkout.sh).
+#   - cleanup-lakebase-branches: runs on pull_request closed+merged regardless
+#     of base.ref — any merged feature branch's ci-pr-N + its feature Lakebase
+#     clone are torn down.
 #
 # Auth: OAuth token refreshed by pre-push hook and synced to DATABRICKS_TOKEN secret.
 name: Merge
 
 on:
   push:
-    branches: [main]
+    # Add every promotion target here. 'main' is the production boundary; 'staging'
+    # is the pre-prod boundary for two-tier projects. Feature branches don't
+    # trigger this — they use pr.yml's CI branch.
+    branches: [main, staging]
   pull_request:
     types: [closed]
 
@@ -20,9 +32,9 @@ permissions:
   pull-requests: read
 
 jobs:
-  migrate-production:
+  migrate-target:
     runs-on: self-hosted
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging')
     steps:
       - uses: actions/checkout@v4
         with:
@@ -107,76 +119,29 @@ jobs:
           fi
           echo "Databricks authenticated."
 
-      # Resolve production (default) Lakebase branch URL and credentials.
-      - name: Resolve production DB credentials (Lakebase)
-        id: prod-db
+      # Resolve the Lakebase branch paired with the pushed git branch.
+      # main  → default (production) Lakebase branch
+      # staging → 'staging' Lakebase branch
+      # (mapping matches scripts/post-checkout.sh via scripts/sanitize-branch-name.sh)
+      - name: Resolve target DB credentials (Lakebase)
+        id: target-db
         env:
           LAKEBASE_PROJECT_ID: ${{ secrets.LAKEBASE_PROJECT_ID }}
+          TARGET_GIT_BRANCH: ${{ github.ref_name }}
         run: |
           if [ -z "$LAKEBASE_PROJECT_ID" ]; then
             echo "::error::LAKEBASE_PROJECT_ID secret not set. Add it in repo Settings → Secrets."
             exit 1
           fi
-          PROJ_PATH="projects/${LAKEBASE_PROJECT_ID}"
-          DB_NAME="databricks_postgres"
-
-          # Find default Lakebase branch
-          LIST_RAW="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>&1)"
-          BRANCHES="$(echo "$LIST_RAW" | jq -c 'if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end' 2>/dev/null)" || BRANCHES="[]"
-
-          DEFAULT_NAME="$(echo "$BRANCHES" | jq -r '.[] | select((.status.default == true) or (.is_default == true)) | .name' 2>/dev/null | head -1)"
-          DEFAULT_UID="$(echo "$BRANCHES" | jq -r '.[] | select((.status.default == true) or (.is_default == true)) | (.uid // .id // (if .name then (.name | split("/") | last) else empty end))' 2>/dev/null | head -1)"
-          if [ -z "$DEFAULT_UID" ] && [ "$(echo "$BRANCHES" | jq -r 'length' 2>/dev/null)" -ge 1 ] 2>/dev/null; then
-            DEFAULT_NAME="$(echo "$BRANCHES" | jq -r '.[0] | .name' 2>/dev/null)"
-            DEFAULT_UID="$(echo "$BRANCHES" | jq -r '.[0] | (.uid // .id // (if .name then (.name | split("/") | last) else empty end))' 2>/dev/null)"
-          fi
-          if [ -z "$DEFAULT_UID" ]; then
-            echo "::error::Could not find default Lakebase branch. Check LAKEBASE_PROJECT_ID and Databricks auth."
-            echo "list-branches output: $LIST_RAW"
+          echo "Resolving Lakebase branch for git '$TARGET_GIT_BRANCH'..."
+          if ! ./scripts/ci/resolve-lakebase-branch.sh \
+                --git-branch "$TARGET_GIT_BRANCH" \
+                --ensure-endpoint \
+                --github-env; then
+            echo "::error::Failed to resolve Lakebase branch for git '$TARGET_GIT_BRANCH'. Ensure the paired Lakebase branch exists (main → default; staging → 'staging')."
             exit 1
           fi
-          echo "Default branch: uid=$DEFAULT_UID name=$DEFAULT_NAME"
-
-          BRANCH_PATH="${DEFAULT_NAME:-${PROJ_PATH}/branches/${DEFAULT_UID}}"
-
-          # Get or create endpoint
-          HOST="$(databricks postgres list-endpoints "$BRANCH_PATH" -o json 2>/dev/null | jq -r '.[0].status.hosts.host // empty')"
-          if [ -z "$HOST" ]; then
-            databricks postgres create-endpoint "$BRANCH_PATH" "primary" --json '{"spec": {"endpoint_type": "ENDPOINT_TYPE_READ_WRITE", "autoscaling_limit_min_cu": 2, "autoscaling_limit_max_cu": 4}}' 2>/dev/null || true
-            for _ in $(seq 1 24); do
-              state="$(databricks postgres list-endpoints "$BRANCH_PATH" -o json 2>/dev/null | jq -r '.[0].status.current_state // empty')"
-              [ "$state" = "ACTIVE" ] && break
-              sleep 5
-            done
-            HOST="$(databricks postgres list-endpoints "$BRANCH_PATH" -o json 2>/dev/null | jq -r '.[0].status.hosts.host // empty')"
-          fi
-          if [ -z "$HOST" ]; then
-            echo "::error::Could not get production endpoint host."
-            exit 1
-          fi
-
-          TOKEN="$(databricks postgres generate-database-credential "${BRANCH_PATH}/endpoints/primary" -o json 2>/dev/null | jq -r '.token // empty')"
-          EMAIL="$(databricks current-user me -o json 2>/dev/null | jq -r '.userName // .emails[0].value // empty')"
-          if [ -z "$TOKEN" ] || [ -z "$EMAIL" ]; then
-            echo "::error::Could not generate production database credential."
-            exit 1
-          fi
-
-          JDBC_URL="jdbc:postgresql://${HOST}:5432/${DB_NAME}?sslmode=require"
-          # Generic vars
-          echo "DB_USERNAME=${EMAIL}" >> $GITHUB_ENV
-          echo "DB_PASSWORD<<PROD_PW_EOF" >> $GITHUB_ENV
-          printf '%s' "$TOKEN" >> $GITHUB_ENV
-          echo "" >> $GITHUB_ENV
-          echo "PROD_PW_EOF" >> $GITHUB_ENV
-          # Java-specific (Spring reads these natively)
-          echo "SPRING_DATASOURCE_URL=${JDBC_URL}" >> $GITHUB_ENV
-          echo "SPRING_DATASOURCE_USERNAME=${EMAIL}" >> $GITHUB_ENV
-          echo "SPRING_DATASOURCE_PASSWORD=${TOKEN}" >> $GITHUB_ENV
-          # DATABASE_URL in postgresql:// format with embedded credentials
-          ENCODED_PASS="$(printf '%s' "$TOKEN" | sed 's/@/%40/g; s/:/%3A/g; s/\//%2F/g; s/?/%3F/g; s/#/%23/g')"
-          echo "DATABASE_URL=postgresql://${EMAIL}:${ENCODED_PASS}@${HOST}:5432/${DB_NAME}?sslmode=require" >> $GITHUB_ENV
-          echo "Production credentials resolved (default branch: $DEFAULT_UID)."
+          echo "Target branch resolved: $LAKEBASE_BRANCH_NAME (git: $TARGET_GIT_BRANCH)"
 
       - name: Create pre-migration snapshot
         id: snapshot
@@ -204,7 +169,7 @@ jobs:
             echo "SNAPSHOT_NAME=" >> $GITHUB_ENV
           fi
 
-      - name: Run migrations (production)
+      - name: Run migrations (target)
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
           DB_USERNAME: ${{ env.DB_USERNAME }}
@@ -218,7 +183,7 @@ jobs:
             exit 1
           fi
           LANG="${{ steps.detect-lang.outputs.lang }}"
-          echo "Running migrations on production ($LANG)..."
+          echo "Running migrations on target Lakebase '$LAKEBASE_BRANCH_NAME' (git: $GITHUB_REF_NAME, $LANG)..."
           if [ "$LANG" = "java" ]; then
             if ! ./mvnw -q flyway:migrate -Dflyway.url="$SPRING_DATASOURCE_URL" -Dflyway.user="${SPRING_DATASOURCE_USERNAME:-}" -Dflyway.password="${SPRING_DATASOURCE_PASSWORD:-}"; then
               echo "::error::Flyway migrate failed."
@@ -333,11 +298,11 @@ jobs:
           EXPECTED_TABLES="$(echo "$EXPECTED_TABLES" | sed '/^$/d')"
 
           if [ -z "$EXPECTED_TABLES" ]; then
-            echo "No tables expected on production after accounting for DROP TABLE migrations; nothing to verify."
+            echo "No tables expected on target after accounting for DROP TABLE migrations; nothing to verify."
             exit 0
           fi
 
-          # Query actual tables from production
+          # Query actual tables from target Lakebase branch
           ACTUAL_TABLES="$(PGPASSWORD="$DB_PASSWORD" psql \
             "host=$PG_HOST port=$PG_PORT dbname=$PG_DB user=$DB_USERNAME sslmode=require" \
             -t -A -c "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;" 2>&1)"
@@ -355,25 +320,29 @@ jobs:
           done
 
           if [ -n "$MISSING" ]; then
-            echo "::error::Schema verification failed. Tables missing on production:${MISSING}"
+            echo "::error::Schema verification failed. Tables missing on target '${LAKEBASE_BRANCH_NAME}':${MISSING}"
             echo ""
             echo "Expected tables from migrations:"
             echo "$EXPECTED_TABLES"
             echo ""
-            echo "Actual tables on production:"
+            echo "Actual tables on target (${LAKEBASE_BRANCH_NAME}):"
             echo "$ACTUAL_TABLES"
             echo ""
-            echo "To fix: manually run the missing migration SQL against production, or re-run the merge workflow."
+            echo "To fix: manually run the missing migration SQL against '${LAKEBASE_BRANCH_NAME}', or re-run the merge workflow."
             exit 1
           fi
 
-          echo "Schema verification passed. All $(echo "$EXPECTED_TABLES" | wc -l | tr -d ' ') expected tables exist on production."
+          echo "Schema verification passed. All $(echo "$EXPECTED_TABLES" | wc -l | tr -d ' ') expected tables exist on target '${LAKEBASE_BRANCH_NAME}'."
 
   # Separate job: branch cleanup runs only on PR merge (not direct pushes to main).
   # Uses PR event data directly — no commit message parsing needed.
   cleanup-lakebase-branches:
     runs-on: self-hosted
-    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+    # Fire on ANY merged PR regardless of base.ref. Two-tier: feature→staging
+    # and staging→main both need their ci-pr-N + feature Lakebase clones torn
+    # down. Persistent branches (main, staging) are never deleted (the delete
+    # helper script's allowlist guards against that).
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

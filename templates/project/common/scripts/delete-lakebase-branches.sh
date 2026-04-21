@@ -86,11 +86,30 @@ if [ $# -eq 0 ]; then
   fi
 fi
 
+# Protected branches never get deleted — includes long-lived promotion branches
+# (main, master, staging, production) and the Lakebase project's default.
+# Override via LAKEBASE_PROTECTED_BRANCHES="staging main production custom-foo".
+_DEFAULT_PROTECTED="main master staging production"
+_DYNAMIC_DEFAULT="$(echo "$BRANCHES_JSON" | jq -r '.[] | select((.status.default == true) or (.is_default == true)) | (if .name then (.name | split("/") | last) else (.uid // .id // empty) end)' 2>/dev/null | head -1)"
+PROTECTED="${LAKEBASE_PROTECTED_BRANCHES:-$_DEFAULT_PROTECTED}${_DYNAMIC_DEFAULT:+ $_DYNAMIC_DEFAULT}"
+
+is_protected() {
+  local b="$1"
+  for p in $PROTECTED; do
+    [ "$b" = "$p" ] && return 0
+  done
+  return 1
+}
+
 # Delete feature branches first (children), then ci-pr-* branches (parents).
 # Lakebase won't delete a branch that has children, so order matters.
 CI_BRANCHES=""
 FEATURE_BRANCHES=""
 for name in "$@"; do
+  if is_protected "$name"; then
+    echo "Refusing to delete protected branch: $name"
+    continue
+  fi
   case "$name" in
     ci-pr-*) CI_BRANCHES="${CI_BRANCHES:+$CI_BRANCHES }$name" ;;
     *)       FEATURE_BRANCHES="${FEATURE_BRANCHES:+$FEATURE_BRANCHES }$name" ;;
