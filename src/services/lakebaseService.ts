@@ -1,5 +1,5 @@
 import * as cp from 'child_process';
-import { getConfig } from '../utils/config';
+import { getConfig, getProjectDatabase } from '../utils/config';
 import { exec } from '../utils/exec';
 
 export interface LakebaseBranch {
@@ -463,7 +463,8 @@ export class LakebaseService {
       const ep = await this.getEndpoint(branchNameOrUid);
       if (!ep?.host) { return []; }
       const cred = await this.getCredential(branchNameOrUid);
-      const connStr = `host=${ep.host} port=5432 dbname=databricks_postgres user=${cred.email} password=${cred.token} sslmode=require`;
+      const dbName = getProjectDatabase();
+      const connStr = `host=${ep.host} port=5432 dbname=${dbName} user=${cred.email} password=${cred.token} sslmode=require`;
       const { execSync } = require('child_process');
       // Query all columns for all public tables in one shot
       // Format: tablename|column_name|data_type (pipe-separated, one row per column)

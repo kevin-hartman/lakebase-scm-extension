@@ -113,6 +113,22 @@ export function getEnvConfig(): EnvConfig {
   return parseEnvFile(path.join(root, '.env'));
 }
 
+/**
+ * Resolve the project's Postgres database name for psql connections.
+ * Parses `DATABASE_URL` in `.env` when present; otherwise falls back to
+ * `databricks_postgres` (the CLI's default). All branches of a project
+ * share the same dbname, so parsing from DATABASE_URL is safe even when
+ * connecting to a different branch's endpoint.
+ */
+export function getProjectDatabase(env?: EnvConfig): string {
+  const url = (env ?? getEnvConfig()).DATABASE_URL;
+  if (url) {
+    const m = url.match(/^[a-z]+:\/\/[^/]+\/([^/?#]+)/i);
+    if (m && m[1]) { return decodeURIComponent(m[1]); }
+  }
+  return 'databricks_postgres';
+}
+
 /** Update .env with Lakebase connection info (mirrors post-checkout.sh behavior) */
 export function updateEnvConnection(opts: {
   host: string;
@@ -127,7 +143,7 @@ export function updateEnvConnection(opts: {
   }
 
   const envPath = path.join(root, '.env');
-  const dbName = 'databricks_postgres';
+  const dbName = getProjectDatabase(parseEnvFile(envPath));
 
   // Build both URL formats
   const pgUrl = opts.host

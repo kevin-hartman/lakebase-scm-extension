@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { getWorkspaceRoot, getEnvConfig, getConfig } from '../utils/config';
+import { getWorkspaceRoot, getEnvConfig, getConfig, getProjectDatabase } from '../utils/config';
 import { exec } from '../utils/exec';
 import { LakebaseService } from './lakebaseService';
 
@@ -322,8 +322,9 @@ export class SchemaDiffService {
           return this.emptyResult('No endpoint for default branch');
         }
         const prodCred = await this.lakebaseService.getCredential(defaultBranch.branchId);
-        branchTables = await this.listTables(branchEp.host, '5432', 'databricks_postgres', branchCred.email, branchCred.token);
-        prodTables = await this.listTables(prodEp.host, '5432', 'databricks_postgres', prodCred.email, prodCred.token);
+        const dbName = getProjectDatabase();
+        branchTables = await this.listTables(branchEp.host, '5432', dbName, branchCred.email, branchCred.token);
+        prodTables = await this.listTables(prodEp.host, '5432', dbName, prodCred.email, prodCred.token);
       } catch (fallbackErr: any) {
         return this.emptyResult(`Cannot fetch schema: ${err.message}. Fallback also failed: ${fallbackErr.message}`);
       }
