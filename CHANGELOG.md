@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.3 (2026-04-21)
+
+### Two-tier CI (fork + migrate against parent branch)
+- **`templates/.github/workflows/pr.yml`** now forks `ci-pr-<N>` from the PR's **base.ref** branch (e.g. `staging`) instead of the Lakebase default. Schema diff compares CI branch vs parent, not vs production. Projects using a `feature/* → staging → main` promotion flow now test against the right baseline.
+- **`templates/.github/workflows/merge.yml`** triggers on push to `main` **or** `staging`. The `migrate-target` job resolves the matching Lakebase branch from `github.ref_name` (main → default/production; staging → `staging`). Cleanup of `ci-pr-<N>` + the merged feature branch's Lakebase clone fires on **any** merged PR, not just PRs to `main`.
+- **New helper `templates/scripts/ci/resolve-lakebase-branch.sh`** — single source of truth for the git→Lakebase branch mapping. Uses `scripts/sanitize-branch-name.sh` for non-main branches, the project default for `main`/`master`. Handles create-from-parent, endpoint ensure, credential mint, and emits env vars to `$GITHUB_ENV` + non-secret vars to stdout for same-step `eval`.
+- **Source-mismatch verification** — if `ci-pr-<N>` already exists but was forked from the wrong parent (e.g. from a prior run when base.ref was `main` but now it's `staging`), the helper can delete + re-fork from the correct parent (`--recreate-on-source-mismatch`). Previously the extension silently reused the wrong-source branch. New `LAKEBASE_BRANCH_STATUS` output (`CREATED` / `VERIFIED` / `RECREATED` / `EXISTS` / `UNVERIFIED`) exposes the truth in CI logs + step summaries.
+- **Protected-branch allowlist** — `templates/scripts/delete-lakebase-branches.sh` refuses to delete `main`/`master`/`staging`/`production` or the project's default branch, even if a PR's HEAD_REF happens to sanitize to one of them (matters when `staging → main` PRs get merged).
+
+### Schema tree reliability
+- **`pg` client fallback** — `queryBranchSchema` no longer silently returns `[]` when `psql` isn't on the user's PATH (the common macOS default). It now tries `psql` first and falls back to the bundled `pg` node client, so the schema tree populates regardless of local binary availability. Errors surface in the developer console instead of being swallowed.
+
+### Developer-experience fixes
+- `$GITHUB_ENV` writes don't apply to the same step that wrote them. The helper now ALSO emits non-secret vars to stdout so callers can `eval` them in-step — fixes an earlier regression where `JDBC_URL` was empty when writing the step output.
+- Informational echoes in the helper go to stderr, so `HELPER_OUT` captures only `KEY='value'` lines (avoids `eval: syntax error near unexpected token '('`).
+
+## 0.5.2 (2026-04-18)
+
+### Setup helpers
+- New `setupCiSecrets` command + automatic prompt after runner setup so GitHub repo secrets (`DATABRICKS_HOST`, `DATABRICKS_TOKEN`, `LAKEBASE_PROJECT_ID`) get populated without a trip to the repo UI.
+- New `createLakebaseProject` command for one-shot Lakebase autoscaling project creation.
+- `.vscodeignore` tightened to keep the VSIX lean.
+
+### Database name resolution
+- `getProjectDatabase()` now parses the path segment of `DATABASE_URL` before falling back to `databricks_postgres`, so projects using a custom app DB no longer have to hard-code overrides.
+
 ## 0.5.1 (2026-04-17)
 
 ### Deploy Enhancements
