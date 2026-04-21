@@ -22,6 +22,7 @@
     "onCommand:lakebaseSync.createProject",
     "onCommand:lakebaseSync.createLakebaseProject",
     "onCommand:lakebaseSync.connectWorkspace",
+    "onCommand:lakebaseSync.setupCiSecrets",
     "workspaceContains:.env",
     "workspaceContains:.env.example"
   ],
@@ -334,6 +335,11 @@
       {
         "command": "lakebaseSync.startRunner",
         "title": "Lakebase: Start CI Runner"
+      },
+      {
+        "command": "lakebaseSync.setupCiSecrets",
+        "title": "Lakebase: Set CI Secrets (GitHub)",
+        "icon": "$(key)"
       },
       {
         "command": "lakebaseSync.stopRunner",

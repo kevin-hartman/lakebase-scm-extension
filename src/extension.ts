@@ -82,6 +82,76 @@ function upsertEnvKeys(content: string, updates: Record<string, string>): string
   return out.join('\n');
 }
 
+/**
+ * Offer to set missing GitHub Actions secrets (DATABRICKS_HOST,
+ * DATABRICKS_TOKEN, LAKEBASE_PROJECT_ID) on the given repo. If everything
+ * is already set, returns silently. Prompts only for values that are
+ * missing or that the caller did not provide.
+ */
+async function offerCiSecretsSetup(
+  fullRepoName: string,
+  defaults: { host: string; projectId: string },
+  opts: { force?: boolean } = {},
+): Promise<void> {
+  const { RunnerService } = require('./services/runnerService');
+  const runnerService = new RunnerService();
+
+  const { missing, present } = await runnerService.checkCiSecrets(fullRepoName);
+  if (!opts.force && missing.length === 0) {
+    return;
+  }
+
+  if (!opts.force) {
+    const missingList = missing.join(', ');
+    const choice = await vscode.window.showInformationMessage(
+      `CI workflow needs these repo secrets: ${missingList}. Set them now?`,
+      'Set secrets', 'Skip'
+    );
+    if (choice !== 'Set secrets') { return; }
+  }
+
+  const host = defaults.host || await vscode.window.showInputBox({
+    prompt: 'DATABRICKS_HOST',
+    value: defaults.host,
+    ignoreFocusOut: true,
+  }) || '';
+  if (!host) { return; }
+
+  const projectId = defaults.projectId || await vscode.window.showInputBox({
+    prompt: 'LAKEBASE_PROJECT_ID',
+    value: defaults.projectId,
+    ignoreFocusOut: true,
+  }) || '';
+  if (!projectId) { return; }
+
+  const tokenHint = `Generate at ${host.replace(/\/+$/, '')}/settings/user/developer/access-tokens`;
+  const token = await vscode.window.showInputBox({
+    prompt: 'DATABRICKS_TOKEN (Personal Access Token)',
+    placeHolder: tokenHint,
+    password: true,
+    ignoreFocusOut: true,
+    validateInput: v => v && v.trim().length > 0 ? undefined : 'Token is required',
+  });
+  if (!token) { return; }
+
+  try {
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Setting CI secrets on ${fullRepoName}`, cancellable: false },
+      async (progress) => {
+        await runnerService.setupCiSecrets(
+          fullRepoName,
+          { DATABRICKS_HOST: host, DATABRICKS_TOKEN: token, LAKEBASE_PROJECT_ID: projectId },
+          (msg: string) => progress.report({ message: msg }),
+        );
+      }
+    );
+    const already = present.length > 0 ? ` (replaced ${present.join(', ')})` : '';
+    vscode.window.showInformationMessage(`CI secrets set on ${fullRepoName}${already}.`);
+  } catch (err: any) {
+    vscode.window.showErrorMessage(`Failed to set CI secrets: ${err.message}`);
+  }
+}
+
 export async function activate(context: vscode.ExtensionContext) {
   const config = getConfig();
 
@@ -810,6 +880,8 @@ export async function activate(context: vscode.ExtensionContext) {
           } catch (err: any) {
             vscode.window.showErrorMessage(`Runner setup failed: ${err.message}`);
           }
+
+          await offerCiSecretsSetup(fullRepoName, { host, projectId });
         }
       }
 
@@ -994,9 +1066,30 @@ export async function activate(context: vscode.ExtensionContext) {
         );
         vscode.window.showInformationMessage(`Runner started for ${config.lakebaseProjectId}`);
         runnerTreeProvider.refresh();
+
+        await offerCiSecretsSetup(fullRepoName, {
+          host: config.databricksHost,
+          projectId: config.lakebaseProjectId,
+        });
       } catch (err: any) {
         vscode.window.showErrorMessage(`Failed to start runner: ${err.message}`);
       }
+    }),
+
+    vscode.commands.registerCommand('lakebaseSync.setupCiSecrets', async () => {
+      const config = getConfig();
+      const repoUrl = await gitService.getGitHubUrl();
+      const match = repoUrl && repoUrl.match(/github\.com\/(.+)/);
+      if (!match) {
+        vscode.window.showErrorMessage('Could not determine GitHub repo from remote.');
+        return;
+      }
+      const fullRepoName = match[1];
+      await offerCiSecretsSetup(
+        fullRepoName,
+        { host: config.databricksHost, projectId: config.lakebaseProjectId },
+        { force: true },
+      );
     }),
 
     vscode.commands.registerCommand('lakebaseSync.refreshRunner', () => {

@@ -274,6 +274,51 @@ export class RunnerService {
     return logs.length > 0 ? path.join(diagDir, logs[0]) : undefined;
   }
 
+  /**
+   * Check which of the three CI secrets (DATABRICKS_HOST, DATABRICKS_TOKEN,
+   * LAKEBASE_PROJECT_ID) are already set on the GitHub repo. Returns lists
+   * of present and missing names. Returns all-missing if `gh secret list`
+   * fails (no auth, no permissions, etc.).
+   */
+  async checkCiSecrets(fullRepoName: string): Promise<{ present: string[]; missing: string[] }> {
+    const required = ['DATABRICKS_HOST', 'DATABRICKS_TOKEN', 'LAKEBASE_PROJECT_ID'];
+    try {
+      const raw = cp.execSync(
+        `gh secret list --repo "${fullRepoName}" --json name -q '.[].name'`,
+        { timeout: 10000 }
+      ).toString().trim();
+      const names = raw ? raw.split('\n').map(s => s.trim()).filter(Boolean) : [];
+      const present = required.filter(k => names.includes(k));
+      const missing = required.filter(k => !names.includes(k));
+      return { present, missing };
+    } catch {
+      return { present: [], missing: required };
+    }
+  }
+
+  /**
+   * Set the three CI secrets (DATABRICKS_HOST, DATABRICKS_TOKEN,
+   * LAKEBASE_PROJECT_ID) on the GitHub repo. Values are passed via stdin
+   * to avoid shell escaping issues with tokens.
+   */
+  async setupCiSecrets(
+    fullRepoName: string,
+    secrets: { DATABRICKS_HOST: string; DATABRICKS_TOKEN: string; LAKEBASE_PROJECT_ID: string },
+    progress?: (msg: string) => void,
+  ): Promise<void> {
+    const report = progress || (() => {});
+    for (const [key, value] of Object.entries(secrets)) {
+      if (!value) {
+        throw new Error(`Missing value for ${key}`);
+      }
+      report(`Setting ${key}...`);
+      cp.execSync(`gh secret set ${key} --repo "${fullRepoName}"`, {
+        input: value,
+        timeout: 15000,
+      });
+    }
+  }
+
   /** List recent workflow runs from GitHub for the repo */
   getRecentWorkflowRuns(fullRepoName: string, limit = 5): Array<{ id: number; name: string; status: string; conclusion: string; branch: string; event: string }> {
     try {
