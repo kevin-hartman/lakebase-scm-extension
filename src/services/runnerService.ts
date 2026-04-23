@@ -125,6 +125,42 @@ export class RunnerService {
       );
     }
 
+    // `actions/setup-python` and `actions/setup-node` hardcode
+    // `/Users/runner/hostedtoolcache` as the install path on macOS (it's
+    // `actions/python-versions`' installer script -- the path is baked into
+    // the shell script that gets downloaded, NOT read from env). On GitHub-
+    // hosted runners `/Users/runner` is the runner user's home and exists by
+    // default. On self-hosted runners running as a normal user (e.g.
+    // `kevin.hartman`) it doesn't exist, and the first `setup-python` job
+    // fails with `mkdir: /Users/runner: Permission denied`.
+    //
+    // RUNNER_TOOL_CACHE only redirects setup-python's cache-lookup, not where
+    // the installer writes -- setting it to a different path just makes
+    // setup-python re-download every run because the two dirs drift.
+    //
+    // The only durable fix is creating `/Users/runner/hostedtoolcache` with
+    // the runner user as owner. That requires sudo and can't be done from
+    // the extension -- surface a clear one-time instruction instead.
+    try {
+      const toolCacheDefault = '/Users/runner/hostedtoolcache';
+      let needsSetup = false;
+      try {
+        fs.accessSync(toolCacheDefault, fs.constants.W_OK);
+      } catch {
+        needsSetup = true;
+      }
+      if (needsSetup) {
+        const userLogin = os.userInfo().username;
+        report(
+          `One-time setup required before setup-python works: run in a real terminal (needs sudo):\n` +
+            `    sudo mkdir -p ${toolCacheDefault}\n` +
+            `    sudo chown -R ${userLogin} /Users/runner`,
+        );
+      }
+    } catch {
+      // Non-fatal: surfacing a hint is best-effort.
+    }
+
     // Start in background
     report('Starting runner...');
     const env: Record<string, string> = { ...process.env } as Record<string, string>;
