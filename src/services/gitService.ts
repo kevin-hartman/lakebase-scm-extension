@@ -123,6 +123,33 @@ export class GitService {
     }
   }
 
+  /**
+   * Absolute path of the git repository root (the dir containing `.git` or
+   * the parent of a submodule's `.git` file). Differs from the VS Code
+   * workspace folder when the project lives in a subdirectory of the repo
+   * (e.g. a monorepo). Git file paths (from `diff --name-status`, etc.) are
+   * relative to this root, so file URIs must be built from it.
+   *
+   * Returns the workspace root as a fallback if the CLI call fails.
+   */
+  async getRepoRoot(): Promise<string> {
+    if (this.cachedRepoRoot) {
+      return this.cachedRepoRoot;
+    }
+    const root = getWorkspaceRoot();
+    if (!root) {
+      return '';
+    }
+    try {
+      const out = await exec('git rev-parse --show-toplevel', root);
+      this.cachedRepoRoot = out.trim();
+      return this.cachedRepoRoot;
+    } catch {
+      return root;
+    }
+  }
+  private cachedRepoRoot = '';
+
   async listLocalBranches(): Promise<GitBranchInfo[]> {
     const root = getWorkspaceRoot();
     if (!root) {

@@ -690,7 +690,12 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
         return [item];
       }
 
-      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      // File paths from `git diff --name-status` are repo-root-relative; in a
+      // monorepo the workspace folder is often a subdirectory of the repo, so
+      // joining with the workspace folder produces a duplicated path that
+      // doesn't exist on disk ("file not found" on click). Always build URIs
+      // from the git top-level.
+      const root = await this.gitService.getRepoRoot();
       const statusIcons: Record<string, string> = {
         added: 'diff-added', modified: 'diff-modified', deleted: 'diff-removed', renamed: 'diff-renamed'
       };
