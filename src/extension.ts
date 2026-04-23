@@ -1559,7 +1559,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
         if (action === 'Stash & Switch') {
           try {
-            await gitService.stash(`Auto-stash before switching to ${targetGitBranch}`);
+            await gitService.stashIncludeUntracked(`Auto-stash before switching to ${targetGitBranch}`);
           } catch (err: any) {
             vscode.window.showErrorMessage(`Failed to stash: ${err.message}`);
             return;
@@ -1668,7 +1668,7 @@ export async function activate(context: vscode.ExtensionContext) {
               );
               if (action === 'Stash & Switch') {
                 try {
-                  await gitService.stash(`Auto-stash before switching to ${targetGitBranch}`);
+                  await gitService.stashIncludeUntracked(`Auto-stash before switching to ${targetGitBranch}`);
                   vscode.window.showInformationMessage('Changes stashed. Retrying checkout...');
                   vscode.commands.executeCommand('lakebaseSync.switchBranch', item);
                 } catch (stashErr: any) {
@@ -2237,7 +2237,7 @@ export async function activate(context: vscode.ExtensionContext) {
           );
           if (action === 'Stash & Switch') {
             try {
-              await gitService.stash('Auto-stash before branch switch');
+              await gitService.stashIncludeUntracked('Auto-stash before branch switch');
               vscode.window.showInformationMessage('Changes stashed. Please try switching again.');
             } catch (stashErr: any) {
               vscode.window.showErrorMessage(`Failed to stash: ${stashErr.message}`);
