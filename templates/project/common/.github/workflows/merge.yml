@@ -90,15 +90,10 @@ jobs:
           fi
           npm install
 
+      # The official action installs to a user-writable path (no sudo). It's
+      # a no-op if a compatible databricks CLI is already on PATH.
       - name: Install Databricks CLI
-        run: |
-          if command -v databricks >/dev/null 2>&1; then
-            echo "Databricks CLI already on PATH"
-            databricks -v
-          else
-            curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sudo sh
-            databricks -v
-          fi
+        uses: databricks/setup-cli@main
 
       - name: Authenticate Databricks
         id: db-auth
@@ -349,20 +344,9 @@ jobs:
         with:
           fetch-depth: 1
 
+      # No-sudo install via the official action; no-op if already on PATH.
       - name: Install Databricks CLI (cleanup job)
-        run: |
-          if command -v databricks >/dev/null 2>&1; then
-            echo "Databricks CLI already on PATH"; databricks -v
-          else
-            curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sudo sh || true
-            export PATH="/usr/local/bin:$PATH"
-            if ! command -v databricks >/dev/null 2>&1; then
-              echo "::error::Databricks CLI not available. Install on the runner."
-              exit 1
-            else
-              databricks -v
-            fi
-          fi
+        uses: databricks/setup-cli@main
 
       - name: Authenticate Databricks (cleanup job)
         env:

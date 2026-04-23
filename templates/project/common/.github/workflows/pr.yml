@@ -74,15 +74,10 @@ jobs:
           fi
           npm install
 
+      # The official action installs to a user-writable path (no sudo). It's
+      # a no-op if a compatible databricks CLI is already on PATH.
       - name: Install Databricks CLI
-        run: |
-          if command -v databricks >/dev/null 2>&1; then
-            echo "Databricks CLI already on PATH"
-            databricks -v
-          else
-            curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sudo sh
-            databricks -v
-          fi
+        uses: databricks/setup-cli@main
 
       # Creates Lakebase branch ci-pr-<N> forked from the PR's BASE git branch
       # (e.g. staging → forks from Lakebase 'staging', not production). Two-tier
