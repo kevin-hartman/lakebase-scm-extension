@@ -349,6 +349,13 @@ jobs:
       # Only fires if a playwright config is checked in under client/, so
       # projects without a browser loop skip these transparently. The
       # schema-diff step that follows runs unconditionally.
+      #
+      # Note: the project's client/playwright.config.ts MUST boot BOTH the
+      # frontend (Vite/5173) AND the backend (uvicorn/8000 etc.) via the
+      # `webServer: []` array. A config that only starts Vite will hit
+      # `ECONNREFUSED` on every /api/* call. See
+      # templates/project/common/client-reference/playwright.config.ts for
+      # a full-stack reference.
       - name: Install Playwright browsers
         if: hashFiles('client/playwright.config.ts', 'client/playwright.config.js', 'client/playwright.config.mjs') != ''
         working-directory: client
