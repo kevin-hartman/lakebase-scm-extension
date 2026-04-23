@@ -41,6 +41,14 @@ export interface LakebaseConfig {
    * on release.
    */
   baseBranch: string;
+  /**
+   * String prefix that scopes the branch-tree view to this project's git
+   * branches. Only branches whose name starts with this prefix are listed
+   * in the sidebar (the current branch is always shown regardless). Useful
+   * in monorepos where the repo contains unrelated branches from other
+   * projects/users. Empty = show all branches (original behavior).
+   */
+  gitBranchPrefix: string;
 }
 
 export interface EnvConfig {
@@ -55,6 +63,7 @@ export interface EnvConfig {
   LAKEBASE_TRUNK_BRANCH?: string;
   LAKEBASE_STAGING_BRANCH?: string;
   LAKEBASE_BASE_BRANCH?: string;
+  LAKEBASE_GIT_BRANCH_PREFIX?: string;
   // Legacy — kept for backward compat with existing Java projects
   SPRING_DATASOURCE_URL?: string;
   SPRING_DATASOURCE_USERNAME?: string;
@@ -131,6 +140,7 @@ export function getConfig(): LakebaseConfig {
     trunkBranch: wsConfig.get('trunkBranch', '') || envConfig.LAKEBASE_TRUNK_BRANCH || '',
     stagingBranch: wsConfig.get('stagingBranch', '') || envConfig.LAKEBASE_STAGING_BRANCH || '',
     baseBranch: wsConfig.get('baseBranch', '') || envConfig.LAKEBASE_BASE_BRANCH || '',
+    gitBranchPrefix: wsConfig.get('gitBranchPrefix', '') || envConfig.LAKEBASE_GIT_BRANCH_PREFIX || '',
   };
 }
 

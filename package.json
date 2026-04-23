@@ -1363,6 +1363,11 @@
           "type": "string",
           "default": "",
           "description": "Lakebase branch id that new feature branches fork from. Defaults to the project's default Lakebase branch (usually `production`) when empty. Typical multi-tier setup: `staging`. Overrides LAKEBASE_BASE_BRANCH from .env if both are set."
+        },
+        "lakebaseSync.gitBranchPrefix": {
+          "type": "string",
+          "default": "",
+          "description": "String prefix that scopes the branch-tree view to this project's git branches. Only branches whose name starts with this prefix are listed (the current branch is always shown regardless). Useful in monorepos with branches from other projects/users. Overrides LAKEBASE_GIT_BRANCH_PREFIX from .env if both are set."
         }
       }
     }

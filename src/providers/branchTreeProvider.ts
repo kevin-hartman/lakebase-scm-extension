@@ -188,7 +188,17 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
     const items: BranchItem[] = [];
 
     try {
-      const gitBranches = await this.gitService.listLocalBranches();
+      const allGitBranches = await this.gitService.listLocalBranches();
+      const currentGitBranchEarly = await this.gitService.getCurrentBranch();
+
+      // Scope to this project's branches when LAKEBASE_GIT_BRANCH_PREFIX is set.
+      // Always include the current branch (so the user sees what they're on
+      // even if they temporarily check out an unrelated branch).
+      const prefix = getConfig().gitBranchPrefix;
+      const gitBranches = prefix
+        ? allGitBranches.filter(b => b.name.startsWith(prefix) || b.name === currentGitBranchEarly)
+        : allGitBranches;
+
       let lakebaseBranches: LakebaseBranch[] = [];
 
       try {
@@ -197,7 +207,7 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
         // Lakebase not available
       }
 
-      const currentGitBranch = await this.gitService.getCurrentBranch();
+      const currentGitBranch = currentGitBranchEarly;
 
       if (sectionLabel === 'Current Branch') {
         const gb = gitBranches.find(b => b.name === currentGitBranch);
