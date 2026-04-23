@@ -74,6 +74,22 @@ jobs:
           fi
           npm install
 
+      # Install frontend dependencies when a `client/` workspace is present
+      # (Python+React layouts etc.). Gated on client/package.json so projects
+      # without a frontend skip this transparently.
+      - name: Install client dependencies
+        if: hashFiles('client/package.json') != ''
+        working-directory: client
+        run: |
+          if command -v node >/dev/null 2>&1; then
+            echo "Node.js already on PATH"; node --version
+          fi
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
       # The official action installs to a user-writable path (no sudo). It's
       # a no-op if a compatible databricks CLI is already on PATH.
       - name: Install Databricks CLI
@@ -328,6 +344,20 @@ jobs:
             echo "::error::No CI branch URL — cannot run tests without a database. Check the 'Create CI database branch' step for details."
             exit 1
           fi
+
+      # Playwright E2E tests run against the Vite dev server + backend.
+      # Only fires if a playwright config is checked in under client/, so
+      # projects without a browser loop skip these transparently. The
+      # schema-diff step that follows runs unconditionally.
+      - name: Install Playwright browsers
+        if: hashFiles('client/playwright.config.ts', 'client/playwright.config.js', 'client/playwright.config.mjs') != ''
+        working-directory: client
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E tests (Playwright)
+        if: hashFiles('client/playwright.config.ts', 'client/playwright.config.js', 'client/playwright.config.mjs') != ''
+        working-directory: client
+        run: npx playwright test
 
       - name: Install PostgreSQL client (for schema dump)
         if: success() && steps.datasource.outputs.ci_branch_used == 'true'

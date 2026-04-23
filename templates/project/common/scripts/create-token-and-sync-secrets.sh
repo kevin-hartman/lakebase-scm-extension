@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Manual token refresh and sync to GitHub secrets.
+# Mint a Databricks PAT and sync it (plus DATABRICKS_HOST + LAKEBASE_PROJECT_ID)
+# to GitHub repo secrets for CI.
 #
-# Normally the pre-push hook handles this automatically. Use this script for
-# initial setup or if you need to manually refresh the token.
+# Prefers a long-lived PAT (90 days) over the OAuth session token so that
+# GitHub Actions reruns — which can fire hours after the last push — do not
+# silently fail when the short-lived (~1h) OAuth session expires. Falls back
+# to OAuth only if the workspace disables PAT creation.
+#
+# The pre-push hook calls this on every push. Run it manually before:
+#   - `gh pr create` / `gh run rerun` / manual workflow_dispatch triggers
+#   - any time `databricks current-user me` starts failing in CI logs
 #
 # Prereq: run `databricks auth login` first. LAKEBASE_PROJECT_ID must be set (e.g. in .env).
 # Usage: ./scripts/create-token-and-sync-secrets.sh
-
-echo "Note: The pre-push hook refreshes the token automatically on every push."
-echo "      This script is for initial setup or manual refresh."
-echo ""
 
 set -e
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || true
@@ -58,28 +61,39 @@ elif grep -q "$(echo "$DATABRICKS_HOST" | sed 's|https://||; s|/$||')" ~/.databr
   PROFILE="--profile $(grep -B1 "$(echo "$DATABRICKS_HOST" | sed 's|https://||; s|/$||')" ~/.databrickscfg 2>/dev/null | head -1 | tr -d '[]')"
 fi
 
-# Get OAuth token (preferred — works on all workspaces including those with PATs disabled)
-echo "Getting OAuth token..."
-TOKEN_VALUE="$(databricks auth token $PROFILE -o json 2>/dev/null | jq -r '.access_token // empty')" || true
+# Prefer a long-lived PAT (90 days by default) so CI reruns past the ~1h
+# OAuth session lifetime don't silently fail auth. Override via
+# TOKEN_LIFETIME_SECONDS; the API caps workspace-token lifetimes per tenant.
+TOKEN_KIND=""
+REPO_NAME="$(basename "$(git remote get-url origin 2>/dev/null)" 2>/dev/null | sed 's/\.git$//')" || REPO_NAME="repo"
+COMMENT="GitHub Actions ($REPO_NAME)"
+LIFETIME_SECONDS="${TOKEN_LIFETIME_SECONDS:-7776000}"  # 90 days
 
-# Fallback: create a PAT (works on workspaces that allow PATs)
+echo "Minting PAT (${LIFETIME_SECONDS}s lifetime)..."
+CREATE_OUT="$(databricks tokens create --comment "$COMMENT" --lifetime-seconds "$LIFETIME_SECONDS" -o json 2>&1)" || true
+TOKEN_VALUE="$(echo "$CREATE_OUT" | jq -r '.token_value // .token // empty' 2>/dev/null)" || true
+if [ -n "$TOKEN_VALUE" ]; then
+  TOKEN_KIND="PAT (${LIFETIME_SECONDS}s)"
+fi
+
+# Fallback: OAuth session token (short-lived, ~1h) for workspaces where PATs
+# are disabled. The pre-push hook will re-mint on every push; reruns that
+# fire >1h after the last push will fail — prefer PAT if you can.
 if [ -z "$TOKEN_VALUE" ]; then
-  echo "OAuth token not available. Trying PAT..."
-  REPO_NAME="$(basename "$(git remote get-url origin 2>/dev/null)" 2>/dev/null | sed 's/\.git$//')" || REPO_NAME="repo"
-  COMMENT="GitHub Actions ($REPO_NAME)"
-  LIFETIME_SECONDS="${TOKEN_LIFETIME_SECONDS:-2592000}"
-  CREATE_OUT="$(databricks tokens create --comment "$COMMENT" --lifetime-seconds "$LIFETIME_SECONDS" -o json 2>&1)" || true
-  TOKEN_VALUE="$(echo "$CREATE_OUT" | jq -r '.token_value // .token // empty' 2>/dev/null)" || true
+  echo "PAT creation failed — workspace may have PATs disabled. Falling back to OAuth token..."
+  TOKEN_VALUE="$(databricks auth token $PROFILE -o json 2>/dev/null | jq -r '.access_token // empty')" || true
+  if [ -n "$TOKEN_VALUE" ]; then
+    TOKEN_KIND="OAuth session (~1h)"
+  fi
 fi
 
 if [ -z "$TOKEN_VALUE" ]; then
-  echo "Failed to get OAuth token or create PAT. Run 'databricks auth login' first."
+  echo "Failed to mint PAT or get OAuth token. Run 'databricks auth login' first."
   exit 1
 fi
 
 export DATABRICKS_HOST
 export DATABRICKS_TOKEN="$TOKEN_VALUE"
 export LAKEBASE_PROJECT_ID
-echo "Token synced. Syncing DATABRICKS_HOST, DATABRICKS_TOKEN, LAKEBASE_PROJECT_ID to GitHub repo secrets..."
-echo "Note: OAuth tokens are short-lived (~1h). The pre-push hook refreshes them automatically."
+echo "Token: $TOKEN_KIND. Syncing DATABRICKS_HOST, DATABRICKS_TOKEN, LAKEBASE_PROJECT_ID to GitHub repo secrets..."
 exec "$SCRIPT_DIR/set-repo-secrets.sh"
