@@ -609,10 +609,35 @@ export class GitService {
     await exec('git clean -fd', root);
   }
 
-  async deleteBranch(branchName: string): Promise<void> {
+  async deleteBranch(branchName: string, force = false): Promise<void> {
     const root = getWorkspaceRoot();
     if (!root) { throw new Error('No workspace root'); }
-    await exec(`git branch -d "${branchName}"`, root);
+    const flag = force ? '-D' : '-d';
+    await exec(`git branch ${flag} "${branchName}"`, root);
+  }
+
+  /** Check if a branch exists on origin. Returns false when no origin remote or branch is absent. */
+  async hasRemoteBranch(branchName: string): Promise<boolean> {
+    const root = getWorkspaceRoot();
+    if (!root) { return false; }
+    try {
+      const out = await exec(`git ls-remote --heads origin "${branchName}"`, root);
+      return out.trim().length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /** True when the working tree has staged or unstaged changes. */
+  async isDirty(): Promise<boolean> {
+    const root = getWorkspaceRoot();
+    if (!root) { return false; }
+    try {
+      const out = await exec('git status --porcelain', root);
+      return out.trim().length > 0;
+    } catch {
+      return false;
+    }
   }
 
   async renameBranch(newName: string): Promise<void> {

@@ -118,6 +118,11 @@
         "icon": "$(beaker)"
       },
       {
+        "command": "lakebaseSync.deleteBranchEverywhere",
+        "title": "Delete Branch (local + remote + Lakebase)",
+        "icon": "$(trash)"
+      },
+      {
         "command": "lakebaseSync.showMigrationHistory",
         "title": "Show Migration History"
       },
@@ -1269,6 +1274,16 @@
           "command": "lakebaseSync.switchBranch",
           "when": "view == lakebaseBranches && viewItem =~ /^(branch|branchNoDb)$/",
           "group": "inline"
+        },
+        {
+          "command": "lakebaseSync.deleteBranchEverywhere",
+          "when": "view == lakebaseBranches && viewItem =~ /^(branch|branchNoDb|currentBranch|currentBranchNoDb)$/",
+          "group": "inline@9"
+        },
+        {
+          "command": "lakebaseSync.deleteBranchEverywhere",
+          "when": "view == lakebaseBranches && viewItem =~ /^(branch|branchNoDb|currentBranch|currentBranchNoDb)$/",
+          "group": "9_danger@1"
         },
         {
           "command": "lakebaseSync.openInConsole",

@@ -1019,6 +1019,117 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
+    vscode.commands.registerCommand('lakebaseSync.deleteBranchEverywhere', async (item?: any) => {
+      const branchName: string | undefined = item?.gitBranch?.name ?? item?.lakebaseBranch?.branchId;
+      if (!branchName) {
+        vscode.window.showErrorMessage('No branch selected.');
+        return;
+      }
+
+      const cfg = getConfig();
+      if (isMainBranch(branchName, cfg.trunkBranch)) {
+        vscode.window.showWarningMessage(`Refusing to delete trunk branch "${branchName}".`);
+        return;
+      }
+      if (isStagingBranch(branchName, cfg.stagingBranch)) {
+        vscode.window.showWarningMessage(`Refusing to delete staging branch "${branchName}".`);
+        return;
+      }
+
+      const currentBranch = await gitService.getCurrentBranch();
+      const isCurrent = currentBranch === branchName;
+
+      // If deleting the current branch, we need to check out a parent first.
+      // Parent = trunk alias if set, else whichever of `main`/`master` exists.
+      let parentBranch: string | undefined;
+      if (isCurrent) {
+        const candidates = [cfg.trunkBranch, 'main', 'master'].filter(Boolean) as string[];
+        const localBranches = new Set((await gitService.listLocalBranches()).map(b => b.name));
+        parentBranch = candidates.find(c => localBranches.has(c));
+        if (!parentBranch) {
+          vscode.window.showErrorMessage(
+            `Cannot delete current branch: no parent branch (tried ${candidates.join(', ')}) exists locally. Check one out first.`
+          );
+          return;
+        }
+
+        if (await gitService.isDirty()) {
+          vscode.window.showWarningMessage(
+            `Cannot delete current branch: uncommitted changes in "${branchName}". Commit or stash first.`
+          );
+          return;
+        }
+      }
+
+      const hasLocal = !!item?.gitBranch;
+      const lbBranchId: string | undefined = item?.lakebaseBranch?.branchId;
+      const hasRemote = hasLocal ? await gitService.hasRemoteBranch(branchName) : false;
+
+      const targets: string[] = [];
+      if (isCurrent && parentBranch) { targets.push(`• Switch to "${parentBranch}" first`); }
+      if (hasLocal) { targets.push(`• Local git branch "${branchName}"`); }
+      if (hasRemote) { targets.push(`• Remote branch "origin/${branchName}"`); }
+      if (lbBranchId) { targets.push(`• Lakebase branch "${lbBranchId}"`); }
+      if (targets.length === 0) {
+        vscode.window.showWarningMessage(`Nothing to delete for "${branchName}".`);
+        return;
+      }
+
+      const confirm = await vscode.window.showWarningMessage(
+        `Delete "${branchName}" everywhere?\n\nThis will:\n${targets.join('\n')}\n\nThis cannot be undone.`,
+        { modal: true },
+        'Delete'
+      );
+      if (confirm !== 'Delete') { return; }
+
+      const errors: string[] = [];
+
+      if (isCurrent && parentBranch) {
+        try {
+          await gitService.checkoutBranch(parentBranch);
+        } catch (err: any) {
+          vscode.window.showErrorMessage(`Could not check out "${parentBranch}": ${err.message}. Aborted — nothing deleted.`);
+          return;
+        }
+      }
+
+      if (lbBranchId) {
+        try {
+          await lakebaseService.deleteBranch(lbBranchId);
+        } catch (err: any) {
+          if (!await handleAuthError(lakebaseService, err)) {
+            errors.push(`Lakebase: ${err.message}`);
+          }
+        }
+      }
+
+      if (hasRemote) {
+        try {
+          await gitService.deleteRemoteBranch(branchName);
+        } catch (err: any) {
+          errors.push(`origin/${branchName}: ${err.message}`);
+        }
+      }
+
+      if (hasLocal) {
+        try {
+          await gitService.deleteBranch(branchName, true);
+        } catch (err: any) {
+          errors.push(`local ${branchName}: ${err.message}`);
+        }
+      }
+
+      branchTreeProvider.refresh();
+      statusBarProvider.refresh();
+
+      if (errors.length > 0) {
+        vscode.window.showErrorMessage(`Deleted with errors:\n${errors.join('\n')}`);
+      } else {
+        const suffix = isCurrent && parentBranch ? ` Switched to "${parentBranch}".` : '';
+        vscode.window.showInformationMessage(`Deleted "${branchName}" everywhere.${suffix}`);
+      }
+    }),
+
     vscode.commands.registerCommand('lakebaseSync.refreshCredentials', async () => {
       const gitBranch = await gitService.getCurrentBranch();
       const cfgRc = getConfig();
@@ -1432,6 +1543,32 @@ export async function activate(context: vscode.ExtensionContext) {
       const cfgSb = getConfig();
       const isMain = isMainBranch(targetGitBranch, cfgSb.trunkBranch);
       const isStaging = !isMain && isStagingBranch(targetGitBranch, cfgSb.stagingBranch);
+
+      // Proactive dirty-tree check: git silently carries non-conflicting uncommitted
+      // edits across a checkout, which produces the confusing "same code on the new
+      // branch" experience. Force the user to decide up front.
+      if (await gitService.isDirty()) {
+        const action = await vscode.window.showWarningMessage(
+          `You have uncommitted changes. Switching to "${targetGitBranch}" will carry them with you unless you stash or commit first.`,
+          { modal: true },
+          'Stash & Switch', 'Commit First'
+        );
+        if (action === 'Commit First') {
+          vscode.commands.executeCommand('lakebaseSync.commit');
+          return;
+        }
+        if (action === 'Stash & Switch') {
+          try {
+            await gitService.stash(`Auto-stash before switching to ${targetGitBranch}`);
+          } catch (err: any) {
+            vscode.window.showErrorMessage(`Failed to stash: ${err.message}`);
+            return;
+          }
+        } else {
+          // Dismissed / Cancel — abort.
+          return;
+        }
+      }
 
       // Suppress automatic refreshes until the full switch completes
       statusBarProvider.suppressRefresh = true;
