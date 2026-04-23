@@ -50,6 +50,7 @@ export class SchemaScmProvider {
   private configWatcher: vscode.Disposable;
   private codeRefreshTimer: NodeJS.Timeout | undefined;
   private lastMigrationFiles: string[] = [];
+  private schemaDiffInFlight = false;
 
   constructor(
     gitService: GitService,
@@ -193,42 +194,12 @@ export class SchemaScmProvider {
       this.codeGroup!.resourceStates = [];
     }
 
-    // --- Lakebase: schema changes from uncommitted migration files (matches Code group lifecycle) ---
-    // Clears after commit, just like Code clears after commit. Branch tree shows full branch-vs-production diff.
-    let schemaItems: vscode.SourceControlResourceState[] = [];
-    try {
-      const config = getConfig();
-      const staged = this.stagedGroup!.resourceStates;
-      const unstaged = this.codeGroup!.resourceStates;
-      const allPaths = [
-        ...staged.map(r => r.resourceUri.fsPath),
-        ...unstaged.map(r => r.resourceUri.fsPath),
-      ];
-      const hasMigrationChanges = allPaths.some(p =>
-        p.includes(config.migrationPath) && config.migrationPattern.test(p.split('/').pop() || '')
-      );
-
-      if (hasMigrationChanges) {
-        const mainMigrations = await this.gitService.listMigrationsOnBranch('main', config.migrationPath, config.migrationPattern);
-        const mainSet = new Set(mainMigrations);
-        const branchMigrations = this.migrationService.listMigrations();
-        const newMigrations = branchMigrations.filter(m => !mainSet.has(m.filename));
-
-        if (newMigrations.length > 0) {
-          const schemaChanges = this.migrationService.parseMigrationSchemaChanges(newMigrations);
-          const tableMap = new Map<string, { type: string; tableName: string }>();
-          for (const change of schemaChanges) { tableMap.set(change.tableName, change); }
-          for (const change of tableMap.values()) {
-            schemaItems.push(this.makeSchemaResource(
-              change.tableName,
-              change.type as 'created' | 'modified' | 'removed'
-            ));
-          }
-        }
-      }
-    } catch { /* ignore */ }
-
-    this.lakebaseGroup!.resourceStates = schemaItems;
+    // --- Lakebase: live DB schema diff vs production ---
+    // Sourced from schemaDiffService cache. On cache miss, fire a background
+    // compare (guarded) and re-refresh when it completes. This surfaces any
+    // drift — committed migrations not yet applied, ad-hoc ALTERs, etc. — not
+    // just uncommitted migration files.
+    this.lakebaseGroup!.resourceStates = this.buildSchemaItemsFromDiff();
 
     this.scm.count = this.stagedGroup!.resourceStates.length +
       this.codeGroup!.resourceStates.length +
@@ -611,36 +582,8 @@ export class SchemaScmProvider {
       const unstaged = await this.gitService.getUnstagedChanges();
       this.codeGroup!.resourceStates = unstaged.map(f => this.makeChangeResource(f, root));
 
-      // --- Re-evaluate Lakebase schema changes (migration files may have been added/staged) ---
-      let schemaItems: vscode.SourceControlResourceState[] = [];
-      try {
-        const config = getConfig();
-        const allPaths = [
-          ...this.stagedGroup!.resourceStates.map(r => r.resourceUri.fsPath),
-          ...this.codeGroup!.resourceStates.map(r => r.resourceUri.fsPath),
-        ];
-        const hasMigrationChanges = allPaths.some(p =>
-          p.includes(config.migrationPath) && config.migrationPattern.test(p.split('/').pop() || '')
-        );
-        if (hasMigrationChanges) {
-          const mainMigrations = await this.gitService.listMigrationsOnBranch('main', config.migrationPath, config.migrationPattern);
-          const mainSet = new Set(mainMigrations);
-          const branchMigrations = this.migrationService.listMigrations();
-          const newMigrations = branchMigrations.filter(m => !mainSet.has(m.filename));
-          if (newMigrations.length > 0) {
-            const schemaChanges = this.migrationService.parseMigrationSchemaChanges(newMigrations);
-            const tableMap = new Map<string, { type: string; tableName: string }>();
-            for (const change of schemaChanges) { tableMap.set(change.tableName, change); }
-            for (const change of tableMap.values()) {
-              schemaItems.push(this.makeSchemaResource(
-                change.tableName,
-                change.type as 'created' | 'modified' | 'removed'
-              ));
-            }
-          }
-        }
-      } catch { /* ignore */ }
-      this.lakebaseGroup!.resourceStates = schemaItems;
+      // --- Re-evaluate Lakebase schema changes from live DB diff ---
+      this.lakebaseGroup!.resourceStates = this.buildSchemaItemsFromDiff();
 
       this.scm.count = this.stagedGroup!.resourceStates.length +
         this.codeGroup!.resourceStates.length +
@@ -698,6 +641,32 @@ export class SchemaScmProvider {
   private getStatusColor(status: string): string {
     const colors: Record<string, string> = { added: 'charts.green', modified: 'charts.yellow', deleted: 'charts.red', renamed: 'charts.blue' };
     return colors[status] || 'foreground';
+  }
+
+  /**
+   * Build Lakebase schema-change items from the cached live diff. On cache
+   * miss, kicks off a background compareBranchSchemas() (guarded against
+   * concurrent calls) and triggers a re-refresh when it completes. On error
+   * or no LAKEBASE_BRANCH_ID, returns [] so the count simply reads 0.
+   */
+  private buildSchemaItemsFromDiff(): vscode.SourceControlResourceState[] {
+    const diff = this.schemaDiffService.getCachedDiff();
+    if (!diff) {
+      if (!this.schemaDiffInFlight) {
+        this.schemaDiffInFlight = true;
+        this.schemaDiffService.compareBranchSchemas()
+          .then(result => { if (result && !result.error) { this.refresh(); } })
+          .catch(() => { /* ignore */ })
+          .finally(() => { this.schemaDiffInFlight = false; });
+      }
+      return [];
+    }
+    if (diff.error) { return []; }
+    const items: vscode.SourceControlResourceState[] = [];
+    for (const t of diff.created)  { items.push(this.makeSchemaResource(t.name, 'created')); }
+    for (const t of diff.modified) { items.push(this.makeSchemaResource(t.name, 'modified')); }
+    for (const t of diff.removed)  { items.push(this.makeSchemaResource(t.name, 'removed')); }
+    return items;
   }
 
   private makeSchemaResource(tableName: string, diffType: 'created' | 'modified' | 'removed'): vscode.SourceControlResourceState {

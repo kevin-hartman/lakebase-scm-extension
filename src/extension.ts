@@ -1602,7 +1602,7 @@ export async function activate(context: vscode.ExtensionContext) {
         if (diff && diff.inSync && !diff.error) {
           try {
             const config = getConfig();
-            const mainMigrations = await gitService.listMigrationsOnBranch('main', config.migrationPath);
+            const mainMigrations = await gitService.listMigrationsOnBranch(config.trunkBranch || 'main', config.migrationPath);
             const mainSet = new Set(mainMigrations);
             const branchMigrations = migrationService.listMigrations();
             const newMigrations = branchMigrations.filter(m => !mainSet.has(m.filename));

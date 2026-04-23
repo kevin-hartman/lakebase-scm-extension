@@ -20,8 +20,14 @@ export class SchemaContentProvider implements vscode.TextDocumentContentProvider
     const side = uri.authority; // 'production' or 'branch'
     const tableName = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
 
-    // Get the cached diff — it has branchTables and production info
-    const diff = this.schemaDiffService.getCachedDiff();
+    // Prefer cached diff (fast). When empty, run a live compare — this also
+    // primes the cache for the SCM provider and other callers. On error we
+    // still fall through to the migration-file parser below for offline/DDL-only.
+    let diff = this.schemaDiffService.getCachedDiff();
+    if (!diff) {
+      const live = await this.schemaDiffService.compareBranchSchemas();
+      if (live && !live.error) { diff = live; }
+    }
 
     if (diff) {
       if (side === 'branch') {
