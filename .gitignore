@@ -3,3 +3,5 @@ dist/
 *.vsix
 .agent-logs/
 .claude/hooks
+.claude/settings.json
+.claude/settings.local.json
