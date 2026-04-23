@@ -338,6 +338,16 @@ Search `lakebaseSync` in VS Code Settings:
 | `showUnifiedRepo` | `true` | Show Git + Lakebase in Source Control |
 | `productionReadOnly` | `true` | Prevent deleting the production branch |
 | `migrationPath` | _(empty — auto-detect)_ | Migration file path. Leave empty to auto-detect from project language. |
+| `trunkBranch` | _(empty)_ | Alternative git branch name to treat as `main` (in addition to `main`/`master`). Also readable from `LAKEBASE_TRUNK_BRANCH` in `.env`. |
+
+### Trunk Branch Alias
+
+By default the extension and the `post-checkout` hook treat only `main` and `master` as the trunk (and connect `.env` to the project's default Lakebase branch when you're on one of them). If your repo uses a prefixed or otherwise non-standard trunk branch — common in monorepo-style sandboxes like `psa-sandbox` where the production branch is e.g. `kevin.hartman/lakebase-ecommerce-demo` — you can opt in by setting either:
+
+- `LAKEBASE_TRUNK_BRANCH=<git-branch-name>` in `.env`, or
+- `lakebaseSync.trunkBranch` in VS Code settings (overrides `.env`).
+
+When set, checking out that branch points `.env` at the default Lakebase branch (production) instead of cutting a new feature branch from it. Everything else (main/master) continues to work.
 
 ## Testing
 

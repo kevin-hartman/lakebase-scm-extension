@@ -18,6 +18,29 @@ export interface LakebaseConfig {
   language: ProjectLanguage;
   showUnifiedRepo: boolean;
   productionReadOnly: boolean;
+  /**
+   * Optional git branch name (in addition to `main`/`master`) that should be
+   * treated as the project trunk. When set and the user is on this branch,
+   * `.env` points at the project's default Lakebase branch (production)
+   * rather than a feature branch cut from it.
+   */
+  trunkBranch: string;
+  /**
+   * Optional git branch name paired with the Lakebase `staging` branch.
+   * When set and the user is on this branch, `.env` points at the Lakebase
+   * `staging` branch (which must already exist — this hook does NOT
+   * auto-create it). Symmetric to `trunkBranch` but targets `staging`
+   * instead of the project's default Lakebase branch.
+   */
+  stagingBranch: string;
+  /**
+   * Lakebase branch id that new feature branches fork from. Defaults to the
+   * project's default Lakebase branch (usually `production`) when empty.
+   * Typical multi-tier setup: `LAKEBASE_BASE_BRANCH=staging` so merged
+   * feature schema drift accumulates in staging and is rebased to production
+   * on release.
+   */
+  baseBranch: string;
 }
 
 export interface EnvConfig {
@@ -29,6 +52,9 @@ export interface EnvConfig {
   DATABASE_URL?: string;
   DB_USERNAME?: string;
   DB_PASSWORD?: string;
+  LAKEBASE_TRUNK_BRANCH?: string;
+  LAKEBASE_STAGING_BRANCH?: string;
+  LAKEBASE_BASE_BRANCH?: string;
   // Legacy — kept for backward compat with existing Java projects
   SPRING_DATASOURCE_URL?: string;
   SPRING_DATASOURCE_USERNAME?: string;
@@ -102,6 +128,9 @@ export function getConfig(): LakebaseConfig {
     language,
     showUnifiedRepo: wsConfig.get('showUnifiedRepo', true),
     productionReadOnly: wsConfig.get('productionReadOnly', true),
+    trunkBranch: wsConfig.get('trunkBranch', '') || envConfig.LAKEBASE_TRUNK_BRANCH || '',
+    stagingBranch: wsConfig.get('stagingBranch', '') || envConfig.LAKEBASE_STAGING_BRANCH || '',
+    baseBranch: wsConfig.get('baseBranch', '') || envConfig.LAKEBASE_BASE_BRANCH || '',
   };
 }
 

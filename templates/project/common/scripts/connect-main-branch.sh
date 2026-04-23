@@ -2,6 +2,13 @@
 # Connect to the main (default) Lakebase branch and update .env and application-local.properties.
 # Run from your terminal (Databricks CLI must be authenticated).
 # Usage: ./scripts/connect-main-branch.sh
+#
+# This script unconditionally connects the current .env to the project's default
+# (production) Lakebase branch — it does NOT consult the current git branch.
+# That means if `LAKEBASE_TRUNK_BRANCH` is set in .env (see post-checkout.sh),
+# you can still run this from any feature branch to "reset" your .env back to
+# production without switching git branches. The trunk alias only affects the
+# post-checkout hook's automatic behavior on branch switches.
 set -e
 
 WORK_TREE="$(git rev-parse --show-toplevel 2>/dev/null || true)"

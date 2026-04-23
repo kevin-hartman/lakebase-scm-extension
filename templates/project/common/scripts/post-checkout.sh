@@ -21,27 +21,50 @@ if [ -z "$BRANCH" ] || [ "$BRANCH" = "HEAD" ]; then
   exit 0
 fi
 
-# Load .env if present
-if [ -f .env ]; then
-  set -a
-  # shellcheck source=/dev/null
-  source .env 2>/dev/null || true
-  set +a
-fi
-
-# Bootstrap .env from .env.example if missing
-if [ ! -f .env ] && [ -f .env.example ]; then
-  cp .env.example .env
-  echo "Lakebase: created .env from .env.example. Set LAKEBASE_PROJECT_ID and run checkout again."
+# Scope guard: this hook only activates when a project-level .env exists at
+# the work-tree root. In monorepos where the hook is installed at a parent
+# repo's git dir but the Lakebase project's .env lives in a subdirectory,
+# this prevents the hook from firing on unrelated branch checkouts. If
+# .env.example exists, bootstrap .env from it once and exit so the user
+# can populate LAKEBASE_PROJECT_ID before the next checkout.
+if [ ! -f .env ]; then
+  if [ -f .env.example ]; then
+    cp .env.example .env
+    echo "Lakebase: created .env from .env.example. Set LAKEBASE_PROJECT_ID and run checkout again."
+  fi
   exit 0
 fi
+
+# Clobber any inherited LAKEBASE_* / DATABRICKS_* env so this hook acts only
+# on what's in the project .env. Otherwise a user who sourced an activation
+# script earlier in the shell would leak LAKEBASE_PROJECT_ID into every
+# git checkout in unrelated repos and create spurious branches.
+unset LAKEBASE_PROJECT_ID LAKEBASE_TRUNK_BRANCH LAKEBASE_STAGING_BRANCH \
+      LAKEBASE_BASE_BRANCH LAKEBASE_HOST LAKEBASE_BRANCH_ID \
+      DATABRICKS_CONFIG_PROFILE DATABRICKS_HOST DATABASE_URL \
+      DB_USERNAME DB_PASSWORD
+
+set -a
+# shellcheck source=/dev/null
+source .env 2>/dev/null || true
+set +a
 
 # --- Prerequisites ---
 PROJ_ID="${LAKEBASE_PROJECT_ID:-}"
 if [ -z "$PROJ_ID" ]; then
-  echo "Lakebase: set LAKEBASE_PROJECT_ID in .env"
+  # .env exists but no project id -- likely a fresh bootstrap. Stay quiet
+  # to avoid nagging on every checkout.
   exit 0
 fi
+
+# Optional: treat a non-standard git branch like main/master (e.g. psa-sandbox
+# monorepo conventions where the trunk is `user/project-demo` rather than `main`).
+TRUNK_ALIAS="${LAKEBASE_TRUNK_BRANCH:-}"
+
+# Optional: git branch that pairs with the Lakebase `staging` branch. When the
+# user is on this git branch, .env is pointed at the `staging` Lakebase branch
+# (which must already exist — this hook does NOT auto-create it).
+STAGING_ALIAS="${LAKEBASE_STAGING_BRANCH:-}"
 
 if ! command -v databricks >/dev/null 2>&1; then
   echo "Lakebase: databricks CLI not found. Install and run 'databricks auth login'."
@@ -175,8 +198,12 @@ if [ -z "$DEFAULT_BRANCH_UID" ]; then
   exit 1
 fi
 
-# --- main/master: point to the default Lakebase branch ---
-if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
+# --- trunk branch: point to the default Lakebase branch ---
+# When LAKEBASE_TRUNK_BRANCH is set, it REPLACES main/master as this project's
+# trunk. This matters in monorepos: if you opt in with an alias, the shared
+# main/master should NOT also pair with this project's default Lakebase branch.
+if { [ -n "$TRUNK_ALIAS" ] && [ "$BRANCH" = "$TRUNK_ALIAS" ]; } \
+   || { [ -z "$TRUNK_ALIAS" ] && { [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; }; }; then
   echo "Lakebase: on $BRANCH, connecting to default Lakebase branch ($DEFAULT_BRANCH_UID)..."
   BRANCH_PATH="${PROJ_PATH}/branches/${DEFAULT_BRANCH_UID}"
 
@@ -198,18 +225,63 @@ if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
   exit 0
 fi
 
-# --- Feature branch: create Lakebase branch from default ---
+# --- staging branch: point to the Lakebase `staging` branch ---
+# Symmetric to the trunk match above but targets the `staging` Lakebase branch
+# instead of the default. The `staging` branch must already exist — unlike
+# feature branches, this hook does NOT auto-create it (staging is a persistent,
+# shared branch that accumulates merged schema drift and must be bootstrapped
+# deliberately).
+if [ -n "$STAGING_ALIAS" ] && [ "$BRANCH" = "$STAGING_ALIAS" ]; then
+  # Verify the Lakebase `staging` branch exists before doing anything else.
+  STAGING_EXISTS="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null \
+    | jq -r '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[] | select((.name | type == "string" and (endswith("/branches/staging") or (split("/") | last == "staging"))) or (.uid == "staging") or (.id == "staging")) | (.name // .uid // .id)' | head -1)"
+
+  if [ -z "$STAGING_EXISTS" ]; then
+    echo "Lakebase: on $BRANCH but the Lakebase 'staging' branch does not exist."
+    echo "  staging is a persistent branch and must be bootstrapped deliberately — this hook will not auto-create it."
+    echo "  Create it once with: databricks postgres create-branch $PROJ_PATH staging --json '{\"spec\": {\"source_branch\": \"${PROJ_PATH}/branches/${DEFAULT_BRANCH_UID}\", \"no_expiry\": true}}'"
+    exit 0
+  fi
+
+  echo "Lakebase: on $BRANCH, connecting to Lakebase 'staging' branch..."
+  BRANCH_PATH="${PROJ_PATH}/branches/staging"
+
+  HOST="$(get_or_create_endpoint "$BRANCH_PATH")"
+  if [ -z "$HOST" ]; then
+    echo "Lakebase: could not get endpoint host for staging branch."
+    exit 0
+  fi
+
+  get_credential "${BRANCH_PATH}/endpoints/primary"
+  if [ -z "$TOKEN" ] || [ -z "$EMAIL" ]; then
+    echo "Lakebase: could not get credential for staging. Set DATABASE_URL in .env manually."
+    exit 0
+  fi
+
+  update_env "$HOST" "$EMAIL" "$TOKEN" "staging"
+  echo "Lakebase: $BRANCH -> staging branch. Updated .env."
+  maybe_npm_install
+  exit 0
+fi
+
+# --- Feature branch: create Lakebase branch from the configured base ---
 # Sanitize git branch name for Lakebase branch ID
 LAKEBASE_BRANCH="$("$SCRIPT_DIR/sanitize-branch-name.sh" "$BRANCH")"
 BRANCH_PATH="${PROJ_PATH}/branches/${LAKEBASE_BRANCH}"
-SOURCE_BRANCH="${PROJ_PATH}/branches/${DEFAULT_BRANCH_UID}"
+
+# Resolve the parent (source) Lakebase branch. Use LAKEBASE_BASE_BRANCH from
+# .env when set (typical multi-tier setup: features fork from `staging` so
+# merged schema drift accumulates there). Fall back to the default Lakebase
+# branch (production) if LAKEBASE_BASE_BRANCH is unset.
+BASE_BRANCH_ID="${LAKEBASE_BASE_BRANCH:-$DEFAULT_BRANCH_UID}"
+SOURCE_BRANCH="${PROJ_PATH}/branches/${BASE_BRANCH_ID}"
 
 # Check if branch already exists
 BRANCH_EXISTS="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null \
   | jq -r --arg uid "$LAKEBASE_BRANCH" '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[] | select((.name | type == "string" and (endswith("/branches/" + $uid) or (split("/") | last == $uid))) or (.uid == $uid) or (.id == $uid)) | (.name // .uid // .id)' | head -1)"
 
 if [ -z "$BRANCH_EXISTS" ]; then
-  echo "Lakebase: creating branch '$LAKEBASE_BRANCH' from default ($DEFAULT_BRANCH_UID)..."
+  echo "Lakebase: creating branch '$LAKEBASE_BRANCH' from '$BASE_BRANCH_ID'..."
   CREATE_RESPONSE="$(databricks postgres create-branch "$PROJ_PATH" "$LAKEBASE_BRANCH" \
     --json "{\"spec\": {\"source_branch\": \"$SOURCE_BRANCH\", \"no_expiry\": true}}" 2>&1)" || true
   # Log fork point for audit trail

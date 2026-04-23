@@ -2,8 +2,8 @@
   "name": "lakebase-scm-extension",
   "displayName": "Lakebase SCM Extension",
   "description": "Unified visibility into code and database branch changes for Databricks Lakebase",
-  "version": "0.5.3",
-  "publisher": "databricks-field-eng",
+  "version": "0.5.4",
+  "publisher": "kevin-hartman",
   "icon": "resources/icons/extension-icon.png",
   "repository": {
     "type": "git",
@@ -1348,6 +1348,21 @@
           "type": "boolean",
           "default": true,
           "description": "Prevent creating or deleting branches on the default (production) Lakebase branch"
+        },
+        "lakebaseSync.trunkBranch": {
+          "type": "string",
+          "default": "",
+          "description": "Alternative git branch name to treat as 'main' (in addition to main/master). Overrides LAKEBASE_TRUNK_BRANCH from .env if both are set."
+        },
+        "lakebaseSync.stagingBranch": {
+          "type": "string",
+          "default": "",
+          "description": "Git branch name to pair with the Lakebase `staging` branch. Overrides LAKEBASE_STAGING_BRANCH from .env if both are set."
+        },
+        "lakebaseSync.baseBranch": {
+          "type": "string",
+          "default": "",
+          "description": "Lakebase branch id that new feature branches fork from. Defaults to the project's default Lakebase branch (usually `production`) when empty. Typical multi-tier setup: `staging`. Overrides LAKEBASE_BASE_BRANCH from .env if both are set."
         }
       }
     }

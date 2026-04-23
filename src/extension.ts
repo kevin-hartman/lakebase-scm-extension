@@ -14,7 +14,7 @@ import { PullRequestTreeProvider } from './providers/pullRequestTree';
 import { MergesTreeProvider } from './providers/mergesTree';
 import { GraphWebviewProvider } from './providers/graphWebview';
 import { getConfig, getWorkspaceRoot, detectLanguage } from './utils/config';
-import { isMainBranch } from './utils/theme';
+import { isMainBranch, isStagingBranch } from './utils/theme';
 import { buildDiffTuples, DiffTuple } from './utils/diffBuilder';
 import { ProjectCreationService, PROJECT_CREATION_PROMPTS } from './services/projectCreationService';
 import { ScaffoldService } from './services/scaffoldService';
@@ -284,17 +284,25 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Set initial branch context
   const initialBranch = await gitService.getCurrentBranch();
-  const isFeature = !!initialBranch && initialBranch !== 'main' && initialBranch !== 'master';
+  const initialTrunk = getConfig().trunkBranch;
+  const initialStaging = getConfig().stagingBranch;
+  const isFeature = !!initialBranch
+    && !isMainBranch(initialBranch, initialTrunk)
+    && !isStagingBranch(initialBranch, initialStaging);
   vscode.commands.executeCommand('setContext', 'lakebaseSync.onFeatureBranch', isFeature);
   vscode.commands.executeCommand('setContext', 'lakebaseSync.isRebasing', await gitService.isRebasing());
 
   // Sync .env connection on git branch change, optionally auto-create Lakebase branch
   const autoBranchDisposable = gitService.onBranchChanged(async (newBranch: string) => {
-    const onFeature = !!newBranch && newBranch !== 'main' && newBranch !== 'master';
+    const trunkAlias = getConfig().trunkBranch;
+    const stagingAlias = getConfig().stagingBranch;
+    const onFeature = !!newBranch
+      && !isMainBranch(newBranch, trunkAlias)
+      && !isStagingBranch(newBranch, stagingAlias);
     vscode.commands.executeCommand('setContext', 'lakebaseSync.onFeatureBranch', onFeature);
     vscode.commands.executeCommand('setContext', 'lakebaseSync.isRebasing', await gitService.isRebasing());
 
-    if (!newBranch || isMainBranch(newBranch)) { return; }
+    if (!newBranch || isMainBranch(newBranch, trunkAlias) || isStagingBranch(newBranch, stagingAlias)) { return; }
 
     // Clear schema cache — new branch may have different schema
     schemaDiffService.clearCache();
@@ -499,8 +507,13 @@ export async function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand('lakebaseSync.createBranch', async () => {
       const gitBranch = await gitService.getCurrentBranch();
-      if (!gitBranch || isMainBranch(gitBranch)) {
+      const cfgCb = getConfig();
+      if (!gitBranch || isMainBranch(gitBranch, cfgCb.trunkBranch)) {
         vscode.window.showWarningMessage('Cannot create a Lakebase branch for main/master.');
+        return;
+      }
+      if (isStagingBranch(gitBranch, cfgCb.stagingBranch)) {
+        vscode.window.showWarningMessage('Cannot create a Lakebase branch for staging — staging is a persistent branch.');
         return;
       }
 
@@ -895,7 +908,9 @@ export async function activate(context: vscode.ExtensionContext) {
         placeHolder: 'feature/my-feature',
         validateInput: (val) => {
           if (!val.trim()) { return 'Branch name is required'; }
-          if (isMainBranch(val)) { return 'Cannot branch from main/master with this name'; }
+          const cfgV = getConfig();
+          if (isMainBranch(val, cfgV.trunkBranch)) { return 'Cannot branch from main/master with this name'; }
+          if (isStagingBranch(val, cfgV.stagingBranch)) { return 'Cannot branch from staging with this name'; }
           return undefined;
         },
       });
@@ -1006,7 +1021,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand('lakebaseSync.refreshCredentials', async () => {
       const gitBranch = await gitService.getCurrentBranch();
-      const isMain = isMainBranch(gitBranch);
+      const cfgRc = getConfig();
+      const isMain = isMainBranch(gitBranch, cfgRc.trunkBranch);
+      const isStaging = !isMain && isStagingBranch(gitBranch, cfgRc.stagingBranch);
 
       let branchId: string;
       if (isMain) {
@@ -1016,6 +1033,13 @@ export async function activate(context: vscode.ExtensionContext) {
           return;
         }
         branchId = defaultBranch.branchId;
+      } else if (isStaging) {
+        const stagingLb = await lakebaseService.getBranchByName('staging');
+        if (!stagingLb) {
+          vscode.window.showErrorMessage('No Lakebase `staging` branch found.');
+          return;
+        }
+        branchId = stagingLb.branchId;
       } else {
         const lb = await lakebaseService.getBranchByName(gitBranch);
         if (!lb) {
@@ -1345,7 +1369,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('lakebaseSync.showBranchDiff', async (item?: BranchItem) => {
       try {
         // If invoked on main/production, there's nothing to diff
-        if (item?.lakebaseBranch?.isDefault || (item?.gitBranch && isMainBranch(item.gitBranch.name))) {
+        if (item?.lakebaseBranch?.isDefault || (item?.gitBranch && isMainBranch(item.gitBranch.name, getConfig().trunkBranch))) {
           vscode.window.showInformationMessage('This is the production branch — no diff to show.');
           return;
         }
@@ -1374,10 +1398,14 @@ export async function activate(context: vscode.ExtensionContext) {
       if (!branchUid) {
         try {
           const gitBranch = await gitService.getCurrentBranch();
-          const isMain = isMainBranch(gitBranch);
+          const cfgOc = getConfig();
+          const isMain = isMainBranch(gitBranch, cfgOc.trunkBranch);
+          const isStaging = !isMain && isStagingBranch(gitBranch, cfgOc.stagingBranch);
           const lb = isMain
             ? await lakebaseService.getDefaultBranch()
-            : await lakebaseService.getBranchByName(gitBranch);
+            : isStaging
+              ? await lakebaseService.getBranchByName('staging')
+              : await lakebaseService.getBranchByName(gitBranch);
           branchUid = lb?.uid;
           if (!branchUid) {
             const defaultBranch = await lakebaseService.getDefaultBranch();
@@ -1401,7 +1429,9 @@ export async function activate(context: vscode.ExtensionContext) {
       }
 
       const targetGitBranch = item.gitBranch.name;
-      const isMain = isMainBranch(targetGitBranch);
+      const cfgSb = getConfig();
+      const isMain = isMainBranch(targetGitBranch, cfgSb.trunkBranch);
+      const isStaging = !isMain && isStagingBranch(targetGitBranch, cfgSb.stagingBranch);
 
       // Suppress automatic refreshes until the full switch completes
       statusBarProvider.suppressRefresh = true;
@@ -1424,11 +1454,13 @@ export async function activate(context: vscode.ExtensionContext) {
             let lb;
             if (isMain) {
               lb = await lakebaseService.getDefaultBranch();
+            } else if (isStaging) {
+              lb = await lakebaseService.getBranchByName('staging');
             } else {
               lb = await lakebaseService.getBranchByName(targetGitBranch);
             }
 
-            if (!lb && !isMain) {
+            if (!lb && !isMain && !isStaging) {
               progress.report({ message: 'Creating database branch...' });
               try {
                 lb = await lakebaseService.createBranch(targetGitBranch);
@@ -1917,11 +1949,19 @@ export async function activate(context: vscode.ExtensionContext) {
           isRemote?: boolean;
         }
 
+        const cfgPicker = getConfig();
+        const trunkAliasForLookup = cfgPicker.trunkBranch;
+        const stagingAliasForLookup = cfgPicker.stagingBranch;
+        const stagingLb = lakebaseBranches.find((b: any) => b.branchId === 'staging');
         function getLakebaseInfo(branchName: string): string {
-          const isMain = isMainBranch(branchName);
+          const isMain = isMainBranch(branchName, trunkAliasForLookup);
+          const isStaging = !isMain && isStagingBranch(branchName, stagingAliasForLookup);
           const sanitized = lakebaseService.sanitizeBranchName(branchName);
           if (isMain) {
             return defaultLb ? `→ ${defaultLb.branchId} (default)` : '→ no Lakebase';
+          }
+          if (isStaging) {
+            return stagingLb ? `→ ${stagingLb.branchId} (${stagingLb.state})` : '→ no Lakebase `staging` branch';
           }
           return lbMap.has(sanitized) ? `→ ${lbMap.get(sanitized)}` : '→ no Lakebase branch';
         }
@@ -2441,7 +2481,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('lakebaseSync.createPullRequest', async () => {
       try {
         const currentBranch = await gitService.getCurrentBranch();
-        if (!currentBranch || isMainBranch(currentBranch)) {
+        if (!currentBranch || isMainBranch(currentBranch, getConfig().trunkBranch)) {
           vscode.window.showWarningMessage('Cannot create a PR from main/master.');
           return;
         }
@@ -3549,10 +3589,14 @@ export async function activate(context: vscode.ExtensionContext) {
         const currentBranch = await gitService.getCurrentBranch();
         if (!currentBranch) { return; }
 
-        const isMain = isMainBranch(currentBranch);
+        const cfgTimer = getConfig();
+        const isMain = isMainBranch(currentBranch, cfgTimer.trunkBranch);
+        const isStaging = !isMain && isStagingBranch(currentBranch, cfgTimer.stagingBranch);
         const lb = isMain
           ? await lakebaseService.getDefaultBranch()
-          : await lakebaseService.getBranchByName(currentBranch);
+          : isStaging
+            ? await lakebaseService.getBranchByName('staging')
+            : await lakebaseService.getBranchByName(currentBranch);
 
         if (!lb) { return; }
 

@@ -159,7 +159,7 @@ export class SchemaScmProvider {
     if (!this.scm) { return; }
 
     const currentBranch = this.gitService.getCachedBranch() || await this.gitService.getCurrentBranch();
-    const isMain = isMainBranch(currentBranch);
+    const isMain = isMainBranch(currentBranch, getConfig().trunkBranch);
 
     if (!currentBranch) {
       this.clearGroups();
@@ -600,7 +600,7 @@ export class SchemaScmProvider {
   private async refreshCodeOnly(): Promise<void> {
     if (!this.scm) { return; }
     const currentBranch = this.gitService.getCachedBranch() || await this.gitService.getCurrentBranch();
-    const isMain = isMainBranch(currentBranch);
+    const isMain = isMainBranch(currentBranch, getConfig().trunkBranch);
     if (isMain || !currentBranch) { return; }
 
     try {

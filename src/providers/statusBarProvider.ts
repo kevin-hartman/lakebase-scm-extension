@@ -2,7 +2,8 @@ import * as vscode from 'vscode';
 import { GitService } from '../services/gitService';
 import { LakebaseService, LakebaseBranch } from '../services/lakebaseService';
 import { SchemaMigrationService } from '../services/schemaMigrationService';
-import { isMainBranch } from '../utils/theme';
+import { isMainBranch, isStagingBranch } from '../utils/theme';
+import { getConfig } from '../utils/config';
 
 type SyncState = 'synced' | 'pending' | 'error' | 'loading' | 'unavailable' | 'auth_error';
 
@@ -51,11 +52,15 @@ export class StatusBarProvider {
     this.setState('loading', gitBranch);
 
     try {
-      const isMain = isMainBranch(gitBranch);
+      const cfg = getConfig();
+      const isMain = isMainBranch(gitBranch, cfg.trunkBranch);
+      const isStaging = !isMain && isStagingBranch(gitBranch, cfg.stagingBranch);
       let lbBranch: LakebaseBranch | undefined;
 
       if (isMain) {
         lbBranch = await this.lakebaseService.getDefaultBranch();
+      } else if (isStaging) {
+        lbBranch = await this.lakebaseService.getBranchByName('staging');
       } else {
         lbBranch = await this.lakebaseService.getBranchByName(gitBranch);
       }
@@ -65,7 +70,11 @@ export class StatusBarProvider {
 
       if (lbBranch) {
         const state: SyncState = lbBranch.state === 'READY' ? 'synced' : 'pending';
-        const label = isMain ? 'default' : this.lakebaseService.sanitizeBranchName(gitBranch);
+        const label = isMain
+          ? 'default'
+          : isStaging
+            ? 'staging'
+            : this.lakebaseService.sanitizeBranchName(gitBranch);
         this.setState(state, label, `V${migrationVersion}`);
       } else {
         this.setState('error', this.lakebaseService.sanitizeBranchName(gitBranch), `V${migrationVersion}`);

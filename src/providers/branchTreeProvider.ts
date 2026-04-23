@@ -3,7 +3,7 @@ import { GitService, GitBranchInfo } from '../services/gitService';
 import { LakebaseService, LakebaseBranch } from '../services/lakebaseService';
 import { SchemaMigrationService } from '../services/schemaMigrationService';
 import { SchemaDiffService } from '../services/schemaDiffService';
-import { isMainBranch } from '../utils/theme';
+import { isMainBranch, isStagingBranch } from '../utils/theme';
 import { getConfig } from '../utils/config';
 
 type ItemType = 'project' | 'branch' | 'currentBranch' | 'detail' | 'sectionHeader'
@@ -213,14 +213,21 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
         }
 
         // Lakebase-only branches (ci-pr-*, orphaned)
+        const trunkAlias = getConfig().trunkBranch;
+        const stagingAlias = getConfig().stagingBranch;
         const matchedNames = new Set(
           gitBranches.map(gb => {
-            const isMain = isMainBranch(gb.name);
-            return isMain
-              ? lakebaseBranches.find(b => b.isDefault)?.name
-              : lakebaseBranches.find(b =>
-                  b.branchId === this.lakebaseService.sanitizeBranchName(gb.name)
-                )?.name;
+            const isMain = isMainBranch(gb.name, trunkAlias);
+            const isStaging = isStagingBranch(gb.name, stagingAlias);
+            if (isMain) {
+              return lakebaseBranches.find(b => b.isDefault)?.name;
+            }
+            if (isStaging) {
+              return lakebaseBranches.find(b => b.branchId === 'staging')?.name;
+            }
+            return lakebaseBranches.find(b =>
+              b.branchId === this.lakebaseService.sanitizeBranchName(gb.name)
+            )?.name;
           }).filter(Boolean)
         );
 
@@ -253,16 +260,23 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
     currentGitBranch: string | undefined,
     isCurrent: boolean
   ): BranchItem {
-    const isMain = isMainBranch(gb.name);
+    const cfg = getConfig();
+    const isMain = isMainBranch(gb.name, cfg.trunkBranch);
+    const isStaging = !isMain && isStagingBranch(gb.name, cfg.stagingBranch);
     const sanitized = this.lakebaseService.sanitizeBranchName(gb.name);
 
-    const lb = isMain
-      ? lakebaseBranches.find(b => b.isDefault)
-      : lakebaseBranches.find(b =>
-          b.branchId === sanitized ||
-          b.uid === sanitized ||
-          b.name.endsWith(`/branches/${sanitized}`)
-        );
+    let lb: LakebaseBranch | undefined;
+    if (isMain) {
+      lb = lakebaseBranches.find(b => b.isDefault);
+    } else if (isStaging) {
+      lb = lakebaseBranches.find(b => b.branchId === 'staging');
+    } else {
+      lb = lakebaseBranches.find(b =>
+        b.branchId === sanitized ||
+        b.uid === sanitized ||
+        b.name.endsWith(`/branches/${sanitized}`)
+      );
+    }
 
     const item = new BranchItem(
       gb, lb,
@@ -277,7 +291,7 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
       const lbState = lb?.state || 'no db branch';
       const lbName = lb ? (lb.isDefault ? 'default' : lb.branchId) : '';
       item.description = lbName ? `→ ${lbName} (${lbState})` : lbState;
-      if (!lb && !isMain) { item.contextValue = 'currentBranchNoDb'; }
+      if (!lb && !isMain && !isStaging) { item.contextValue = 'currentBranchNoDb'; }
     } else {
       item.description = lb?.state || '';
       if (!lb) { item.contextValue = 'branchNoDb'; }
@@ -644,7 +658,7 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
   }
 
   private async getBranchFiles(branchName: string): Promise<BranchItem[]> {
-    const isMain = isMainBranch(branchName);
+    const isMain = isMainBranch(branchName, getConfig().trunkBranch);
     if (isMain) {
       const item = new BranchItem(undefined, undefined, 'detail', 'Default branch — no diff');
       item.iconPath = new vscode.ThemeIcon('info');

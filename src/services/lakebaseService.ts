@@ -293,19 +293,31 @@ export class LakebaseService {
     return branch?.name;
   }
 
-  async createBranch(gitBranch: string): Promise<LakebaseBranch | undefined> {
+  async createBranch(gitBranch: string, baseBranchOverride?: string): Promise<LakebaseBranch | undefined> {
     const projPath = this.projectPath();
-    const defaultBranch = await this.getDefaultBranch();
-    if (!defaultBranch) {
-      throw new Error('Could not find default Lakebase branch');
-    }
-
     const branchName = sanitizeBranchName(gitBranch);
-    const sourceBranch = defaultBranch.name;
 
     const existing = await this.getBranchByName(branchName);
     if (existing) {
       return existing;
+    }
+
+    // Resolve the source (parent) Lakebase branch. Precedence:
+    //   1. Explicit `baseBranchOverride` arg (caller-supplied, e.g. for a
+    //      one-off "branch from prod" hotfix even when config says staging).
+    //   2. `LAKEBASE_BASE_BRANCH` from .env / `lakebaseSync.baseBranch` VS Code
+    //      setting — the project-wide "features fork from here" pointer.
+    //   3. Project default Lakebase branch (usually `production`).
+    let sourceBranch: string;
+    const configuredBase = baseBranchOverride || getConfig().baseBranch;
+    if (configuredBase) {
+      sourceBranch = `${projPath}/branches/${configuredBase}`;
+    } else {
+      const defaultBranch = await this.getDefaultBranch();
+      if (!defaultBranch) {
+        throw new Error('Could not find default Lakebase branch');
+      }
+      sourceBranch = defaultBranch.name;
     }
 
     const spec = JSON.stringify({

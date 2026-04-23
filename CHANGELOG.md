@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.4
+
+### Added
+- Configurable trunk branch alias via `LAKEBASE_TRUNK_BRANCH` in `.env` or the `lakebaseSync.trunkBranch` VS Code setting. Projects that use user-prefixed or non-standard trunk branch names (e.g., `kevin.hartman/lakebase-ecommerce-demo` in a monorepo) can opt in. **When the alias is set, it REPLACES `main`/`master` as the project's trunk** — the shared monorepo `main` will NOT also pair with the project's default Lakebase branch. When no alias is set, `main`/`master` behave as before.
+- Companion `LAKEBASE_STAGING_BRANCH` alias: pairs a named git branch (e.g. `user/project-staging` in a monorepo) with the Lakebase `staging` branch. Mirrors `LAKEBASE_TRUNK_BRANCH` semantics but targets the `staging` Lakebase branch instead of the default. Requires the Lakebase `staging` branch to already exist — the hook does NOT auto-create it.
+
+### Fixed
+- **post-checkout hook scope** — the hook now exits immediately if `.env` is missing at the work-tree root, and `unset`s all `LAKEBASE_*` / `DATABRICKS_*` env vars before sourcing `.env`. This prevents two monorepo-hostile failure modes: (1) the hook firing at a parent-submodule level and creating spurious Lakebase branches for unrelated git branches; (2) shell-inherited env vars (from sourcing a project activation script earlier in the session) leaking into checkouts in unrelated repos and triggering the "feature branch" codepath when there's no actual project context.
+- **Feature branches now honor `LAKEBASE_BASE_BRANCH`** — both the post-checkout hook and `lakebaseService.createBranch()` read `LAKEBASE_BASE_BRANCH` from `.env` (or the `lakebaseSync.baseBranch` VS Code setting) and use it as the source when creating a new feature Lakebase branch. Previously the hook's `.env.example` documented `LAKEBASE_BASE_BRANCH=staging` but the value was never read — features always forked from the default branch. Now a `feature/* → staging → production` promotion flow works end-to-end.
+
 ## 0.5.3 (2026-04-21)
 
 ### Two-tier CI (fork + migrate against parent branch)
