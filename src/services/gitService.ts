@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
-import { getWorkspaceRoot } from '../utils/config';
+import { getConfig, getWorkspaceRoot } from '../utils/config';
 import { exec } from '../utils/exec';
 
 export interface PullRequestCheck {
@@ -234,28 +234,60 @@ export class GitService {
   }
 
   /** Get files changed between current branch and main/master */
-  async getChangedFiles(): Promise<GitFileChange[]> {
+  /**
+   * List files changed between a branch (default: HEAD / current working tree)
+   * and a base branch (default: trunk — `config.trunkBranch` if set, else
+   * `main`/`master`).
+   *
+   * @param branch    Branch to compute changes FOR. Default `HEAD` — include
+   *                  uncommitted + untracked files in the working tree. Pass
+   *                  an explicit branch name to compute that branch's diff
+   *                  against the base, ignoring the working tree.
+   * @param baseOverride  Branch to diff AGAINST. Defaults to `config.trunkBranch`
+   *                  when set, otherwise `main`/`master`.
+   */
+  async getChangedFiles(branch?: string, baseOverride?: string): Promise<GitFileChange[]> {
     const root = getWorkspaceRoot();
     if (!root) {
       return [];
     }
 
-    // Find the base branch (main or master)
-    let baseBranch = 'main';
-    try {
-      await exec('git rev-parse --verify main', root);
-    } catch {
+    // Resolve base branch:
+    //   1. explicit override arg
+    //   2. config.trunkBranch (e.g. `user/project-demo` in a monorepo)
+    //   3. main
+    //   4. master
+    let baseBranch = baseOverride || getConfig().trunkBranch;
+    if (!baseBranch) {
+      baseBranch = 'main';
       try {
-        await exec('git rev-parse --verify master', root);
-        baseBranch = 'master';
+        await exec('git rev-parse --verify main', root);
+      } catch {
+        try {
+          await exec('git rev-parse --verify master', root);
+          baseBranch = 'master';
+        } catch {
+          return [];
+        }
+      }
+    } else {
+      // Verify the configured base actually exists.
+      try {
+        await exec(`git rev-parse --verify ${baseBranch}`, root);
       } catch {
         return [];
       }
     }
 
+    // Resolve the "tip" side. HEAD means include untracked + uncommitted files.
+    const tip = branch && branch.length > 0 ? branch : 'HEAD';
+    const includeUntracked = tip === 'HEAD';
+
     try {
-      const mergeBase = await exec(`git merge-base ${baseBranch} HEAD`, root);
-      const raw = await exec(`git diff --name-status ${mergeBase}`, root);
+      // git diff <base>...<tip> == diff between merge-base(base,tip) and tip.
+      // Using the triple-dot form lets git resolve the merge-base internally,
+      // which works whether tip is HEAD or a named branch.
+      const raw = await exec(`git diff --name-status ${baseBranch}...${tip}`, root);
 
       const statusMap: Record<string, GitFileChange['status']> = {
         'A': 'added', 'M': 'modified', 'D': 'deleted',
@@ -272,19 +304,23 @@ export class GitService {
           })
         : [];
 
-      // Also include untracked files (new files not yet staged)
-      try {
-        const untracked = await exec('git ls-files --others --exclude-standard', root);
-        if (untracked) {
-          const trackedPaths = new Set(changes.map(c => c.path));
-          for (const filePath of untracked.split('\n').filter(Boolean)) {
-            if (!trackedPaths.has(filePath)) {
-              changes.push({ status: 'added', path: filePath });
+      // Also include untracked files (new files not yet staged) -- only when
+      // looking at the working tree (HEAD). For named-branch diffs, untracked
+      // files aren't part of that branch.
+      if (includeUntracked) {
+        try {
+          const untracked = await exec('git ls-files --others --exclude-standard', root);
+          if (untracked) {
+            const trackedPaths = new Set(changes.map(c => c.path));
+            for (const filePath of untracked.split('\n').filter(Boolean)) {
+              if (!trackedPaths.has(filePath)) {
+                changes.push({ status: 'added', path: filePath });
+              }
             }
           }
+        } catch {
+          // Ignore — untracked listing is optional
         }
-      } catch {
-        // Ignore — untracked listing is optional
       }
 
       return changes;

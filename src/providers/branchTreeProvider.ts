@@ -665,10 +665,17 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
       return [item];
     }
 
+    // Compute the diff for THIS specific branch, not the current working tree.
+    // When the user expands a branch node in the sidebar they want to see what
+    // that branch introduces vs trunk -- not what HEAD has uncommitted.
     try {
-      const changes = await this.gitService.getChangedFiles();
+      const currentBranch = await this.gitService.getCurrentBranch();
+      const forCurrentBranch = currentBranch === branchName;
+      const changes = await this.gitService.getChangedFiles(
+        forCurrentBranch ? undefined : branchName
+      );
       if (changes.length === 0) {
-        const item = new BranchItem(undefined, undefined, 'detail', 'No changes vs main');
+        const item = new BranchItem(undefined, undefined, 'detail', 'No changes vs trunk');
         item.iconPath = new vscode.ThemeIcon('check');
         return [item];
       }
