@@ -79,11 +79,10 @@ jobs:
       - name: Install Databricks CLI
         uses: databricks/setup-cli@main
 
-      # Creates Lakebase branch ci-pr-<N>. Fork source resolves to:
-      #   1. `LAKEBASE_BASE_BRANCH` (repo variable) if set — project-wide
-      #      "features fork from here" convention, matching the same var used
-      #      by local dev's post-checkout hook + .env.example.
-      #   2. Otherwise PR's base.ref — natural parent for the PR.
+      # Creates Lakebase branch ci-pr-<N> forked from the PR's BASE git branch
+      # (the natural parent for the PR). This handles both tiers correctly:
+      #   - feature → staging PR: forks from staging (test feature deltas on staging)
+      #   - staging → main PR: forks from main / default (test staging deltas on prod)
       # Two-tier safe. Delegates to scripts/ci/resolve-lakebase-branch.sh.
       - name: Create CI database branch (Lakebase)
         id: lakebase-db
@@ -93,22 +92,11 @@ jobs:
           LAKEBASE_PROJECT_ID: ${{ secrets.LAKEBASE_PROJECT_ID || '' }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_HEAD_REPO_FORK: ${{ github.event.pull_request.head.repo.fork }}
-          # Project convention: if LAKEBASE_BASE_BRANCH is set as a repo
-          # variable, features ALWAYS fork from it (e.g. "staging") regardless
-          # of where the PR targets. This matches the same convention
-          # `.env.example` and the post-checkout hook already use for local
-          # feature-branch development: `LAKEBASE_BASE_BRANCH=staging` means
-          # "features fork from staging, always". When unset, fall back to
-          # the PR's base.ref — the explicit, natural parent.
-          LAKEBASE_BASE_BRANCH: ${{ vars.LAKEBASE_BASE_BRANCH || '' }}
         run: |
           export DATABRICKS_HOST DATABRICKS_TOKEN
           PR="${{ github.event.pull_request.number }}"
           CI_BRANCH_NAME="ci-pr-${PR}"
           echo "branch=${CI_BRANCH_NAME}" >> $GITHUB_OUTPUT
-
-          # Resolve the CI fork parent. Project override > PR base.ref.
-          CI_FORK_SOURCE="${LAKEBASE_BASE_BRANCH:-$PR_BASE_REF}"
 
           write_skip() {
             echo "## Lakebase CI branch: not created" >> $GITHUB_STEP_SUMMARY
@@ -119,9 +107,7 @@ jobs:
           }
 
           echo "Lakebase CI branch setup:"
-          echo "  PR base.ref: ${PR_BASE_REF}"
-          echo "  LAKEBASE_BASE_BRANCH (override): ${LAKEBASE_BASE_BRANCH:-<unset>}"
-          echo "  CI fork source (resolved): ${CI_FORK_SOURCE}"
+          echo "  PR base.ref (CI fork parent): ${PR_BASE_REF}"
           echo "  CI branch: ${CI_BRANCH_NAME}"
           echo "  PR from fork: ${PR_HEAD_REPO_FORK}"
           echo "  DATABRICKS_HOST: $([ -n "$DATABRICKS_HOST" ] && echo 'set' || echo 'NOT SET')"
@@ -145,19 +131,18 @@ jobs:
             write_skip "**Reason:** Databricks authentication failed. Token may be expired."
             exit 0
           fi
-          if [ -z "$CI_FORK_SOURCE" ]; then
-            write_skip "**Reason:** Could not determine CI fork source. Set \`LAKEBASE_BASE_BRANCH\` as a repo variable, or ensure the workflow is triggered by a pull_request event (which sets base.ref)."
+          if [ -z "$PR_BASE_REF" ]; then
+            write_skip "**Reason:** Could not determine PR base.ref (parent branch). The workflow must be triggered by a pull_request event."
             exit 0
           fi
 
-          # Resolve + create the CI branch forked from CI_FORK_SOURCE's Lakebase clone.
+          # Resolve + create the CI branch forked from the PR's base.ref.
           # --lakebase-name pins the name to ci-pr-<N> (skip the git→name mapping).
-          # --create-from <CI_FORK_SOURCE>: fork source resolved above from
-          #   LAKEBASE_BASE_BRANCH (repo variable) or PR base.ref.
+          # --create-from <PR_BASE_REF> forks from the parent branch's Lakebase clone.
           # --recreate-on-source-mismatch: if ci-pr-N already exists but was
-          # forked from a different parent (e.g. a prior run used a different
-          # fork source), delete + re-fork from the current source. CI
-          # branches are disposable so this is always safe.
+          # forked from a different parent (e.g. a prior run when base.ref was
+          # main, but now base.ref is staging), delete + re-fork from the
+          # correct parent. CI branches are disposable so this is always safe.
           # --ensure-endpoint creates the primary endpoint if it doesn't exist.
           #
           # --github-env writes tokens/DATABASE_URL to $GITHUB_ENV (visible to
@@ -166,11 +151,11 @@ jobs:
           # $GITHUB_ENV writes don't take effect until the next step).
           if ! HELPER_OUT="$(./scripts/ci/resolve-lakebase-branch.sh \
                 --lakebase-name "$CI_BRANCH_NAME" \
-                --create-from "$CI_FORK_SOURCE" \
+                --create-from "$PR_BASE_REF" \
                 --recreate-on-source-mismatch \
                 --ensure-endpoint \
                 --github-env)"; then
-            write_skip "**Reason:** Could not create CI branch \`$CI_BRANCH_NAME\` forked from \`$CI_FORK_SOURCE\`. Check the workflow log above."
+            write_skip "**Reason:** Could not create CI branch \`$CI_BRANCH_NAME\` forked from \`$PR_BASE_REF\`. Check the workflow log above."
             exit 0
           fi
           eval "$HELPER_OUT"
@@ -187,8 +172,8 @@ jobs:
           # summary table row. Never claim "forked from X" unless we actually
           # forked (or verified the existing fork points at X).
           case "$LAKEBASE_BRANCH_STATUS" in
-            CREATED)    ACTION="newly created, forked from Lakebase '$LAKEBASE_BRANCH_SOURCE' pair of git '$CI_FORK_SOURCE'" ;;
-            RECREATED)  ACTION="existed with wrong source — deleted and re-forked from Lakebase '$LAKEBASE_BRANCH_SOURCE' pair of git '$CI_FORK_SOURCE'" ;;
+            CREATED)    ACTION="newly created, forked from Lakebase '$LAKEBASE_BRANCH_SOURCE' pair of git '$PR_BASE_REF'" ;;
+            RECREATED)  ACTION="existed with wrong source — deleted and re-forked from Lakebase '$LAKEBASE_BRANCH_SOURCE' pair of git '$PR_BASE_REF'" ;;
             VERIFIED)   ACTION="already existed, source '$LAKEBASE_BRANCH_SOURCE' matches parent — reused" ;;
             UNVERIFIED) ACTION="already existed but API did not report a source_branch — reused without verification" ;;
             *)          ACTION="status=$LAKEBASE_BRANCH_STATUS (source=$LAKEBASE_BRANCH_SOURCE)" ;;
@@ -201,11 +186,7 @@ jobs:
             echo "| Branch | \`$CI_BRANCH_NAME\` |"
             echo "| Status | \`$LAKEBASE_BRANCH_STATUS\` |"
             echo "| Actual source | \`${LAKEBASE_BRANCH_SOURCE:-unknown}\` |"
-            echo "| CI fork source (resolved) | \`$CI_FORK_SOURCE\` |"
-            echo "| PR base.ref | \`$PR_BASE_REF\` |"
-            if [ -n "$LAKEBASE_BASE_BRANCH" ]; then
-              echo "| LAKEBASE_BASE_BRANCH (override) | \`$LAKEBASE_BASE_BRANCH\` |"
-            fi
+            echo "| PR base.ref (expected parent) | \`$PR_BASE_REF\` |"
           } >> $GITHUB_STEP_SUMMARY
 
       - name: Configure datasource for CI
@@ -371,17 +352,12 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN || '' }}
           LAKEBASE_PROJECT_ID: ${{ secrets.LAKEBASE_PROJECT_ID || '' }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          LAKEBASE_BASE_BRANCH: ${{ vars.LAKEBASE_BASE_BRANCH || '' }}
         run: |
           set -e
           PR="${{ github.event.pull_request.number }}"
           BRANCH="ci-pr-${PR}"
-          # Schema diff compares CI branch against its ACTUAL parent (the
-          # branch CI was forked from). That's LAKEBASE_BASE_BRANCH if set,
-          # else the PR's base.ref — same resolution as the Create step.
-          CI_FORK_SOURCE="${LAKEBASE_BASE_BRANCH:-$PR_BASE_REF}"
           MD="schema-diff.md"
-          echo "## Schema (Lakebase branch \`${BRANCH}\`, forked from \`${CI_FORK_SOURCE}\`)" > "$MD"
+          echo "## Schema (Lakebase branch \`${BRANCH}\`, forked from \`${PR_BASE_REF}\`)" > "$MD"
           echo "" >> "$MD"
           # Migrations applied on CI branch (from repo)
           LANG="${{ steps.detect-lang.outputs.lang }}"
@@ -421,8 +397,8 @@ jobs:
           PRODUCTION_DATASOURCE_URL=""
           PRODUCTION_DATASOURCE_USERNAME=""
           PRODUCTION_DATASOURCE_PASSWORD=""
-          if [ -n "$LAKEBASE_PROJECT_ID" ] && [ -n "$DATABRICKS_HOST" ] && [ -n "$DATABRICKS_TOKEN" ] && [ -n "$CI_FORK_SOURCE" ]; then
-            PARENT_ENV="$(./scripts/ci/resolve-lakebase-branch.sh --git-branch "$CI_FORK_SOURCE" 2>/dev/null || true)"
+          if [ -n "$LAKEBASE_PROJECT_ID" ] && [ -n "$DATABRICKS_HOST" ] && [ -n "$DATABRICKS_TOKEN" ] && [ -n "$PR_BASE_REF" ]; then
+            PARENT_ENV="$(./scripts/ci/resolve-lakebase-branch.sh --git-branch "$PR_BASE_REF" 2>/dev/null || true)"
             if [ -n "$PARENT_ENV" ]; then
               eval "$PARENT_ENV"
               PRODUCTION_DATASOURCE_URL="$JDBC_URL"
@@ -458,14 +434,14 @@ jobs:
             PGPASSWORD="${CI_DB_PASSWORD:-}" pg_dump -h "$CI_HOST" -p "$CI_PORT" -U "${CI_DB_USERNAME:-}" -d "$CI_DB" --schema-only --no-owner --no-privileges 2>"$CI_ERR" | grep -v '^--' | grep -v '^$' > .tmp/ci-schema.sql || true
             if [ -s .tmp/prod-schema.sql ] && [ -s .tmp/ci-schema.sql ]; then
               trap - EXIT; rm -f "$PROD_ERR" "$CI_ERR"
-              echo "### Schema diff: \`${BRANCH}\` vs parent (\`${CI_FORK_SOURCE}\`)" >> "$MD"
+              echo "### Schema diff: \`${BRANCH}\` vs parent (\`${PR_BASE_REF}\`)" >> "$MD"
               echo "" >> "$MD"
               bash scripts/format-schema-diff.sh .tmp/prod-schema.sql .tmp/ci-schema.sql >> "$MD" 2>/dev/null || true
             else
               echo "# pg_dump failed or empty; falling back to migration version comparison." >> "$MD"
               if [ ! -s .tmp/prod-schema.sql ] && [ -s "$PROD_ERR" ]; then echo "# Production: $(head -1 "$PROD_ERR" 2>/dev/null)" >> "$MD"; fi
               if [ ! -s .tmp/ci-schema.sql ] && [ -s "$CI_ERR" ]; then echo "# CI branch: $(head -1 "$CI_ERR" 2>/dev/null)" >> "$MD"; fi
-              [ ! -s .tmp/prod-schema.sql ] && echo "# Tip: ensure parent branch \`${CI_FORK_SOURCE}\` exists in Lakebase and its endpoint is ACTIVE." >> "$MD"
+              [ ! -s .tmp/prod-schema.sql ] && echo "# Tip: ensure parent branch \`${PR_BASE_REF}\` exists in Lakebase and its endpoint is ACTIVE." >> "$MD"
               [ ! -s .tmp/ci-schema.sql ] && echo "# Tip: CI branch credentials are generated in this run; transient failures can be retried." >> "$MD"
               trap - EXIT; rm -f "$PROD_ERR" "$CI_ERR"
               echo "pg_dump failed; falling back to table comparison via psql." >> "$MD"
@@ -474,11 +450,11 @@ jobs:
                 CI_TABLES="$(PGPASSWORD="${CI_DB_PASSWORD:-}" psql "host=$CI_HOST port=$CI_PORT dbname=$CI_DB user=$CI_DB_USERNAME sslmode=require" -t -A -c "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename" 2>/dev/null || true)"
                 PROD_TABLES="$(PGPASSWORD="${PRODUCTION_DATASOURCE_PASSWORD:-}" psql "host=$PROD_HOST port=$PROD_PORT dbname=$PROD_DB user=$PRODUCTION_DATASOURCE_USERNAME sslmode=require" -t -A -c "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename" 2>/dev/null || true)"
                 for t in $CI_TABLES; do echo " $PROD_TABLES " | grep -q " $t " || echo "**New on this PR:** \`$t\`" >> "$MD"; done
-                for t in $PROD_TABLES; do echo " $CI_TABLES " | grep -q " $t " || echo "**Only on parent (\`${CI_FORK_SOURCE}\`):** \`$t\`" >> "$MD"; done
+                for t in $PROD_TABLES; do echo " $CI_TABLES " | grep -q " $t " || echo "**Only on parent (\`${PR_BASE_REF}\`):** \`$t\`" >> "$MD"; done
               fi
             fi
           elif [ -n "$PRODUCTION_DATASOURCE_URL" ]; then
-            echo "### Schema diff vs parent \`${CI_FORK_SOURCE}\` (table comparison)" >> "$MD"
+            echo "### Schema diff vs parent \`${PR_BASE_REF}\` (table comparison)" >> "$MD"
             # Compare tables directly via psql (language-independent, no flyway:info needed)
             PROD_HP=$(parse_jdbc "$PRODUCTION_DATASOURCE_URL")
             CI_HP=$(parse_jdbc "$CI_JDBC_URL")
@@ -498,14 +474,14 @@ jobs:
                 echo " $CI_TABLES " | grep -q " $t " || ONLY_PROD="$ONLY_PROD \`$t\`"
               done
               [ -n "$NEW_ON_CI" ] && echo "**New on this PR:**$NEW_ON_CI" >> "$MD"
-              [ -n "$ONLY_PROD" ] && echo "**Only on parent (\`${CI_FORK_SOURCE}\`):**$ONLY_PROD" >> "$MD"
-              [ -z "$NEW_ON_CI" ] && [ -z "$ONLY_PROD" ] && echo "**In sync:** CI and parent (\`${CI_FORK_SOURCE}\`) have the same tables." >> "$MD"
+              [ -n "$ONLY_PROD" ] && echo "**Only on parent (\`${PR_BASE_REF}\`):**$ONLY_PROD" >> "$MD"
+              [ -z "$NEW_ON_CI" ] && [ -z "$ONLY_PROD" ] && echo "**In sync:** CI and parent (\`${PR_BASE_REF}\`) have the same tables." >> "$MD"
             else
               echo "psql not available; cannot compare tables." >> "$MD"
             fi
           else
-            echo "### Schema diff vs parent \`${CI_FORK_SOURCE}\`" >> "$MD"
-            echo "Parent branch URL could not be resolved from Lakebase. Check that the Lakebase branch paired with git \`${CI_FORK_SOURCE}\` exists, and that \`LAKEBASE_PROJECT_ID\`, \`DATABRICKS_HOST\`, \`DATABRICKS_TOKEN\` are set." >> "$MD"
+            echo "### Schema diff vs parent \`${PR_BASE_REF}\`" >> "$MD"
+            echo "Parent branch URL could not be resolved from Lakebase. Check that the Lakebase branch paired with git \`${PR_BASE_REF}\` exists, and that \`LAKEBASE_PROJECT_ID\`, \`DATABRICKS_HOST\`, \`DATABRICKS_TOKEN\` are set." >> "$MD"
           fi
           cat "$MD" >> $GITHUB_STEP_SUMMARY
           echo "path=$MD" >> $GITHUB_OUTPUT
