@@ -114,10 +114,28 @@ export class RunnerService {
 
     if (needsConfig) {
       report('Registering runner with GitHub...');
-      const regToken = cp.execSync(
-        `gh api -X POST repos/${fullRepoName}/actions/runners/registration-token --jq '.token'`,
-        { timeout: 15000 }
-      ).toString().trim();
+      let regToken: string;
+      try {
+        regToken = cp.execSync(
+          `gh api -X POST repos/${fullRepoName}/actions/runners/registration-token --jq '.token'`,
+          { timeout: 15000 }
+        ).toString().trim();
+      } catch (err: any) {
+        const combined = `${err.stderr?.toString() || ''}${err.stdout?.toString() || ''}${err.message || ''}`;
+        if (/404|Not Found/i.test(combined)) {
+          let activeUser = '<unknown>';
+          try {
+            const status = cp.execSync('gh auth status 2>&1', { timeout: 5000 }).toString();
+            const match = status.match(/account (\S+).*Active account: true/s);
+            if (match) { activeUser = match[1]; }
+          } catch { /* ignore */ }
+          const owner = fullRepoName.split('/')[0];
+          throw new Error(
+            `GitHub returned 404 for "${fullRepoName}". The active gh user "${activeUser}" can't see this repo — it's likely private and owned by a different account. Run \`gh auth switch --user ${owner}\` (or login via \`gh auth login\`) and retry.`
+          );
+        }
+        throw err;
+      }
 
       cp.execSync(
         `./config.sh --url "https://github.com/${fullRepoName}" --token "${regToken}" --name "${runnerName}" --labels self-hosted --unattended --replace`,
