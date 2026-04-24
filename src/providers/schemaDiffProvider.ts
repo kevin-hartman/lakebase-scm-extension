@@ -42,37 +42,23 @@ export class SchemaDiffProvider {
       return;
     }
 
-    // If pg_dump shows in-sync, supplement with migration file analysis
-    if (diff.inSync && !diff.error && this.gitService && this.migrationService) {
-      try {
-        const config = getConfig();
-        const mainMigrations = await this.gitService.listMigrationsOnBranch('main', config.migrationPath);
-        const mainSet = new Set(mainMigrations);
-        const branchMigrations = this.migrationService.listMigrations();
-        const newMigrations = branchMigrations.filter(m => !mainSet.has(m.filename));
-
-        if (newMigrations.length > 0) {
-          const schemaChanges = this.migrationService.parseMigrationSchemaChanges(newMigrations);
-          const tableMap = new Map<string, { type: string; tableName: string; columns: Array<{ name: string; dataType: string }> }>();
-          for (const change of schemaChanges) { tableMap.set(change.tableName, change); }
-
-          // Merge into the diff result
-          diff = { ...diff, inSync: false };
-          for (const change of tableMap.values()) {
-            if (change.type === 'created') {
-              diff.created.push({ type: 'TABLE', name: change.tableName, columns: change.columns });
-            } else if (change.type === 'modified') {
-              diff.modified.push({
-                type: 'TABLE', name: change.tableName, columns: change.columns,
-                addedColumns: change.columns, removedColumns: [], prodColumns: [],
-              });
-            } else if (change.type === 'removed') {
-              diff.removed.push({ type: 'TABLE', name: change.tableName });
-            }
-          }
-        }
-      } catch { /* ignore */ }
-    }
+    // Historical note: there used to be a "migration file supplement" here
+    // that fired when diff.inSync was true. It compared migration FILES on
+    // the current git branch vs trunk and pushed any file-level deltas into
+    // diff.created/modified/removed as if they were live DB diffs. Three
+    // bugs conspired to make it user-hostile:
+    //   1. The underlying listMigrationsOnBranch defaulted to the Flyway
+    //      regex `/^V\d+.*\.sql$/i`, so Alembic/Knex projects always saw
+    //      trunk as empty and classified EVERY migration file as "new".
+    //   2. Trunk was hardcoded to 'main' instead of config.trunkBranch.
+    //   3. The spread-copy `diff = { ...diff, inSync: false }` left array
+    //      references pointing at the cached result, so subsequent
+    //      `diff.modified.push(...)` calls mutated the cached state while
+    //      the cached inSync flag stayed `true` — every re-open of the
+    //      panel doubled the entries.
+    // Trust the live DB query instead; the diff the `compareBranchSchemas`
+    // call produces is authoritative. Pending-migration awareness is
+    // already surfaced by the SCM Code/Staged panels.
 
     const branchName = diff.branchName || 'current branch';
 
