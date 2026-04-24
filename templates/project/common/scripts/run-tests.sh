@@ -15,11 +15,15 @@ set -a
 source .env 2>/dev/null || true
 set +a
 
-# Build DATABASE_URL from SPRING_DATASOURCE_* if not already set (backward compat)
+# Build DATABASE_URL from SPRING_DATASOURCE_* if not already set (backward compat).
+# URL-encode both username and password — the email-style username always
+# contains '@' which otherwise confuses libpq/psycopg DSN parsing.
 if [ -z "${DATABASE_URL:-}" ] && [ -n "${SPRING_DATASOURCE_URL:-}" ]; then
   DATABASE_URL="$(echo "$SPRING_DATASOURCE_URL" | sed 's|^jdbc:postgresql://|postgresql://|')"
   if [ -n "${SPRING_DATASOURCE_USERNAME:-}" ] && [ -n "${SPRING_DATASOURCE_PASSWORD:-}" ]; then
-    DATABASE_URL="$(echo "$DATABASE_URL" | sed "s|postgresql://|postgresql://${SPRING_DATASOURCE_USERNAME}:${SPRING_DATASOURCE_PASSWORD}@|")"
+    ENCODED_USER="$(printf '%s' "$SPRING_DATASOURCE_USERNAME" | sed 's/@/%40/g; s/:/%3A/g; s/\//%2F/g; s/?/%3F/g; s/#/%23/g')"
+    ENCODED_PASS="$(printf '%s' "$SPRING_DATASOURCE_PASSWORD" | sed 's/@/%40/g; s/:/%3A/g; s/\//%2F/g; s/?/%3F/g; s/#/%23/g')"
+    DATABASE_URL="$(echo "$DATABASE_URL" | sed "s|postgresql://|postgresql://${ENCODED_USER}:${ENCODED_PASS}@|")"
   fi
   export DATABASE_URL
 fi
