@@ -417,21 +417,19 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
 
   private makeTableCommand(tableName: string, changeType: 'new' | 'modified' | 'removed' | 'unchanged'): vscode.Command {
     const branchUri = vscode.Uri.parse(`lakebase-schema-content://branch/${tableName}`);
-    const prodUri = vscode.Uri.parse(`lakebase-schema-content://production/${tableName}`);
     if (changeType === 'unchanged') {
       // No diff needed — just show the DDL
       return { command: 'vscode.open', title: 'View Table', arguments: [branchUri] };
     }
-    // new, modified, removed — always show diff (production ↔ branch)
-    // For new: production side is empty → entire DDL shows as green additions
-    // For removed: branch side is empty → entire DDL shows as red deletions
-    // For modified: shows red/green for changed columns
-    const labels: Record<string, string> = {
-      new: `${tableName} (new on branch)`,
-      modified: `${tableName} (production ↔ branch)`,
-      removed: `${tableName} (removed on branch)`,
+    // Force a fresh compareBranchSchemas before dispatching vscode.diff, so
+    // SchemaContentProvider's cache reflects the same live snapshot that drove
+    // the branch tree's own modified/new/removed decision. Otherwise a stale
+    // cache can make both panes render identical DDL (empty diff).
+    return {
+      command: 'lakebaseSync.openBranchTableDiff',
+      title: 'Schema Diff',
+      arguments: [tableName, changeType],
     };
-    return { command: 'vscode.diff', title: 'Schema Diff', arguments: [prodUri, branchUri, labels[changeType]] };
   }
 
   private async getTableList(branchName?: string, lakebaseBranch?: LakebaseBranch): Promise<BranchItem[]> {

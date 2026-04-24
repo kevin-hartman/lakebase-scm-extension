@@ -1414,6 +1414,28 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
+    vscode.commands.registerCommand('lakebaseSync.openBranchTableDiff', async (tableName: string, changeType: 'new' | 'modified' | 'removed') => {
+      // Force a live compare so SchemaContentProvider reads fresh data for both
+      // sides. Without this, a stale cache entry can cause production and branch
+      // URIs to fall back to the same branchTables entry → empty diff.
+      try {
+        await schemaDiffService.compareBranchSchemas(undefined, true);
+      } catch (err: any) {
+        if (!await handleAuthError(lakebaseService, err)) {
+          vscode.window.showErrorMessage(`Schema refresh failed: ${err.message}`);
+          return;
+        }
+      }
+      const branchUri = vscode.Uri.parse(`lakebase-schema-content://branch/${tableName}`);
+      const prodUri = vscode.Uri.parse(`lakebase-schema-content://production/${tableName}`);
+      const labels: Record<string, string> = {
+        new: `${tableName} (new on branch)`,
+        modified: `${tableName} (production ↔ branch)`,
+        removed: `${tableName} (removed on branch)`,
+      };
+      await vscode.commands.executeCommand('vscode.diff', prodUri, branchUri, labels[changeType]);
+    }),
+
     vscode.commands.registerCommand('lakebaseSync.showTableDiff', async (tableName?: string, diffType?: string) => {
       if (!tableName || !diffType) {
         return;
