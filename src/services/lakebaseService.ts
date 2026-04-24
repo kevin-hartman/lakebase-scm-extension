@@ -1,5 +1,5 @@
 import * as cp from 'child_process';
-import { getConfig, getProjectDatabase } from '../utils/config';
+import { getConfig, getEnvConfig, getProjectDatabase } from '../utils/config';
 import { exec } from '../utils/exec';
 
 export interface LakebaseBranch {
@@ -306,18 +306,33 @@ export class LakebaseService {
     //   1. Explicit `baseBranchOverride` arg (caller-supplied, e.g. for a
     //      one-off "branch from prod" hotfix even when config says staging).
     //   2. `LAKEBASE_BASE_BRANCH` from .env / `lakebaseSync.baseBranch` VS Code
-    //      setting — the project-wide "features fork from here" pointer.
-    //   3. Project default Lakebase branch (usually `production`).
+    //      setting — a project-wide "features ALWAYS fork from here" pin.
+    //   3. The Lakebase branch the user is currently on (LAKEBASE_BRANCH_ID
+    //      from .env) — git-like "fork from current" semantics. Mirrors the
+    //      post-checkout hook's default. Skipped when the current-branch id
+    //      equals the target (edge case — user recreating the same branch).
+    //   4. Project default Lakebase branch (usually `production`).
     let sourceBranch: string;
     const configuredBase = baseBranchOverride || getConfig().baseBranch;
     if (configuredBase) {
       sourceBranch = `${projPath}/branches/${configuredBase}`;
     } else {
-      const defaultBranch = await this.getDefaultBranch();
-      if (!defaultBranch) {
-        throw new Error('Could not find default Lakebase branch');
+      const prevBranchId = (getEnvConfig().LAKEBASE_BRANCH_ID || '').trim();
+      let prevResolved: LakebaseBranch | undefined;
+      if (prevBranchId && prevBranchId !== branchName) {
+        try {
+          prevResolved = await this.getBranchByName(prevBranchId);
+        } catch { /* fall through to default */ }
       }
-      sourceBranch = defaultBranch.name;
+      if (prevResolved) {
+        sourceBranch = prevResolved.name;
+      } else {
+        const defaultBranch = await this.getDefaultBranch();
+        if (!defaultBranch) {
+          throw new Error('Could not find default Lakebase branch');
+        }
+        sourceBranch = defaultBranch.name;
+      }
     }
 
     const spec = JSON.stringify({
