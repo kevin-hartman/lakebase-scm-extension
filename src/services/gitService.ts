@@ -541,7 +541,7 @@ export class GitService {
   }
 
   /** Create a pull request via gh CLI. Returns the PR URL. */
-  async createPullRequest(title: string, body: string): Promise<string> {
+  async createPullRequest(title: string, body: string, baseBranch?: string): Promise<string> {
     const root = getWorkspaceRoot();
     if (!root) { throw new Error('No workspace root'); }
     const branch = await this.getCurrentBranch();
@@ -556,11 +556,14 @@ export class GitService {
       await exec('git push', root);
     }
 
-    // Use --head flag to explicitly specify the branch, and --body-file for safe body passing
+    // Use --head flag to explicitly specify the branch, and --body-file for safe body passing.
+    // --base is honored when provided — otherwise gh defaults to the repo's default branch,
+    // which silently ignores 3-tier (feature → staging → main) flows.
     const result = await new Promise<string>((resolve, reject) => {
       const escapedTitle = title.replace(/"/g, '\\"');
+      const baseFlag = baseBranch ? ` --base "${baseBranch}"` : '';
       const child = cp.exec(
-        `gh pr create --title "${escapedTitle}" --head "${branch}" --body-file -`,
+        `gh pr create --title "${escapedTitle}" --head "${branch}"${baseFlag} --body-file -`,
         { cwd: root, timeout: 30000 },
         (err, stdout, stderr) => {
           if (err) { reject(new Error(stderr || err.message)); }

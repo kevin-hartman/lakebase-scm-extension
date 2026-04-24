@@ -2446,7 +2446,7 @@ export async function activate(context: vscode.ExtensionContext) {
             progress.report({ message: 'Merging...' });
             await gitService.mergePullRequest(method.value, true);
 
-            progress.report({ message: 'Switching to main...' });
+            progress.report({ message: `Switching to ${pr.baseBranch}...` });
             await gitService.checkoutBranch(pr.baseBranch);
 
             progress.report({ message: 'Pulling latest...' });
@@ -2456,7 +2456,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
         schemaDiffService.clearCache();
 
-        const msg = `PR #${pr.number} merged into ${pr.baseBranch}. CI will apply migrations to production and clean up Lakebase branches.`;
+        const msg = `PR #${pr.number} merged into ${pr.baseBranch}. CI will apply migrations to the ${pr.baseBranch} Lakebase branch and clean up the CI branches.`;
         const action = await vscode.window.showInformationMessage(msg, 'Open PR');
         if (action === 'Open PR') {
           vscode.env.openExternal(vscode.Uri.parse(pr.url));
@@ -2712,21 +2712,67 @@ export async function activate(context: vscode.ExtensionContext) {
           }
         }
 
-        // Step 2: Check if branch has any commits vs main
+        // Pick PR base branch. In 3-tier projects the parent is often `staging`,
+        // not `main`, and `gh pr create` without --base silently targets the
+        // repo's default branch (usually main) — so a feature branched from
+        // staging ends up PR'd against main without the user noticing.
+        // Candidates: trunk, staging, and other local branches; default = the
+        // candidate whose merge-base with HEAD is most recent (= the nearest
+        // ancestor in branch history).
+        const cfgPr = getConfig();
+        let prBase: string | undefined;
         try {
-          const mergeBase = await gitService.getMergeBase();
-          if (mergeBase) {
-            const root = getWorkspaceRoot();
-            if (root) {
-              const { exec: execUtil } = require('./utils/exec');
-              const count = (await execUtil(`git rev-list --count ${mergeBase}..HEAD`, root)).trim();
-              if (parseInt(count, 10) === 0) {
-                vscode.window.showWarningMessage('No commits between main and this branch. Nothing to create a PR for.');
-                return;
-              }
+          const { exec: execUtil } = require('./utils/exec');
+          const root = getWorkspaceRoot();
+          const trunk = cfgPr.trunkBranch || 'main';
+          const staging = cfgPr.stagingBranch || 'staging';
+          const rawCandidates = Array.from(new Set([trunk, 'master', staging, cfgPr.baseBranch].filter(Boolean) as string[]));
+          const locals = new Set((await gitService.listLocalBranches()).map(b => b.name));
+          const existing = rawCandidates.filter(c => locals.has(c) && c !== currentBranch);
+          const ranked: Array<{ branch: string; ts: number }> = [];
+          if (root) {
+            for (const c of existing) {
+              try {
+                const base = (await execUtil(`git merge-base HEAD "${c}"`, root)).trim();
+                if (base) {
+                  const ts = parseInt((await execUtil(`git log -1 --format=%at "${base}"`, root)).trim(), 10) || 0;
+                  ranked.push({ branch: c, ts });
+                }
+              } catch { /* ignore */ }
             }
           }
-        } catch { /* ignore — branch may not have diverged from main yet */ }
+          ranked.sort((a, b) => b.ts - a.ts);
+          const defaultBase = ranked[0]?.branch || trunk;
+          const items = ranked.length > 0
+            ? ranked.map(r => ({
+                label: r.branch,
+                description: r.branch === defaultBase ? '(nearest parent — default)' : undefined,
+              }))
+            : [{ label: trunk, description: '(fallback)' }];
+          const pick = await vscode.window.showQuickPick(items, {
+            placeHolder: `Base branch for PR (where ${currentBranch} will be merged)`,
+          });
+          if (!pick) {
+            vscode.window.showInformationMessage('PR creation cancelled.');
+            return;
+          }
+          prBase = pick.label;
+        } catch {
+          prBase = cfgPr.trunkBranch || 'main';
+        }
+
+        // Step 2: Check if branch has any commits vs the selected base
+        try {
+          const root = getWorkspaceRoot();
+          if (root) {
+            const { exec: execUtil } = require('./utils/exec');
+            const count = (await execUtil(`git rev-list --count ${prBase}..HEAD`, root)).trim();
+            if (parseInt(count, 10) === 0) {
+              vscode.window.showWarningMessage(`No commits between ${prBase} and this branch. Nothing to create a PR for.`);
+              return;
+            }
+          }
+        } catch { /* ignore — branch may not have diverged from base yet */ }
 
         // Step 3: Push is handled by gitService.createPullRequest() — no separate dialog needed.
         // Just inform the user if the branch hasn't been pushed yet.
@@ -2774,10 +2820,10 @@ export async function activate(context: vscode.ExtensionContext) {
         ].join('\n');
 
         const prUrl = await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: 'Creating pull request...' },
+          { location: vscode.ProgressLocation.Notification, title: `Creating pull request → ${prBase}...` },
           async (progress) => {
             progress.report({ message: 'Pushing branch...' });
-            const url = await gitService.createPullRequest(title, prBody);
+            const url = await gitService.createPullRequest(title, prBody, prBase);
             return url;
           }
         );
