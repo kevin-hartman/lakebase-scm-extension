@@ -87,28 +87,49 @@ export class RunnerService {
     const runnerFile = path.join(dir, '.runner');
     let needsConfig = !fs.existsSync(runnerFile);
 
+    // .runner may be missing but other state files (.credentials, .path, svc.sh,
+    // launchd plist) can linger from a prior configure. `config.sh` itself only
+    // checks .runner, but when it fails mid-install those stragglers can cause
+    // subsequent runs to behave oddly. If we're going to reconfigure, start clean.
+    if (needsConfig) {
+      this.resetRunnerConfig(dir, projectName);
+    }
+
     if (!needsConfig) {
-      // .runner exists — verify the registration is still valid on GitHub
+      // .runner exists — verify it points at THIS repo and is still registered on GitHub.
+      // If the runner was previously configured against a different URL (e.g. after an
+      // org/owner migration), --replace on config.sh no-ops and it exits with "already
+      // configured". So we also need a URL-match check.
+      let urlMismatch = false;
       try {
-        const check = cp.execSync(
-          `gh api repos/${fullRepoName}/actions/runners --jq '.runners[] | select(.name == "${runnerName}") | .id'`,
-          { timeout: 10000 }
-        ).toString().trim();
-        if (!check) {
-          report('Runner registration stale — reconfiguring...');
-          for (const f of ['.runner', '.credentials', '.credentials_rsaparams']) {
-            try { fs.unlinkSync(path.join(dir, f)); } catch {}
-          }
-          needsConfig = true;
-        } else {
-          report('Runner already configured — restarting...');
-        }
-      } catch {
-        report('Could not verify runner — reconfiguring...');
-        for (const f of ['.runner', '.credentials', '.credentials_rsaparams']) {
-          try { fs.unlinkSync(path.join(dir, f)); } catch {}
-        }
+        const runnerJson = JSON.parse(fs.readFileSync(runnerFile, 'utf-8'));
+        const configuredUrl: string = runnerJson.gitHubUrl || runnerJson.serverUrl || runnerJson.agentUrl || '';
+        const expectedUrl = `https://github.com/${fullRepoName}`;
+        urlMismatch = !!configuredUrl && !configuredUrl.startsWith(expectedUrl);
+      } catch { /* unreadable .runner — treat as needing reconfig */ urlMismatch = true; }
+
+      if (urlMismatch) {
+        report('Runner configured against a different repo — resetting...');
+        this.resetRunnerConfig(dir, projectName);
         needsConfig = true;
+      } else {
+        try {
+          const check = cp.execSync(
+            `gh api repos/${fullRepoName}/actions/runners --jq '.runners[] | select(.name == "${runnerName}") | .id'`,
+            { timeout: 10000 }
+          ).toString().trim();
+          if (!check) {
+            report('Runner registration stale — reconfiguring...');
+            this.resetRunnerConfig(dir, projectName);
+            needsConfig = true;
+          } else {
+            report('Runner already configured — restarting...');
+          }
+        } catch {
+          report('Could not verify runner — reconfiguring...');
+          this.resetRunnerConfig(dir, projectName);
+          needsConfig = true;
+        }
       }
     }
 
@@ -251,6 +272,36 @@ export class RunnerService {
       }
     }
     try { fs.mkdirSync(path.join(dir, '_diag', 'pages'), { recursive: true }); } catch {}
+  }
+
+  /**
+   * Wipe local runner configuration without touching the unpacked binaries.
+   * Clears:
+   *  - .runner / .credentials / .credentials_rsaparams (config + auth)
+   *  - .path / .env-generated marker files (config.sh byproducts)
+   *  - .service / svc.sh / macOS launchd plist (any prior "install as service")
+   *
+   * Best-effort: every unlink/rm is wrapped — missing files are fine, and we
+   * don't want a single failure to block the retry flow.
+   */
+  private resetRunnerConfig(dir: string, projectName: string): void {
+    const stateFiles = [
+      '.runner',
+      '.credentials',
+      '.credentials_rsaparams',
+      '.path',
+      '.service',
+      'svc.sh',
+    ];
+    for (const f of stateFiles) {
+      try { fs.unlinkSync(path.join(dir, f)); } catch {}
+    }
+    // Remove macOS launchd plist if one was installed for this runner
+    const plist = path.join(os.homedir(), 'Library', 'LaunchAgents', `actions.runner.${projectName}.plist`);
+    try {
+      cp.execSync(`launchctl unload "${plist}" 2>/dev/null || true`, { timeout: 5000 });
+    } catch {}
+    try { fs.unlinkSync(plist); } catch {}
   }
 
   /** Remove the runner entirely (stop, deregister from GitHub, delete directory) */
