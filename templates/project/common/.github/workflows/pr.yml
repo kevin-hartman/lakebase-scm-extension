@@ -364,6 +364,14 @@ jobs:
       - name: Run E2E tests (Playwright)
         if: hashFiles('client/playwright.config.ts', 'client/playwright.config.js', 'client/playwright.config.mjs') != ''
         working-directory: client
+        env:
+          # Backend booted by playwright's webServer uses these for SDK auth.
+          # Without them, the Python SDK's default auth chain falls through to
+          # the self-hosted runner's ~/.databrickscfg, which usually has an
+          # expired OAuth refresh token and surfaces as `refresh token is
+          # invalid` warnings at request time.
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: npx playwright test
 
       - name: Install PostgreSQL client (for schema dump)

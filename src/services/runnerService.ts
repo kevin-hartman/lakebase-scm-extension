@@ -10,6 +10,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as cp from 'child_process';
+import { getWorkspaceRoot } from '../utils/config';
 
 const RUNNER_VERSION = '2.333.1';
 const RUNNER_ARCH = process.arch === 'arm64' ? 'arm64' : 'x64';
@@ -61,6 +62,13 @@ export class RunnerService {
     const report = progress || (() => {});
     const dir = this.runnerDir(projectName);
     const runnerName = `lakebase-${projectName}`;
+
+    // Databricks auth preflight. Jobs that call the SDK on the runner host
+    // fall through to the user's ~/.databrickscfg when env vars aren't set;
+    // a stale OAuth refresh token there surfaces mid-run as cryptic "refresh
+    // token is invalid" warnings. Catch it up front. Non-fatal — runner
+    // still starts; user gets an actionable message.
+    this.preflightDatabricksAuth(report);
 
     // Stop existing runner if running
     this.stopRunner(projectName);
@@ -272,6 +280,50 @@ export class RunnerService {
       }
     }
     try { fs.mkdirSync(path.join(dir, '_diag', 'pages'), { recursive: true }); } catch {}
+  }
+
+  /**
+   * Verify the runner host has a working Databricks CLI auth. Reads the
+   * workspace's .env for DATABRICKS_CONFIG_PROFILE and calls
+   * `databricks current-user me` to confirm the refresh token is still
+   * valid. Non-fatal: on failure, surfaces a warning via the progress
+   * callback with the exact command to re-auth.
+   */
+  private preflightDatabricksAuth(report: (msg: string) => void): void {
+    const root = getWorkspaceRoot();
+    if (!root) { return; }
+
+    // Read DATABRICKS_CONFIG_PROFILE + DATABRICKS_HOST from .env (best-effort)
+    let profile = '';
+    let host = '';
+    try {
+      const envFile = path.join(root, '.env');
+      if (fs.existsSync(envFile)) {
+        const content = fs.readFileSync(envFile, 'utf-8');
+        profile = content.match(/^DATABRICKS_CONFIG_PROFILE=(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, '') || '';
+        host = content.match(/^DATABRICKS_HOST=(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, '') || '';
+      }
+    } catch { /* non-fatal */ }
+
+    const profileArg = profile ? `--profile "${profile}"` : '';
+    try {
+      cp.execSync(`databricks current-user me ${profileArg} -o json`, { timeout: 10_000, stdio: 'pipe' });
+      // Success — no message. Silence is golden.
+    } catch (err: any) {
+      const stderr = (err.stderr?.toString() || err.message || '').toString();
+      const profileSuffix = profile ? ` -p ${profile}` : '';
+      const hostSuffix = host ? ` --host ${host}` : '';
+      const reAuthCmd = `databricks auth login${hostSuffix}${profileSuffix}`;
+      if (/refresh token is invalid|cannot get access token|unauthenticated/i.test(stderr)) {
+        report(
+          `⚠ Databricks CLI auth on the runner is expired. The runner will start, but jobs that call the SDK via default auth (e.g. Python SDK calls to AI endpoints, Unity Catalog) will fail with "refresh token is invalid". Re-auth before your next CI run:\n    ${reAuthCmd}`
+        );
+      } else {
+        report(
+          `⚠ Could not verify Databricks CLI auth on the runner (${stderr.split('\n')[0].slice(0, 120)}). Jobs using SDK default-auth may fail. Re-auth if needed:\n    ${reAuthCmd}`
+        );
+      }
+    }
   }
 
   /**

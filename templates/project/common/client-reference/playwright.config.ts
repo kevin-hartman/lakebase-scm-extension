@@ -60,6 +60,14 @@ export default defineConfig({
         // exposes them. Common names: DEV_MODE, APP_ENV=development, etc.
         // Without this, seed-helper calls 404 and every test fails at setup.
         DEV_MODE: 'true',
+        // Pipe Databricks SDK creds from the GH Actions job's env (which
+        // pr.yml populates from repo secrets). Anything the backend needs
+        // for SDK calls (AI endpoints, Unity Catalog volumes, etc.) should
+        // come from env here — don't rely on the runner's local CLI auth,
+        // which silently expires and produces `refresh token is invalid`
+        // warnings 30+ minutes into a run.
+        DATABRICKS_HOST: process.env.DATABRICKS_HOST ?? '',
+        DATABRICKS_TOKEN: process.env.DATABRICKS_TOKEN ?? '',
       },
     },
     // Frontend — proxies `/api/*` to the backend.
