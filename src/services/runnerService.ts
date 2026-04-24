@@ -292,6 +292,10 @@ export class RunnerService {
       '.path',
       '.service',
       'svc.sh',
+      // `.runner_migrated` is an in-place upgrade marker. Some runner versions
+      // treat its presence as "already configured" even when .runner itself is
+      // gone, which makes config.sh bail before validating the token. Nuke it.
+      '.runner_migrated',
     ];
     for (const f of stateFiles) {
       try { fs.unlinkSync(path.join(dir, f)); } catch {}
