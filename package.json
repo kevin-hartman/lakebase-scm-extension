@@ -1381,7 +1381,7 @@
         "lakebaseSync.baseBranch": {
           "type": "string",
           "default": "",
-          "description": "Lakebase branch id that new feature branches fork from. Defaults to the project's default Lakebase branch (usually `production`) when empty. Typical multi-tier setup: `staging`. Overrides LAKEBASE_BASE_BRANCH from .env if both are set."
+          "description": "Lakebase branch id that new feature branches ALWAYS fork from. When empty (default), new branches fork from whichever Lakebase branch you were just on — git-like semantics. Set this to pin a fixed fork source (e.g. `staging` for a 3-tier promotion flow). Overrides LAKEBASE_BASE_BRANCH from .env if both are set."
         },
         "lakebaseSync.gitBranchPrefix": {
           "type": "string",

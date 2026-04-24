@@ -49,6 +49,12 @@ set -a
 source .env 2>/dev/null || true
 set +a
 
+# Capture the Lakebase branch the user was on BEFORE this checkout. The hook
+# will rewrite .env for the new branch, so this is our only chance to record
+# the "previous" state — used below as the default fork source for new
+# feature branches (mirrors `git checkout -b`'s "fork from current").
+PREV_LAKEBASE_BRANCH_ID="${LAKEBASE_BRANCH_ID:-}"
+
 # --- Prerequisites ---
 PROJ_ID="${LAKEBASE_PROJECT_ID:-}"
 if [ -z "$PROJ_ID" ]; then
@@ -269,11 +275,29 @@ fi
 LAKEBASE_BRANCH="$("$SCRIPT_DIR/sanitize-branch-name.sh" "$BRANCH")"
 BRANCH_PATH="${PROJ_PATH}/branches/${LAKEBASE_BRANCH}"
 
-# Resolve the parent (source) Lakebase branch. Use LAKEBASE_BASE_BRANCH from
-# .env when set (typical multi-tier setup: features fork from `staging` so
-# merged schema drift accumulates there). Fall back to the default Lakebase
-# branch (production) if LAKEBASE_BASE_BRANCH is unset.
-BASE_BRANCH_ID="${LAKEBASE_BASE_BRANCH:-$DEFAULT_BRANCH_UID}"
+# Resolve the parent (source) Lakebase branch. Precedence:
+#   1. LAKEBASE_BASE_BRANCH from .env — explicit 3-tier configuration wins
+#      (e.g. LAKEBASE_BASE_BRANCH=staging for a feature → staging → prod flow).
+#   2. The Lakebase branch the user was JUST ON (pre-checkout). Mirrors
+#      `git checkout -b`'s semantics — the new feature inherits from
+#      whichever branch you were working on. If you were on `staging`,
+#      new features fork from `staging`; if you were on another feature,
+#      the new one forks from it.
+#   3. Project default (production) — first-time setup, or previous
+#      branch's Lakebase state couldn't be resolved.
+# The previous Lakebase branch is only usable as a source if it actually
+# still exists and is READY; otherwise fall through to the default.
+BASE_BRANCH_ID=""
+if [ -n "${LAKEBASE_BASE_BRANCH:-}" ]; then
+  BASE_BRANCH_ID="$LAKEBASE_BASE_BRANCH"
+elif [ -n "$PREV_LAKEBASE_BRANCH_ID" ] && [ "$PREV_LAKEBASE_BRANCH_ID" != "$LAKEBASE_BRANCH" ]; then
+  PREV_EXISTS="$(databricks postgres list-branches "$PROJ_PATH" -o json 2>/dev/null \
+    | jq -r --arg uid "$PREV_LAKEBASE_BRANCH_ID" '(if type == "array" then . elif type == "object" then (.branches // .items // []) else [] end) | .[] | select((.name | type == "string" and (endswith("/branches/" + $uid) or (split("/") | last == $uid))) or (.uid == $uid) or (.id == $uid)) | (.name // .uid // .id)' | head -1)"
+  if [ -n "$PREV_EXISTS" ]; then
+    BASE_BRANCH_ID="$PREV_LAKEBASE_BRANCH_ID"
+  fi
+fi
+BASE_BRANCH_ID="${BASE_BRANCH_ID:-$DEFAULT_BRANCH_UID}"
 SOURCE_BRANCH="${PROJ_PATH}/branches/${BASE_BRANCH_ID}"
 
 # Check if branch already exists
