@@ -1227,6 +1227,48 @@ export async function activate(context: vscode.ExtensionContext) {
       );
     }),
 
+    vscode.commands.registerCommand('lakebaseSync.installPlaywrightConfig', async () => {
+      const root = getWorkspaceRoot();
+      if (!root) {
+        vscode.window.showErrorMessage('No workspace folder open.');
+        return;
+      }
+      const clientDir = path.join(root, 'client');
+      if (!fs.existsSync(clientDir)) {
+        vscode.window.showWarningMessage(
+          'No client/ directory found. This command installs a Playwright config tuned for full-stack projects where client/ holds the frontend.'
+        );
+        return;
+      }
+      const src = path.join(context.extensionPath, 'templates', 'project', 'common', 'client-reference', 'playwright.config.ts');
+      if (!fs.existsSync(src)) {
+        vscode.window.showErrorMessage('Reference Playwright config missing from extension (client-reference/playwright.config.ts).');
+        return;
+      }
+      const dest = path.join(clientDir, 'playwright.config.ts');
+      if (fs.existsSync(dest)) {
+        const choice = await vscode.window.showWarningMessage(
+          `client/playwright.config.ts already exists. Overwrite with the reference version (boots both backend and Vite)?`,
+          { modal: true },
+          'Overwrite'
+        );
+        if (choice !== 'Overwrite') { return; }
+      }
+      try {
+        fs.copyFileSync(src, dest);
+        const openChoice = await vscode.window.showInformationMessage(
+          `Installed reference Playwright config at client/playwright.config.ts. Adapt the backend webServer entry to your stack (FastAPI / Spring / Node).`,
+          'Open File'
+        );
+        if (openChoice === 'Open File') {
+          const doc = await vscode.workspace.openTextDocument(dest);
+          await vscode.window.showTextDocument(doc);
+        }
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Failed to copy Playwright config: ${err.message}`);
+      }
+    }),
+
     vscode.commands.registerCommand('lakebaseSync.refreshRunner', () => {
       runnerTreeProvider.refresh();
     }),

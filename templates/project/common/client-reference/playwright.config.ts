@@ -54,6 +54,13 @@ export default defineConfig({
       cwd: '..',
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
+      env: {
+        // If your backend gates test-only endpoints (e.g. /api/dev/seed-user)
+        // behind a dev flag, set it here so the Playwright-booted backend
+        // exposes them. Common names: DEV_MODE, APP_ENV=development, etc.
+        // Without this, seed-helper calls 404 and every test fails at setup.
+        DEV_MODE: 'true',
+      },
     },
     // Frontend — proxies `/api/*` to the backend.
     {

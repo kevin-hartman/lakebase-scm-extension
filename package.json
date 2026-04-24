@@ -123,6 +123,10 @@
         "icon": "$(trash)"
       },
       {
+        "command": "lakebaseSync.installPlaywrightConfig",
+        "title": "Install Reference Playwright Config"
+      },
+      {
         "command": "lakebaseSync.showMigrationHistory",
         "title": "Show Migration History"
       },
