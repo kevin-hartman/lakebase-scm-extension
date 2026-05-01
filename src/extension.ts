@@ -2250,12 +2250,28 @@ export async function activate(context: vscode.ExtensionContext) {
           await vscode.window.withProgress(
             { location: vscode.ProgressLocation.Notification, title: `Creating ${branchName} from ${basePick.label}...` },
             async (progress) => {
-              // Checkout base, then create new branch
+              // Checkout the chosen base first so HEAD reflects the right point.
               progress.report({ message: 'Checking out base...' });
               await gitService.checkoutBranch(basePick.label);
-              progress.report({ message: 'Creating branch...' });
+              // Pre-create the Lakebase branch with the explicit base. Without
+              // this, the new branch's Lakebase fork source depends on the
+              // freshness of .git/hooks/post-checkout AND on whether the
+              // onBranchChanged listener races with the hook — neither of
+              // which is reliable across machines. Doing it here makes the
+              // user's choice authoritative; the post-checkout hook will see
+              // the existing Lakebase branch and just connect.
+              progress.report({ message: `Pre-creating Lakebase branch from ${basePick.label}...` });
+              try {
+                await lakebaseService.createBranch(branchName, basePick.label);
+              } catch (err: any) {
+                if (!await handleAuthError(lakebaseService, err)) {
+                  vscode.window.showWarningMessage(
+                    `Lakebase pre-create failed: ${err.message}. The post-checkout hook may create the branch from a fallback source.`
+                  );
+                }
+              }
+              progress.report({ message: 'Creating git branch...' });
               await gitService.checkoutBranch(branchName, true);
-              // Auto-branch creation listener will handle Lakebase
             }
           );
           return;
@@ -3309,8 +3325,22 @@ export async function activate(context: vscode.ExtensionContext) {
       try {
         await vscode.window.withProgress(
           { location: vscode.ProgressLocation.Notification, title: `Creating ${branchName} from ${basePick.label}...` },
-          async () => {
+          async (progress) => {
+            progress.report({ message: 'Checking out base...' });
             await gitService.checkoutBranch(basePick.label);
+            // Pre-create Lakebase branch with the explicit base; see the
+            // matching block in the switchBranch picker for rationale.
+            progress.report({ message: `Pre-creating Lakebase branch from ${basePick.label}...` });
+            try {
+              await lakebaseService.createBranch(branchName, basePick.label);
+            } catch (err: any) {
+              if (!await handleAuthError(lakebaseService, err)) {
+                vscode.window.showWarningMessage(
+                  `Lakebase pre-create failed: ${err.message}. The post-checkout hook may create the branch from a fallback source.`
+                );
+              }
+            }
+            progress.report({ message: 'Creating git branch...' });
             await gitService.checkoutBranch(branchName, true);
           }
         );
