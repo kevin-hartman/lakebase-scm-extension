@@ -281,14 +281,44 @@ export class GitService {
 
     // Resolve base branch:
     //   1. explicit override arg
-    //   2. config.trunkBranch (e.g. `user/project-demo` in a monorepo)
-    //   3. main
-    //   4. master
-    let baseBranch = baseOverride || getConfig().trunkBranch;
+    //   2. LAKEBASE_BASE_BRANCH (config.baseBranch) — explicit project pin
+    //      ("features fork from staging — diff against staging").
+    //   3. NEAREST PARENT via merge-base. Across known parent candidates
+    //      (config.trunkBranch || main, master, config.stagingBranch ||
+    //      staging), pick the one whose merge-base with the tip has the
+    //      most recent commit timestamp. In a 3-tier flow where a feature
+    //      forks from staging, staging's merge-base is later than main's,
+    //      so the diff naturally targets the actual parent.
+    //   4. config.trunkBranch
+    //   5. main / master
+    const cfgGcf = getConfig();
+    let baseBranch = baseOverride || cfgGcf.baseBranch || '';
     if (!baseBranch) {
-      baseBranch = 'main';
+      const tipForMb = branch && branch.length > 0 ? branch : 'HEAD';
+      let currentBranchName = '';
+      try { currentBranchName = (await exec('git rev-parse --abbrev-ref HEAD', root)).trim(); } catch { /* ignore */ }
+      const tipBranch = (branch && branch.length > 0) ? branch : currentBranchName;
+      const candidates = Array.from(new Set(
+        [cfgGcf.trunkBranch, 'main', 'master', cfgGcf.stagingBranch, 'staging'].filter(Boolean) as string[]
+      ));
+      let bestTs = 0;
+      for (const c of candidates) {
+        if (c === tipBranch) { continue; }
+        try {
+          const baseSha = (await exec(`git merge-base "${tipForMb}" "${c}"`, root)).trim();
+          if (!baseSha) { continue; }
+          const ts = parseInt((await exec(`git log -1 --format=%at "${baseSha}"`, root)).trim(), 10) || 0;
+          if (ts > bestTs) {
+            bestTs = ts;
+            baseBranch = c;
+          }
+        } catch { /* candidate not present locally — skip */ }
+      }
+    }
+    if (!baseBranch) {
+      baseBranch = cfgGcf.trunkBranch || 'main';
       try {
-        await exec('git rev-parse --verify main', root);
+        await exec(`git rev-parse --verify ${baseBranch}`, root);
       } catch {
         try {
           await exec('git rev-parse --verify master', root);
@@ -298,7 +328,7 @@ export class GitService {
         }
       }
     } else {
-      // Verify the configured base actually exists.
+      // Verify the chosen base actually exists.
       try {
         await exec(`git rev-parse --verify ${baseBranch}`, root);
       } catch {
