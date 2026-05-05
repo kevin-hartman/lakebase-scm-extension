@@ -444,20 +444,31 @@ export class BranchTreeProvider implements vscode.TreeDataProvider<BranchItem> {
         return [emptyItem];
       }
 
-      // For non-default branches, query production schema for comparison
+      // For non-default branches, query the PARENT branch's schema for
+      // comparison (matches Branch Diff Summary semantics — for a feature
+      // forked from staging, compare against staging, not production).
+      // Falls back to the default branch when source can't be resolved.
       let prodSchema: Map<string, string[]> | undefined; // tableName → sorted column signatures
+      let comparisonName = '';
       if (!lakebaseBranch.isDefault) {
         try {
-          const defaultBranch = await this.lakebaseService.getDefaultBranch();
-          if (defaultBranch) {
-            const prodTables = await this.lakebaseService.queryBranchSchema(defaultBranch.uid);
+          let target: LakebaseBranch | undefined;
+          if (lakebaseBranch.sourceBranchId) {
+            try { target = await this.lakebaseService.getBranchByName(lakebaseBranch.sourceBranchId); } catch { /* fall through */ }
+          }
+          if (!target) {
+            target = await this.lakebaseService.getDefaultBranch();
+          }
+          if (target) {
+            comparisonName = target.branchId;
+            const targetTables = await this.lakebaseService.queryBranchSchema(target.uid);
             prodSchema = new Map();
-            for (const t of prodTables) {
+            for (const t of targetTables) {
               if (t.name === 'flyway_schema_history') { continue; }
               prodSchema.set(t.name, t.columns.map(c => `${c.name}:${c.dataType}`).sort());
             }
           }
-        } catch { /* can't reach production — skip diff */ }
+        } catch { /* can't reach parent — skip diff */ }
       }
 
       type TableStatus = 'new' | 'modified' | 'unchanged';
