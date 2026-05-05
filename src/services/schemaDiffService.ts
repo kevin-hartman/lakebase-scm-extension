@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getWorkspaceRoot, getEnvConfig, getConfig, getProjectDatabase } from '../utils/config';
 import { exec } from '../utils/exec';
-import { LakebaseService } from './lakebaseService';
+import { LakebaseService, LakebaseBranch } from './lakebaseService';
 
 export interface SchemaObject {
   type: 'TABLE' | 'INDEX';
@@ -20,6 +20,9 @@ export interface ModifiedSchemaObject extends SchemaObject {
 
 export interface SchemaDiffResult {
   branchName: string;
+  /** The Lakebase branch this diff was computed AGAINST (the parent / source).
+   *  Empty string when unknown or when comparing the default branch itself. */
+  comparisonBranchName?: string;
   timestamp: string;
   migrations: Array<{ version: string; description: string }>;
   created: SchemaObject[];
@@ -288,15 +291,35 @@ export class SchemaDiffService {
     let branchTables: TableList;
     let prodTables: TableList;
 
+    // Resolve the comparison target. Default is the CURRENT BRANCH'S parent
+    // (its source_branch in Lakebase metadata) — for a feature forked from
+    // staging, that means diff vs staging, not vs production. Falls back to
+    // the project's default branch when source can't be resolved (e.g. for
+    // staging itself, or branches whose source has been deleted).
+    let comparisonTarget: LakebaseBranch | undefined;
+    let branchObj: LakebaseBranch | undefined;
     try {
-      const defaultBranch = await this.lakebaseService.getDefaultBranch();
-      if (!defaultBranch) {
-        return this.emptyResult('No default Lakebase branch found');
-      }
+      branchObj = await this.lakebaseService.getBranchByName(branchId);
+    } catch { /* ignore */ }
+    if (branchObj?.sourceBranchId) {
+      try {
+        comparisonTarget = await this.lakebaseService.getBranchByName(branchObj.sourceBranchId);
+      } catch { /* fall through */ }
+    }
+    if (!comparisonTarget) {
+      try {
+        comparisonTarget = await this.lakebaseService.getDefaultBranch();
+      } catch { /* ignore */ }
+    }
+    if (!comparisonTarget) {
+      return this.emptyResult('Could not resolve a comparison target Lakebase branch');
+    }
+
+    try {
       const branchSchema = await this.lakebaseService.queryBranchSchema(branchId);
-      const prodSchema = await this.lakebaseService.queryBranchSchema(defaultBranch.uid);
+      const targetSchema = await this.lakebaseService.queryBranchSchema(comparisonTarget.uid);
       branchTables = { tables: branchSchema.filter(t => t.name !== 'flyway_schema_history') };
-      prodTables = { tables: prodSchema.filter(t => t.name !== 'flyway_schema_history') };
+      prodTables = { tables: targetSchema.filter(t => t.name !== 'flyway_schema_history') };
     } catch (err: any) {
       // Fallback: fetch credentials and use pg_dump
       try {
@@ -309,22 +332,18 @@ export class SchemaDiffService {
           return this.emptyResult(`No endpoint for branch "${branchId}". Try again in a few seconds.`);
         }
         const branchCred = await this.lakebaseService.getCredential(branchId);
-        const defaultBranch = await this.lakebaseService.getDefaultBranch();
-        if (!defaultBranch) {
-          return this.emptyResult('No default Lakebase branch found');
-        }
-        let prodEp = await this.lakebaseService.getEndpoint(defaultBranch.branchId);
-        if (!prodEp?.host) {
+        let targetEp = await this.lakebaseService.getEndpoint(comparisonTarget.branchId);
+        if (!targetEp?.host) {
           await new Promise(r => setTimeout(r, 5000));
-          prodEp = await this.lakebaseService.getEndpoint(defaultBranch.branchId);
+          targetEp = await this.lakebaseService.getEndpoint(comparisonTarget.branchId);
         }
-        if (!prodEp?.host) {
-          return this.emptyResult('No endpoint for default branch');
+        if (!targetEp?.host) {
+          return this.emptyResult(`No endpoint for comparison target branch "${comparisonTarget.branchId}"`);
         }
-        const prodCred = await this.lakebaseService.getCredential(defaultBranch.branchId);
+        const targetCred = await this.lakebaseService.getCredential(comparisonTarget.branchId);
         const dbName = getProjectDatabase();
         branchTables = await this.listTables(branchEp.host, '5432', dbName, branchCred.email, branchCred.token);
-        prodTables = await this.listTables(prodEp.host, '5432', dbName, prodCred.email, prodCred.token);
+        prodTables = await this.listTables(targetEp.host, '5432', dbName, targetCred.email, targetCred.token);
       } catch (fallbackErr: any) {
         return this.emptyResult(`Cannot fetch schema: ${err.message}. Fallback also failed: ${fallbackErr.message}`);
       }
@@ -373,6 +392,7 @@ export class SchemaDiffService {
 
     const result: SchemaDiffResult = {
       branchName,
+      comparisonBranchName: comparisonTarget.branchId,
       timestamp: new Date().toISOString(),
       migrations: [],
       created,

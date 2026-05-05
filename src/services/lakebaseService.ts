@@ -11,6 +11,11 @@ export interface LakebaseBranch {
   branchId: string;
   state: string;
   isDefault: boolean;
+  /** Full resource path of the parent branch this was forked from
+   *  (e.g. projects/.../branches/staging). Empty for the default branch. */
+  sourceBranch?: string;
+  /** Branch ID segment of the parent (e.g. "staging"). Empty for default. */
+  sourceBranchId?: string;
   endpointHost?: string;
   endpointState?: string;
 }
@@ -248,12 +253,16 @@ export class LakebaseService {
       const uid = b.uid || b.id || '';
       // Extract the branch ID segment from the full path: projects/.../branches/{branchId}
       const branchId = fullName.split('/branches/').pop() || b.branch_id || b.display_name || uid;
+      const sourceBranch: string = b.status?.source_branch || b.source_branch || '';
+      const sourceBranchId = sourceBranch.split('/branches/').pop() || '';
       return {
         uid,
         name: fullName,
         branchId,
         state: b.status?.current_state || 'UNKNOWN',
         isDefault: b.status?.default === true || b.is_default === true,
+        sourceBranch: sourceBranch || undefined,
+        sourceBranchId: sourceBranchId || undefined,
         endpointHost: undefined,
         endpointState: undefined,
       };

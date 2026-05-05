@@ -126,7 +126,8 @@ export class SchemaDiffProvider {
     }
 
     if (diff.inSync && !diff.error) {
-      schemaHtml += '<p class="sync-msg">No schema changes — branch and production are in sync.</p>';
+      const targetName = diff.comparisonBranchName || 'production';
+      schemaHtml += `<p class="sync-msg">No schema changes — branch and ${esc(targetName)} are in sync.</p>`;
     }
 
     for (const obj of diff.created) {
@@ -275,7 +276,7 @@ export class SchemaDiffProvider {
 <body>
   <div class="header">
     <h1>Branch Diff Summary</h1>
-    <div class="subtitle">${esc(branchName)} vs production &mdash; ${timestamp}</div>
+    <div class="subtitle">${esc(branchName)} vs ${esc(diff.comparisonBranchName || 'production')} &mdash; ${timestamp}</div>
   </div>
 
   <div class="two-col">
@@ -348,7 +349,8 @@ export class SchemaDiffProvider {
     // Build side-by-side rows: { left, right } where each is an HTML string for one table row
     type Row = { left: string; right: string };
     const rows: Row[] = [];
-    let leftTitle = `Production`;
+    const targetName = diff.comparisonBranchName || 'production';
+    let leftTitle = esc(targetName.charAt(0).toUpperCase() + targetName.slice(1));
     let rightTitle = `Branch: ${esc(branchName)}`;
     let leftTableClass = '';
     let rightTableClass = '';
@@ -368,7 +370,7 @@ export class SchemaDiffProvider {
       leftTableClass = 'empty-pane';
       leftCount = 0;
       rightCount = obj?.columns?.length || 0;
-      leftIndependent = `<div class="empty-msg">Table does not exist in production</div>`;
+      leftIndependent = `<div class="empty-msg">Table does not exist in ${esc(targetName)}</div>`;
       if (obj?.columns && obj.columns.length > 0) {
         rightIndependent = `<table><tr><th></th><th>Column</th><th>Type</th></tr>`;
         for (const col of obj.columns) {
@@ -548,13 +550,13 @@ export class SchemaDiffProvider {
 <body>
   <div class="header">
     <h1>Schema Diff <span class="badge badge-yellow">${label}</span></h1>
-    <div class="subtitle">${esc(branchName)} vs production &mdash; ${timestamp}</div>
+    <div class="subtitle">${esc(branchName)} vs ${esc(diff.comparisonBranchName || 'production')} &mdash; ${timestamp}</div>
   </div>
   <div class="two-col">
     <div class="col">
       <div class="col-title">
         <span class="${leftNameClass}">${esc(tableName)}</span>
-        <span class="muted" style="font-weight:normal; font-size:0.85em">production</span>
+        <span class="muted" style="font-weight:normal; font-size:0.85em">${esc(targetName)}</span>
         ${leftBadge}
       </div>
       ${useRows
